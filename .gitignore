@@ -1,0 +1,16 @@
+# Cartelle di Input e Output
+input/
+output/
+
+# File di log specifici non versionati
+*.log
+
+# File temporanei di Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ambiente virtuale (se ne usi uno)
+/venv/
+/env/
