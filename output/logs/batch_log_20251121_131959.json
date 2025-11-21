@@ -1,0 +1,27 @@
+{
+  "timestamp": "2025-11-21T13:19:59.385126",
+  "configurazione": {
+    "tolleranza": 0.01,
+    "giorni_finestra": 30,
+    "max_combinazioni": 6,
+    "cartella_input": "input",
+    "cartella_output": "output"
+  },
+  "risultati": [
+    {
+      "file": "sancesareo_311025.xlsx",
+      "timestamp": "2025-11-21T13:17:52.576033",
+      "successo": true,
+      "errore": null,
+      "statistiche": {
+        "totale_dare": 892,
+        "totale_avere": 319,
+        "dare_riconciliati": 79,
+        "avere_utilizzati": 122,
+        "percentuale_dare": 8.9,
+        "percentuale_avere": 38.2,
+        "output_file": "output/risultato_sancesareo_311025.xlsx"
+      }
+    }
+  ]
+}

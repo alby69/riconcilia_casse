@@ -1,0 +1,19 @@
+{
+  "timestamp": "2025-11-21T13:16:16.897256",
+  "configurazione": {
+    "tolleranza": 0.01,
+    "giorni_finestra": 30,
+    "max_combinazioni": 6,
+    "cartella_input": "input",
+    "cartella_output": "output"
+  },
+  "risultati": [
+    {
+      "file": "sancesareo_311025.xlsx",
+      "timestamp": "2025-11-21T13:16:16.848232",
+      "successo": false,
+      "errore": "Il file deve contenere le colonne: ['Data', 'Dare', 'Avere']",
+      "statistiche": {}
+    }
+  ]
+}

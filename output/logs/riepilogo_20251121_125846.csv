@@ -1,0 +1,5 @@
+File,Successo,Errore
+pos_01.xlsx,False,"time data ""13/01/2025"" doesn't match format ""%m/%d/%Y"", at position 12. You might want to try:
+    - passing `format` if your strings have a consistent format;
+    - passing `format='ISO8601'` if your strings are all ISO8601 but not necessarily in exactly the same format;
+    - passing `format='mixed'`, and the format will be inferred for each element individually. You might want to use `dayfirst` alongside this."
