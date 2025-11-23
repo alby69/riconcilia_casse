@@ -1,2 +1,0 @@
-File,Successo,Errore,totale_dare,totale_avere,dare_riconciliati,avere_utilizzati,percentuale_dare,percentuale_avere,output_file
-pos_01.xlsx,True,,312,324,283,304,90.7,93.8,output/risultato_pos_01.xlsx

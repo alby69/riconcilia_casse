@@ -1,32 +1,31 @@
-# 🧾 Sistema di Riconciliazione Contabile per Supermercati
+# 🧾 Sistema di Riconciliazione Contabile
 
-Sistema automatico per quadrare i movimenti contabili (Dare/Avere) utilizzando algoritmi ottimizzati di matching e subset sum.
+Sistema automatico per la quadratura di movimenti contabili (es. incassi vs versamenti) tramite algoritmi di matching ottimizzati.
 
 ---
 
 ## 📋 Indice
 
 - [Descrizione del Problema](#-descrizione-del-problema)
+- [Architettura del Progetto](#-architettura-del-progetto)
 - [Come Funziona l'Algoritmo](#-come-funziona-lalgoritmo)
 - [Installazione](#-installazione)
 - [Utilizzo](#-utilizzo)
 - [Parametri di Configurazione](#-parametri-di-configurazione)
 - [Formato File Input](#-formato-file-input)
 - [Output Generato](#-output-generato)
-- [Esempi Pratici](#-esempi-pratici)
-- [Ottimizzazione per File Grandi](#-ottimizzazione-per-file-grandi)
 - [Troubleshooting](#-troubleshooting)
 
 ---
 
 ## 🎯 Descrizione del Problema
 
-Ogni punto vendita genera un file Excel con movimenti contabili che devono essere riconciliati:
+L'obiettivo è riconciliare due tipi di movimenti contabili, tipicamente versamenti e incassi.
 
-- **DARE**: Versamenti/incassi registrati (es. 100€ versato in banca)
-- **AVERE**: Movimenti di cassa che dovrebbero corrispondere al versamento
+- **AVERE**: Versamenti registrati (es. 100€ versato in banca)
+- **DARE**: Incassi di cassa che dovrebbero corrispondere al versamento
 
-**Obiettivo**: Trovare quali movimenti in AVERE (anche combinati e in date diverse) corrispondono esattamente a ciascun movimento in DARE.
+**Obiettivo**: Trovare quali incassi (`DARE`), anche combinati tra loro, corrispondono a ciascun versamento (`AVERE`).
 
 ### Esempio pratico
 
@@ -34,10 +33,10 @@ Ogni punto vendita genera un file Excel con movimenti contabili che devono esser
 DARE:  100€  (versamento del 15/01)
 
 AVERE disponibili:
-- 40€  (cassa 13/01)
-- 30€  (cassa 14/01)  
-- 30€  (cassa 15/01)
-- 25€  (cassa 16/01)
+- 40€  (incasso del 13/01)
+- 30€  (incasso del 14/01)  
+- 30€  (incasso del 15/01)
+- 25€  (incasso del 16/01)
 
 Soluzione: 40 + 30 + 30 = 100€ ✓
 ```
@@ -65,7 +64,7 @@ Il sistema utilizza un approccio **multi-step** ottimizzato per massimizzare vel
 Cerca un singolo AVERE che corrisponda esattamente al DARE
 Condizioni:
 - |AVERE - DARE| ≤ tolleranza
-- Data AVERE entro ±giorni_finestra dal DARE
+- Data AVERE compresa tra la data del DARE e `giorni_finestra` giorni successivi
 - AVERE non già utilizzato
 ```
 
@@ -141,7 +140,7 @@ RICONCILIAZIONE(dare_list, avere_list):
 ### Requisiti
 
 - Python 3.7+
-- Librerie: `pandas`, `openpyxl`
+- Librerie: `pandas`, `openpyxl`, `tqdm`
 
 ### Setup
 
@@ -150,8 +149,8 @@ RICONCILIAZIONE(dare_list, avere_list):
 git clone https://github.com/tuo-repo/riconciliazione-contabile.git
 cd riconciliazione-contabile
 
-# 2. Installa dipendenze
-pip install pandas openpyxl
+# 2. Installa dipendenze (incluso tqdm per la barra di avanzamento)
+pip install pandas openpyxl tqdm
 
 # 3. Verifica installazione
 python riconciliazione.py --help
@@ -466,10 +465,8 @@ progetto/
 │   ├── supermercato_A.xlsx
 │   ├── supermercato_B.xlsx
 │   └── supermercato_C.xlsx
-└── output/                   ← Risultati generati automaticamente
-    ├── risultato_supermercato_A.xlsx
-    ├── risultato_supermercato_B.xlsx
-    ├── risultato_supermercato_C.xlsx
+└── output/                   ← I risultati vengono generati qui
+    ├── Riepilogo_Batch_[timestamp].xlsx
     └── logs/
         ├── batch_log_20250115_143022.json
         └── riepilogo_20250115_143022.csv
@@ -676,6 +673,30 @@ class BatchProcessorCustom(BatchProcessor):
         
         return risultato
 ```
+
+---
+
+## ⚙️ Configurazione via File JSON (Consigliato)
+
+Per una maggiore flessibilità, è possibile gestire tutti i parametri tramite un file esterno `config.json` senza modificare il codice Python.
+
+**1. Crea un file `config.json`** nella stessa cartella degli script con questo contenuto:
+
+```json
+{
+  "tolleranza": 0.01,
+  "giorni_finestra": 30,
+  "max_combinazioni": 6,
+  "cartella_input": "input",
+  "cartella_output": "output",
+  "pattern": [
+    "*.xlsx",
+    "*.csv"
+  ]
+}
+```
+
+**2. Esegui lo script `batch.py`**: Lo script rileverà automaticamente il file `config.json` e utilizzerà i valori specificati. Se il file non viene trovato, verranno utilizzati i parametri di default.
 
 ---
 
