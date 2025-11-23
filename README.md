@@ -1,6 +1,6 @@
 # 🧾 Sistema di Riconciliazione Contabile
 
-Sistema automatico per la quadratura di movimenti contabili (es. incassi vs versamenti) tramite algoritmi di matching ottimizzati.
+Sistema automatico per la riconciliazione di movimenti contabili, progettato per abbinare i versamenti bancari con i relativi incassi di cassa tramite algoritmi di matching ottimizzati.
 
 ---
 
@@ -25,7 +25,7 @@ L'obiettivo è riconciliare due tipi di movimenti contabili, tipicamente versame
 - **AVERE**: Versamenti registrati (es. 100€ versato in banca)
 - **DARE**: Incassi di cassa che dovrebbero corrispondere al versamento
 
-**Obiettivo**: Trovare quali incassi (`DARE`), anche combinati tra loro, corrispondono a ciascun versamento (`AVERE`).
+**Obiettivo**: Trovare quali **incassi**, anche combinati tra loro, corrispondono a ciascun **versamento**.
 
 ### Esempio pratico
 
@@ -633,7 +633,7 @@ Se alcuni file falliscono, il batch continua con gli altri:
 
 ```
 [2/5] ============================================================
-📂 Elaborazione: file_corrotto.xlsx
+📂 Elaborazione: file_con_colonne_errate.xlsx
 ============================================================
   ❌ ERRORE: Il file deve contenere le colonne: Data, Dare, Avere
 
@@ -644,7 +644,7 @@ Se alcuni file falliscono, il batch continua con gli altri:
 ...
 
 ⚠️  FILE CON ERRORI:
-   - file_corrotto.xlsx: Il file deve contenere le colonne...
+   - file_con_colonne_errate.xlsx: Nome colonna 'Incasso' non trovato. Controllare il file di configurazione.
 ```
 
 ### Integrazione con Script Esterni

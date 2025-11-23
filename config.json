@@ -1,14 +1,31 @@
 {
   "tolleranza": 0.01,
   "giorni_finestra": 10,
-  "max_combinazioni": 6,
-  "giorni_finestra_residui": 60,
-  "soglia_residui": 100,
   "cartella_input": "input",
   "cartella_output": "output",
   "pattern": [
     "*.xlsx",
     "*.csv"
   ],
-  "commento": "Questo è un file di configurazione JSON. Modifica i valori qui sopra per cambiare il comportamento del batch processor senza toccare il codice Python. Il campo 'commento' viene ignorato."
+  "colonne": {
+    "data": "DATA",
+    "versamenti": "VERSAMENTI",
+    "incassi": "INCASSI"
+  },
+  "mapping_colonne": {
+    "Data": "DATA",
+    "Dare": "INCASSI",
+    "Avere": "VERSAMENTI",
+    "Incassi": "INCASSI",
+    "Versamenti": "VERSAMENTI"
+  },
+  "algoritmo": {
+    "max_combinazioni": 6
+  },
+  "residui": {
+    "attiva": true,
+    "soglia_importo": 100,
+    "giorni_finestra": 90
+  },
+  "commento": "File di configurazione per il sistema di riconciliazione. Permette di personalizzare il comportamento degli script senza modificare il codice sorgente."
 }

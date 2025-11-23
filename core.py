@@ -9,189 +9,188 @@ from itertools import combinations
 import math
 from tqdm import tqdm
 
+class Movimento:
+    """Rappresenta un singolo movimento contabile (incasso o versamento)."""
+    def __init__(self, indice, data, importo, tipo):
+        self.indice = indice
+        self.data = data
+        self.importo = importo
+        self.tipo = tipo
+        self.usato = False
+
 class RiconciliatoreContabile:
-    """Classe per riconciliare movimenti Dare e Avere"""
-    
-    def __init__(self, tolleranza=0.01, giorni_finestra=30, max_combinazioni=6, soglia_residui=100, giorni_finestra_residui=60):
+    """
+    Classe che orchestra la riconciliazione tra incassi e versamenti.
+    Utilizza un approccio a due fasi:
+    1. Matching principale (esatto e per combinazioni).
+    2. Matching dei residui (per piccoli importi non abbinati).
+    """
+    def __init__(self, incassi, versamenti, tolleranza=0.01, giorni_finestra=10, max_combinazioni=6, residui_config=None):
+        self.incassi = sorted(incassi, key=lambda x: x.importo, reverse=True)
+        self.versamenti = sorted(versamenti, key=lambda x: x.importo, reverse=True)
         self.tolleranza = tolleranza
         self.giorni_finestra = giorni_finestra
-        self.giorni_finestra_residui = giorni_finestra_residui
         self.max_combinazioni = max_combinazioni
-        self.soglia_residui = soglia_residui
+        self.residui_config = residui_config or {'attiva': False}
         self.risultati = []
 
-    def carica_file(self, file_path):
-        """Carica file Excel o CSV in base all'estensione."""
-        p = pd.read_excel(file_path) if str(file_path).endswith(('.xlsx', '.xls')) else pd.read_csv(file_path, sep=';', decimal=',')
-        
-        colonne_richieste = ['Data', 'Dare', 'Avere']
-        if not all(col in p.columns for col in colonne_richieste):
-            raise ValueError(f"Il file deve contenere le colonne: {colonne_richieste}")
+    def trova_match_esatto(self, versamento, incassi_disponibili):
+        """Cerca un singolo incasso che corrisponda esattamente al versamento."""
+        limite_data_inf = versamento.data - timedelta(days=self.giorni_finestra)
+        limite_data_sup = versamento.data + timedelta(days=self.giorni_finestra)
 
-        p['Data'] = pd.to_datetime(p['Data'], dayfirst=True, errors='coerce')
-        p['Dare'] = pd.to_numeric(p['Dare'], errors='coerce').fillna(0)
-        p['Avere'] = pd.to_numeric(p['Avere'], errors='coerce').fillna(0)
-        p['indice_orig'] = p.index
-        return p
-
-    def separa_movimenti(self, df):
-        dare = df[df['Dare'] > 0].copy()
-        avere = df[df['Avere'] > 0].copy()
-        dare['usato'] = False
-        avere['usato'] = False
-        dare = dare.sort_values(['Data', 'Dare'], ascending=[True, False]).reset_index(drop=True)
-        avere = avere.sort_values(['Data', 'Avere'], ascending=[True, False]).reset_index(drop=True)
-        return dare, avere
-
-    def trova_match_esatto(self, avere_row, dare_df):
-        importo_avere = avere_row['Avere']
-        data_avere = avere_row['Data']
-        dare_finestra = dare_df[
-            (dare_df['Data'] >= data_avere - timedelta(days=self.giorni_finestra)) &
-            (dare_df['Data'] <= data_avere + timedelta(days=self.giorni_finestra)) &
-            (~dare_df['usato'])
+        candidati = [
+            inc for inc in incassi_disponibili
+            if not inc.usato and
+               limite_data_inf <= inc.data <= limite_data_sup and
+               abs(inc.importo - versamento.importo) <= self.tolleranza
         ]
-        match = dare_finestra[abs(dare_finestra['Dare'] - importo_avere) <= self.tolleranza]
-        
-        if not match.empty:
-            if len(match) > 1:
-                match = match.copy()
-                match.loc[:, 'costo_temporale'] = (data_avere - match['Data']).dt.days.abs()
-                best_match_1_to_1 = match.sort_values('costo_temporale').iloc[0]
-                return [best_match_1_to_1.name], best_match_1_to_1['Dare']
-            else:
-                return [match.index[0]], match.iloc[0]['Dare']
-        return None, None
 
-    def trova_combinazioni(self, avere_row, dare_df, giorni_finestra_override=None):
-        importo_avere = avere_row['Avere']
-        data_avere = avere_row['Data']
-        finestra = giorni_finestra_override if giorni_finestra_override is not None else self.giorni_finestra
-        
-        dare_finestra = dare_df[
-            (dare_df['Data'] >= data_avere - timedelta(days=finestra)) &
-            (dare_df['Data'] <= data_avere + timedelta(days=finestra)) &
-            (~dare_df['usato'])
-        ].copy()
+        if not candidati:
+            return None
 
-        if dare_finestra.empty: return None, None
-        dare_finestra = dare_finestra[dare_finestra['Dare'] <= importo_avere + self.tolleranza]
-        if dare_finestra.empty: return None, None
+        # Se ci sono più candidati, sceglie quello più vicino nel tempo
+        candidati.sort(key=lambda inc: abs((versamento.data - inc.data).days))
+        return [candidati[0]]
 
-        best_match = {'indices': None, 'somma': None, 'costo_temporale': float('inf'), 'costo_importo': float('inf')}
+    def trova_combinazioni(self, versamento, incassi_disponibili):
+        """Cerca una combinazione di incassi che corrisponda al versamento."""
+        limite_data_inf = versamento.data - timedelta(days=self.giorni_finestra)
+        limite_data_sup = versamento.data + timedelta(days=self.giorni_finestra)
 
-        for n in range(2, min(self.max_combinazioni + 1, len(dare_finestra) + 1)):
-            indices = dare_finestra.index.tolist()
-            num_combinations = math.comb(len(indices), n)
+        candidati = [
+            inc for inc in incassi_disponibili
+            if not inc.usato and
+               limite_data_inf <= inc.data <= limite_data_sup and
+               inc.importo < versamento.importo + self.tolleranza
+        ]
+
+        if not candidati:
+            return None
+
+        for n in range(2, min(self.max_combinazioni + 1, len(candidati) + 1)):
+            num_combinations = math.comb(len(candidati), n)
             if num_combinations > 10000: continue
 
-            for combo in combinations(indices, n):
-                combo_df = dare_df.loc[list(combo)]
-                somma = combo_df['Dare'].sum()
-                costo_importo = abs(somma - importo_avere)
-
-                if costo_importo <= self.tolleranza:
-                    costo_temporale = (data_avere - combo_df['Data']).dt.days.abs().mean()
-                    if costo_temporale < best_match['costo_temporale'] or \
-                       (costo_temporale == best_match['costo_temporale'] and costo_importo < best_match['costo_importo']):
-                        best_match.update({'indices': list(combo), 'somma': somma, 'costo_temporale': costo_temporale, 'costo_importo': costo_importo})
-
-        return best_match['indices'], best_match['somma']
-
-    def trova_match_parziale(self, avere_row, dare_df):
-        importo_avere = avere_row['Avere']
-        data_avere = avere_row['Data']
-        dare_finestra = dare_df[
-            (dare_df['Data'] >= data_avere - timedelta(days=self.giorni_finestra)) &
-            (dare_df['Data'] <= data_avere + timedelta(days=self.giorni_finestra)) &
-            (~dare_df['usato']) &
-            (dare_df['Dare'] > importo_avere - self.tolleranza)
-        ].copy()
+            for combo in combinations(candidati, n):
+                somma = sum(c.importo for c in combo)
+                if abs(somma - versamento.importo) <= self.tolleranza:
+                    return list(combo)
         
-        if not dare_finestra.empty:
-            dare_da_spezzare = dare_finestra.sort_values('Dare').iloc[0]
-            indice_da_spezzare = dare_da_spezzare.name
-            importo_originale = dare_df.loc[indice_da_spezzare, 'Dare']
-            residuo = importo_originale - importo_avere
-            return [indice_da_spezzare], importo_avere, residuo
-        return None, None, None
+        return None
 
-    def _registra_match(self, avere_row, match_indices, somma, dare_df, avere_df, nuovi_dare, residuo=None):
-        avere_df.at[avere_row.name, 'usato'] = True
-        dare_df.loc[match_indices, 'usato'] = True
-        
-        if residuo is not None and residuo > self.tolleranza:
-            dare_originale = dare_df.loc[match_indices[0]]
-            nuovo_dare_row = dare_originale.copy()
-            nuovo_dare_row['Dare'] = residuo
-            nuovo_dare_row['usato'] = False
-            nuovi_dare.append(nuovo_dare_row)
+    def _registra_match(self, versamento, incassi_abbinati):
+        """Marca i movimenti come usati e salva il risultato."""
+        versamento.usato = True
+        somma_incassi = 0
+        for incasso in incassi_abbinati:
+            incasso.usato = True
+            somma_incassi += incasso.importo
 
         self.risultati.append({
-            'avere_idx': avere_row['indice_orig'], 'avere_data': avere_row['Data'], 'avere_importo': avere_row['Avere'],
-            'dare_indices': [dare_df.loc[i, 'indice_orig'] for i in match_indices],
-            'dare_date': [dare_df.loc[i, 'Data'] for i in match_indices],
-            'dare_importi': [dare_df.loc[i, 'Dare'] for i in match_indices],
-            'somma_dare': somma, 'differenza': avere_row['Avere'] - somma, 'num_elementi': len(match_indices)
+            'versamento_idx': versamento.indice,
+            'versamento_data': versamento.data,
+            'versamento_importo': versamento.importo,
+            'incassi_indices': [inc.indice for inc in incassi_abbinati],
+            'incassi_date': [inc.data for inc in incassi_abbinati],
+            'incassi_importi': [inc.importo for inc in incassi_abbinati],
+            'somma_incassi': somma_incassi,
+            'differenza': versamento.importo - somma_incassi,
+            'num_elementi': len(incassi_abbinati)
         })
 
-    def _riconcilia_residui_greedy(self, dare_df, avere_df):
-        """Nuovo algoritmo greedy per i residui, più veloce e meno esigente in memoria."""
-        print("\n  🧹 Avvio fase 2: Riconciliazione dei residui (Greedy)...")
-        dare_residui = dare_df[(~dare_df['usato']) & (dare_df['Dare'] < self.soglia_residui)].sort_values('Dare', ascending=False).copy()
-        avere_da_riconciliare = avere_df[~avere_df['usato']].sort_values('Avere', ascending=False).copy()
+    def _riconcilia_residui_greedy(self):
+        """
+        Fase 2: Tenta di riconciliare i versamenti rimanenti usando una combinazione
+        "ingorda" di piccoli incassi non ancora utilizzati (residui).
+        """
+        print("\n🧹 Avvio Fase 2: Riconciliazione dei residui (Greedy)...")
+        soglia = self.residui_config.get('soglia_importo', 100)
+        
+        incassi_residui = sorted(
+            [inc for inc in self.incassi if not inc.usato and inc.importo < soglia],
+            key=lambda x: x.importo, reverse=True
+        )
+        versamenti_rimanenti = [v for v in self.versamenti if not v.usato]
 
-        if dare_residui.empty or avere_da_riconciliare.empty:
-            print("  - Nessun residuo o versamento da analizzare.")
+        if not incassi_residui or not versamenti_rimanenti:
+            print("  - Nessun residuo o versamento rimanente da analizzare.")
             return
 
-        for idx_avere, avere_row in tqdm(avere_da_riconciliare.iterrows(), total=len(avere_da_riconciliare), desc="  Analisi residui AVERE", unit=" mov", ncols=100):
-            if avere_df.loc[idx_avere, 'usato']: continue
+        for versamento in tqdm(versamenti_rimanenti, desc="  Analisi residui", unit=" versamento"):
+            if versamento.usato: continue
 
-            importo_target = avere_row['Avere']
+            importo_target = versamento.importo
             somma_corrente = 0
             combinazione_corrente = []
 
-            # Scansione "ingorda" dei DARE residui
-            for idx_dare, dare_row in dare_residui[~dare_residui['usato']].iterrows():
-                if somma_corrente + dare_row['Dare'] <= importo_target + self.tolleranza:
-                    somma_corrente += dare_row['Dare']
-                    combinazione_corrente.append(idx_dare)
+            # Scansione "ingorda" degli incassi residui
+            for incasso in incassi_residui:
+                if not incasso.usato and (somma_corrente + incasso.importo <= importo_target + self.tolleranza):
+                    somma_corrente += incasso.importo
+                    combinazione_corrente.append(incasso)
             
             # Verifica se la combinazione trovata è valida
             if abs(somma_corrente - importo_target) <= self.tolleranza and combinazione_corrente:
-                self._registra_match(avere_row, combinazione_corrente, somma_corrente, dare_df, avere_df, [])
-                dare_residui.loc[combinazione_corrente, 'usato'] = True # Aggiorna lo stato nel pool locale
+                self._registra_match(versamento, combinazione_corrente)
 
-    def riconcilia(self, dare_df, avere_df, verbose=True):
-        if verbose:
-            print(f"  - Versamenti (AVERE) da riconciliare: {len(avere_df)}")
-            print(f"  - Incassi (DARE) disponibili: {len(dare_df)}")
-            
-        self.risultati = []
-        nuovi_dare = []
-
+    def esegui_riconciliazione(self):
+        """Orchestra il processo di riconciliazione in due fasi."""
         # --- FASE 1: RICONCILIAZIONE PRINCIPALE ---
-        for idx, avere_row in tqdm(avere_df.iterrows(), total=len(avere_df), desc="  Riconciliazione AVERE", unit=" mov", ncols=100):
-            if avere_row['usato']: continue
+        print("🚀 Avvio Fase 1: Riconciliazione principale...")
+        for versamento in tqdm(self.versamenti, desc="  Riconciliazione", unit=" versamento"):
+            if versamento.usato:
+                continue
 
-            match_indices, somma, residuo = None, None, None
+            # 1. Prova match esatto 1:1
+            match = self.trova_match_esatto(versamento, self.incassi)
+
+            # 2. Prova combinazioni multiple
+            if not match:
+                match = self.trova_combinazioni(versamento, self.incassi)
+
+            if match:
+                self._registra_match(versamento, match)
+
+        # --- FASE 2: RICONCILIAZIONE RESIDUI ---
+        if self.residui_config.get('attiva', False):
+            self._riconcilia_residui_greedy()
+        else:
+            print("\nℹ️ Fase 2 (Riconciliazione residui) disattivata dalla configurazione.")
+
+    def salva_risultati(self, file_output):
+        """Salva tutti i risultati in un file Excel multi-foglio."""
+        with pd.ExcelWriter(file_output, engine='openpyxl') as writer:
+            # Foglio 1: Abbinamenti
+            df_abbinamenti = pd.DataFrame(self.risultati)
+            if not df_abbinamenti.empty:
+                df_abbinamenti['incassi_indices'] = df_abbinamenti['incassi_indices'].apply(lambda x: ', '.join(map(str, x)))
+                df_abbinamenti['incassi_date'] = df_abbinamenti['incassi_date'].apply(lambda x: ', '.join([d.strftime('%d/%m/%y') for d in x]))
+                df_abbinamenti['incassi_importi'] = df_abbinamenti['incassi_importi'].apply(lambda x: ', '.join([f'{i:.2f}' for i in x]))
+                df_abbinamenti['versamento_data'] = df_abbinamenti['versamento_data'].dt.strftime('%d/%m/%y')
+            df_abbinamenti.to_excel(writer, sheet_name='Abbinamenti', index=False)
+
+            # Foglio 2: Versamenti non riconciliati
+            versamenti_non_riconc = [{'Indice': v.indice, 'Data': v.data.strftime('%d/%m/%y'), 'Importo': v.importo} for v in self.versamenti if not v.usato]
+            pd.DataFrame(versamenti_non_riconc).to_excel(writer, sheet_name='Versamenti non riconciliati', index=False)
+
+            # Foglio 3: Incassi non utilizzati
+            incassi_non_util = [{'Indice': i.indice, 'Data': i.data.strftime('%d/%m/%y'), 'Importo': i.importo} for i in self.incassi if not i.usato]
+            pd.DataFrame(incassi_non_util).to_excel(writer, sheet_name='Incassi non utilizzati', index=False)
+
+            # Foglio 4: Statistiche
+            num_versamenti = len(self.versamenti)
+            num_incassi = len(self.incassi)
+            versamenti_riconciliati = sum(1 for v in self.versamenti if v.usato)
+            incassi_utilizzati = sum(1 for i in self.incassi if i.usato)
             
-            match_indices, somma = self.trova_match_esatto(avere_row, dare_df)
-            if match_indices is None:
-                match_indices, somma = self.trova_combinazioni(avere_row, dare_df)
-            if match_indices is None:
-                match_indices, somma, residuo = self.trova_match_parziale(avere_row, dare_df)
-
-            if match_indices is not None:
-                self._registra_match(avere_row, match_indices, somma, dare_df, avere_df, nuovi_dare, residuo)
-
-        # --- FASE 2: RICONCILIAZIONE RESIDUI (con nuovo algoritmo) ---
-        self._riconcilia_residui_greedy(dare_df, avere_df)
-
-        # Aggiungi i DARE "spezzati" al dataframe principale
-        if nuovi_dare:
-            dare_df = pd.concat([dare_df, pd.DataFrame(nuovi_dare)], ignore_index=True)
-        
-        df_abbinamenti = pd.DataFrame(self.risultati) if self.risultati else pd.DataFrame()
-        return dare_df, avere_df, df_abbinamenti
+            stats = {
+                'Metrica': ['Totale Versamenti', 'Totale Incassi', 'Versamenti Riconciliati', 'Incassi Utilizzati', '% Versamenti Riconciliati', '% Incassi Utilizzati'],
+                'Valore': [
+                    num_versamenti, num_incassi,
+                    versamenti_riconciliati, incassi_utilizzati,
+                    f"{(versamenti_riconciliati / num_versamenti * 100):.1f}%" if num_versamenti > 0 else "0.0%",
+                    f"{(incassi_utilizzati / num_incassi * 100):.1f}%" if num_incassi > 0 else "0.0%"
+                ]
+            }
+            pd.DataFrame(stats).to_excel(writer, sheet_name='Statistiche', index=False)
