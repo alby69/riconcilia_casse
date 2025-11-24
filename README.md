@@ -11,9 +11,11 @@ Sistema automatico per la quadratura di movimenti contabili (es. incassi vs vers
 - [Come Funziona l'Algoritmo](#-come-funziona-lalgoritmo)
 - [Installazione](#-installazione)
 - [Utilizzo](#-utilizzo)
+- [Ottimizzazione dei Parametri (Ricerca Operativa)](#-ottimizzazione-dei-parametri-ricerca-operativa)
 - [Parametri di Configurazione](#-parametri-di-configurazione)
 - [Formato File Input](#-formato-file-input)
 - [Output Generato](#-output-generato)
+- [Esempi Pratici](#-esempi-pratici)
 - [Troubleshooting](#-troubleshooting)
 
 ---
@@ -43,15 +45,34 @@ Soluzione: 40 + 30 + 30 = 100€ ✓
 
 ---
 
+## 🏗️ Architettura del Progetto
+
+Il progetto è organizzato in moduli per separare le responsabilità e facilitare la manutenzione.
+
+```
+riconcilia_casse/
+├── batch.py                  # Script principale per l'elaborazione di più file (batch)
+├── optimizer.py              # Strumento interattivo per la ricerca dei parametri ottimali
+├── main.py                   # Motore di elaborazione per un singolo file
+├── core.py                   # Cuore dell'algoritmo, contiene la logica di riconciliazione
+├── config.json               # File di configurazione centrale per tutti i parametri
+├── input/                    # Cartella dove inserire i file Excel/CSV da elaborare
+└── output/                   # Cartella dove vengono salvati i risultati
+    ├── risultato_*.xlsx      # File Excel con i dettagli della riconciliazione
+    ├── report_*.md           # Report testuale dettagliato del processo di abbinamento
+    └── logs/                 # Log delle simulazioni dell'ottimizzatore
+```
+---
+
 ## 🧠 Come Funziona l'Algoritmo
 
 Il sistema utilizza un approccio **multi-step** ottimizzato per massimizzare velocità e accuratezza:
 
 ### 1. **Pre-processamento**
 ```
-1. Carica file Excel
+1. Carica file Excel/CSV
 2. Separa movimenti DARE da AVERE
-3. Ordina per importo (decrescente) → ottimizzazione greedy
+3. Ordina i movimenti (configurabile: per data o per importo)
 4. Aggiungi flag "usato" per evitare duplicati
 ```
 
@@ -132,6 +153,36 @@ RICONCILIAZIONE(dare_list, avere_list):
     
     RETURN results
 ```
+
+---
+
+## 🔬 Ottimizzazione dei Parametri (Ricerca Operativa)
+
+Per trovare la combinazione di parametri che massimizza i risultati su un dato file, è stato creato lo script `optimizer.py`.
+
+### Come Funziona
+
+Lo script esegue una serie di simulazioni in modo interattivo. Ti permette di scegliere quali parametri (sia numerici che testuali) variare, specificando i range o i valori da testare. Per ogni combinazione, misura le performance e il tempo di esecuzione.
+
+### Utilizzo
+
+1.  **Esegui lo script in modalità interattiva**:
+    ```bash
+    python optimizer.py
+    ```
+
+2.  **Scegli i parametri da ottimizzare**: Lo script ti mostrerà una lista di parametri disponibili.
+
+3.  **Definisci i valori da testare**:
+    - Per i parametri **numerici** (es. `giorni_finestra`), inserisci un valore minimo, uno massimo e un passo (step).
+    - Per i parametri **categorici** (es. `sorting_strategy`), scegli quali dei valori possibili vuoi includere nella simulazione (es. `1,2` per testare sia `'date'` che `'amount'`).
+
+4.  **Avvia la simulazione**: Una volta configurati i parametri, premi Invio per lanciare i test.
+
+### Output dell'Ottimizzatore
+
+- **A Schermo**: Verrà mostrato l'avanzamento di ogni simulazione e, alla fine, un riepilogo con la combinazione di parametri migliore.
+- **File di Log**: Verrà creato un file CSV (es. `optimization_log_20251124_153000.csv`) con i risultati dettagliati di ogni singola esecuzione, perfetto per analisi successive.
 
 ---
 
@@ -647,36 +698,8 @@ Se alcuni file falliscono, il batch continua con gli altri:
    - file_corrotto.xlsx: Il file deve contenere le colonne...
 ```
 
-### Integrazione con Script Esterni
 
-**Esportare solo statistiche:**
-```python
-from batch_processor import BatchProcessor
-
-processor = BatchProcessor(config)
-processor.elabora_tutti()
-
-# Accedi a statistiche
-for stat in processor.stats_globali:
-    print(f"{stat['file']}: {stat['statistiche']['percentuale_dare']}%")
-```
-
-**Callback personalizzati:**
-```python
-class BatchProcessorCustom(BatchProcessor):
-    def elabora_file(self, file_path):
-        risultato = super().elabora_file(file_path)
-        
-        # Invia email se errori
-        if not risultato['successo']:
-            self.invia_alert(risultato['file'], risultato['errore'])
-        
-        return risultato
-```
-
----
-
-## ⚙️ Configurazione via File JSON (Consigliato)
+## ⚙️ Parametri di Configurazione (`config.json`)
 
 Per una maggiore flessibilità, è possibile gestire tutti i parametri tramite un file esterno `config.json` senza modificare il codice Python.
 
@@ -685,8 +708,10 @@ Per una maggiore flessibilità, è possibile gestire tutti i parametri tramite u
 ```json
 {
   "tolleranza": 0.01,
-  "giorni_finestra": 30,
+  "giorni_finestra": 10,
   "max_combinazioni": 6,
+  "giorni_finestra_residui": 60,
+  "soglia_residui": 100,
   "cartella_input": "input",
   "cartella_output": "output",
   "pattern": [
