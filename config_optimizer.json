@@ -1,0 +1,34 @@
+{
+  "giorni_finestra": {
+    "type": "numeric",
+    "min": 5,
+    "max": 20,
+    "step": 5
+  },
+  "max_combinazioni": {
+    "type": "numeric",
+    "min": 6,
+    "max": 8,
+    "step": 1
+  },
+  "giorni_finestra_residui": {
+    "type": "numeric",
+    "min": 30,
+    "max": 70,
+    "step": 20
+  },
+  "soglia_residui": {
+    "type": "numeric",
+    "min": 5,
+    "max": 50,
+    "step": 15
+  },
+  "sorting_strategy": {
+    "type": "categorical",
+    "values": ["date"]
+  },
+  "search_direction": {
+    "type": "categorical",
+    "values": ["future_only", "both"]
+  }
+}

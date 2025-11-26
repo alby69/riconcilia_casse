@@ -8,21 +8,191 @@ le percentuali di riconciliazione.
 
 import pandas as pd
 import itertools
+import argparse
 from datetime import datetime
 import time
 from pathlib import Path
 import json
-from main import run_reconciliation  # Importa la logica di riconciliazione da main.py
+import sys
+import multiprocessing
+from tqdm import tqdm # Importa tqdm
+import optuna # Importa Optuna
+def run_auto_optimization(config, config_path):
+    """Esegue l'ottimizzazione automatica basata su range predefiniti."""
+    print("🔬 Avvio ottimizzazione in modalità automatica...")
+    params_to_test = AUTO_OPTIMIZATION_RANGES
+    
+    # Esegui la simulazione e trova i parametri migliori
+    best_params = run_simulation(config, params_to_test)
 
-# --- CONFIGURAZIONE DELLA SIMULAZIONE ---
+def load_optimizer_config(config_path='config_optimizer.json'):
+    """Carica la configurazione dell'ottimizzatore da un file JSON."""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            print(f"📄 Caricamento configurazione optimizer da '{config_path}'...")
+            optimizer_config = json.load(f)
+            print("✓ Configurazione optimizer caricata con successo.")
+            return optimizer_config
+    except FileNotFoundError:
+        print(f"⚠️  File '{config_path}' non trovato. Utilizzo configurazione di default.")
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"❌ ERRORE: Formato JSON non valido in '{config_path}': {e}")
+        print("Il programma verrà terminato.")
+        sys.exit(1)
 
-# 1. Specifica il file di input su cui eseguire i test
-INPUT_FILE_DA_OTTIMIZZARE = "input/sancesareo_311025.xlsx"
+def run_auto_optimization(config, config_path):
+    """Esegue l'ottimizzazione automatica basata su range predefiniti."""
+    print("🔬 Avvio ottimizzazione in modalità automatica...")
+    
+    # Carica la configurazione dell'ottimizzatore dal file
+    optimizer_config = load_optimizer_config()
+    
+    # Esegui la simulazione e trova i parametri migliori
+    # Passiamo direttamente la configurazione dell'optimizer a run_simulation
+    best_params = run_simulation(config, optimizer_config)
 
-# 2. Definisci la cartella di output per i log
-LOG_DIR = Path("output") / "logs"
+    # Scrivi i parametri migliori nel file di configurazione
+    update_config_file(config_path, best_params)
 
-# --- FINE CONFIGURAZIONE ---
+# Nuova funzione helper per l'esecuzione in parallelo
+def _run_single_simulation_worker(args):
+    """
+    Funzione worker per eseguire una singola simulazione di riconciliazione.
+    Progettata per essere utilizzata con multiprocessing.Pool.
+    """
+    run_config, params = args
+    
+    # Importa RiconciliatoreContabile all'interno della funzione worker
+    # Questo è cruciale per evitare problemi di serializzazione (pickling)
+    from core import RiconciliatoreContabile 
+
+    riconciliatore_sim = RiconciliatoreContabile(
+        tolleranza=run_config.get('tolleranza', 0.01),
+        giorni_finestra=run_config.get('giorni_finestra', 30),
+        max_combinazioni=run_config.get('max_combinazioni', 6),
+        soglia_residui=run_config.get('soglia_residui', 100),
+        giorni_finestra_residui=run_config.get('giorni_finestra_residui', 60),
+        sorting_strategy=run_config.get('sorting_strategy', 'date'),
+        search_direction=run_config.get('search_direction', 'both')
+    )
+    
+    INPUT_FILE_DA_OTTIMIZZARE = run_config['file_input']
+    start_time = time.time()
+    # verbose=False per evitare output disordinato dai processi paralleli
+    stats = riconciliatore_sim.run(INPUT_FILE_DA_OTTIMIZZARE, output_file=None, verbose=False) 
+    end_time = time.time()
+    execution_time = end_time - start_time
+
+    if stats:
+        perc_dare_str = stats.get('% Incassi (DARE) utilizzati', '0.0%')
+        perc_avere_str = stats.get('% Versamenti (AVERE) riconciliati', '0.0%')
+
+        perc_dare = float(str(perc_dare_str).replace('%', '')) if perc_dare_str else 0.0
+        perc_avere = float(str(perc_avere_str).replace('%', '')) if perc_avere_str else 0.0
+
+        # Restituisce tutte le informazioni necessarie al processo principale
+        return {
+            "params": params,
+            "perc_dare": perc_dare,
+            "perc_avere": perc_avere,
+            "execution_time": execution_time,
+            "full_stats": stats # Opzionalmente restituisce le statistiche complete per il logging
+        }
+    return None # Restituisce None se la simulazione è fallita o non ha prodotto statistiche
+
+def run_simulation(base_config, optimizer_config_ranges):
+    """Esegue l'ottimizzazione usando Optuna per trovare i parametri migliori."""
+
+    def objective(trial):
+        """Funzione obiettivo che Optuna cercherà di massimizzare."""
+        # 1. Suggerisci i parametri per questo "trial"
+        params = {}
+        for param_name, details in optimizer_config_ranges.items():
+            if details['type'] == 'numeric':
+                # Usa suggest_int per i parametri interi
+                params[param_name] = trial.suggest_int(param_name, details['min'], details['max'], step=details['step'])
+            elif details['type'] == 'categorical':
+                # Usa suggest_categorical per i parametri testuali
+                params[param_name] = trial.suggest_categorical(param_name, details['values'])
+
+        # 2. Esegui la simulazione con i parametri suggeriti
+        run_config = base_config.copy()
+        run_config.update(params)
+        
+        # Importa qui per essere compatibile con la parallelizzazione di Optuna
+        from core import RiconciliatoreContabile
+
+        # Filtra il dizionario di configurazione per passare solo i parametri
+        # attesi dal costruttore di RiconciliatoreContabile.
+        expected_params = [
+            'tolleranza', 'giorni_finestra', 'max_combinazioni', 
+            'soglia_residui', 'giorni_finestra_residui', 
+            'sorting_strategy', 'search_direction'
+        ]
+        riconciliatore_config = {
+            key: run_config[key] for key in expected_params if key in run_config
+        }
+
+        # Usa sempre il file di input completo per la massima accuratezza
+        input_data_for_run = run_config['file_input']
+
+        riconciliatore_sim = RiconciliatoreContabile(**riconciliatore_config)
+        stats = riconciliatore_sim.run(input_data_for_run, output_file=None, verbose=False)
+
+        # 3. Calcola e restituisci il punteggio da massimizzare
+        if stats:
+            perc_dare_str = stats.get('% Incassi (DARE) utilizzati', '0.0%')
+            perc_avere_str = stats.get('% Versamenti (AVERE) riconciliati', '0.0%')
+            perc_dare = float(str(perc_dare_str).replace('%', ''))
+            perc_avere = float(str(perc_avere_str).replace('%', ''))
+            
+            # Vogliamo massimizzare la somma delle percentuali
+            return perc_dare + perc_avere
+        
+        # Se la simulazione fallisce, restituisci un punteggio molto basso
+        return 0.0
+
+    # Disabilita il logging verboso di Optuna per mantenere l'output pulito
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    # Crea uno "studio" di ottimizzazione.
+    # La direzione è "maximize" perché vogliamo il punteggio più alto.
+    study = optuna.create_study(direction="maximize")
+
+    # Avvia l'ottimizzazione. n_trials è il numero di simulazioni da eseguire.
+    # 100 trial sono spesso sufficienti per trovare ottimi risultati.
+    # n_jobs=-1 usa tutti i core della CPU per parallelizzare i trial.
+    # Dopo le ottimizzazioni in core.py, ogni trial è molto più veloce.
+    # Riduciamo il numero di trial per accelerare il processo batch,
+    # mantenendo comunque una buona capacità di ricerca.
+    n_trials = 30 
+    print(f"🚀 Avvio ottimizzazione con Optuna per {n_trials} trial (in parallelo)...")
+
+    # Aggiungi una barra di avanzamento con tqdm
+    with tqdm(total=n_trials, desc="Ottimizzazione Trial") as pbar:
+        # Definisci un callback per aggiornare la barra di avanzamento dopo ogni trial
+        def callback(study, trial):
+            pbar.update(1)
+
+        study.optimize(objective, n_trials=n_trials, n_jobs=-1, callbacks=[callback])
+
+    # Stampa il suggerimento finale
+    best_params = study.best_params
+    best_score = study.best_value
+
+    print("\n\n╔════════════════════════════════════════════════════════════╗")
+    print("║              🏆 RISULTATO OTTIMALE TROVATO 🏆              ║")
+    print("╚════════════════════════════════════════════════════════════╝")
+    print("\nLa combinazione di parametri che ha prodotto i migliori risultati è:")
+    for key, value in best_params.items():
+        print(f"  - {key}: {value}")
+    print(f"\nCon queste impostazioni, hai raggiunto:")
+    # Nota: il punteggio esatto potrebbe non essere recuperabile facilmente, ma possiamo indicare il valore ottimizzato
+    print(f"  - Punteggio ottimizzato (Somma % DARE + % AVERE): {best_score:.2f}")
+    print("\nSuggerimento: Aggiorna il tuo file 'config.json' con questi valori per le elaborazioni future.")
+    
+    return best_params
 
 def get_user_parameters():
     """Funzione interattiva per definire i parametri e i range della simulazione."""
@@ -108,102 +278,50 @@ def get_user_parameters():
 
     return params_to_test
 
+def update_config_file(config_path, best_params):
+    """Aggiorna il file di configurazione JSON con i parametri migliori trovati."""
+    with open(config_path, 'r+') as f:
+        config_data = json.load(f)
+        config_data.update(best_params)
+        f.seek(0) # Riavvolgi all'inizio del file
+        json.dump(config_data, f, indent=2)
+        f.truncate() # Rimuovi il contenuto rimanente se il nuovo file è più corto
+    print(f"\n✅ File di configurazione '{config_path}' aggiornato con i parametri ottimali.")
+
 def main():
     """Funzione principale che orchestra la simulazione."""
-    print("╔════════════════════════════════════════════════════════════╗")
-    print("║        🚀 AVVIO OTTIMIZZATORE PARAMETRI 🚀             ║")
-    print("╚════════════════════════════════════════════════════════════╝")
-    print(f"\n🎯 File di input per l'analisi: {INPUT_FILE_DA_OTTIMIZZARE}")
+    parser = argparse.ArgumentParser(description="Ottimizzatore dei parametri di riconciliazione.")
+    parser.add_argument('--config', required=True, help="Percorso del file di configurazione JSON da usare e aggiornare.")
+    parser.add_argument('--auto', action='store_true', help="Esegui in modalità automatica non interattiva.")
+    args = parser.parse_args()
 
-    # Carica la configurazione di base da config.json
-    with open('config.json', 'r') as f:
+    config_path = Path(args.config)
+    if not config_path.exists():
+        print(f"❌ Errore: File di configurazione non trovato in '{config_path}'")
+        sys.exit(1)
+
+    # Carica la configurazione di base dal file specificato
+    with open(config_path, 'r') as f:
         config = json.load(f)
 
-    # Mostra la configurazione di base
-    print("\n⚙️  Configurazione di base (da config.json):")
-    for key, value in config.items():
-        if key != "commento":
-            print(f"   - {key}: {value}")
-
-    # Ottieni i parametri e i range dall'utente
-    params_to_test = get_user_parameters()
-
-    # Genera tutte le combinazioni di parametri
-    keys, values = zip(*params_to_test.items())
-    parameter_combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
-    
-    total_runs = len(parameter_combinations)
-    print(f"🔬 Verranno eseguite {total_runs} simulazioni.\n")
-
-    log_results = []
-    best_result = {"percentuale_dare": 0, "percentuale_avere": 0, "tempo_esecuzione_sec": float('inf')}
-
-    for i, params in enumerate(parameter_combinations):
-        run_config = config.copy()
-        run_config.update(params)
-
-        print(f"--- [Simulazione {i+1}/{total_runs}] ---")
-        param_str = ", ".join([f"{k}={v}" for k, v in params.items()])
-        print(f"Parametri: {param_str}")
-
-        # Esegui la riconciliazione con la configurazione corrente
-        start_time = time.time()
-        stats = run_reconciliation(INPUT_FILE_DA_OTTIMIZZARE, run_config, silent=True)
-        end_time = time.time()
-        execution_time = end_time - start_time
-
-        if stats:
-            # Estrai le percentuali per il confronto
-            perc_dare_str = stats.get('% Incassi (DARE) utilizzati', '0.0%')
-            perc_avere_str = stats.get('% Versamenti (AVERE) riconciliati', '0.0%')
-            
-            perc_dare = float(perc_dare_str.replace('%', ''))
-            perc_avere = float(perc_avere_str.replace('%', ''))
-
-            print(f"📊 Risultati: % DARE = {perc_dare_str}, % AVERE = {perc_avere_str} (in {execution_time:.2f} sec)\n")
-
-            # Aggiungi i risultati al log
-            log_entry = params.copy()
-            log_entry['tempo_esecuzione_sec'] = round(execution_time, 2)
-            log_entry.update(stats)
-            log_results.append(log_entry)
-
-            # Controlla se questo è il risultato migliore finora (basato sulla somma delle percentuali)
-            if (perc_dare + perc_avere) > (best_result.get("percentuale_dare", 0) + best_result.get("percentuale_avere", 0)):
-                best_result = {
-                    **params,
-                    "percentuale_dare": perc_dare,
-                    "percentuale_avere": perc_avere,
-                    "tempo_esecuzione_sec": execution_time
-                }
-
-    # Salva il log completo in un file CSV
-    if log_results:
-        # Crea la cartella di log se non esiste
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        
-        # Costruisci il nome e il percorso completo del file di log
-        log_filename = f"optimization_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        log_filepath = LOG_DIR / log_filename
-        
-        log_df = pd.DataFrame(log_results)
-        log_df.to_csv(log_filepath, index=False, sep=';')
-        print(f"\n💾 Log completo di tutte le simulazioni salvato in: {log_filepath.resolve()}")
-
-    # Stampa il suggerimento finale
-    print("\n\n╔════════════════════════════════════════════════════════════╗")
-    print("║              🏆 RISULTATO OTTIMALE TROVATO 🏆              ║")
+    print("╔════════════════════════════════════════════════════════════╗")
+    print("║        🚀 AVVIO OTTIMIZZATORE PARAMETRI 🚀                 ║")
     print("╚════════════════════════════════════════════════════════════╝")
-    print("\nLa combinazione di parametri che ha prodotto i migliori risultati è:")
-    for key, value in best_result.items():
-        if key not in ["percentuale_dare", "percentuale_avere", "tempo_esecuzione_sec"]:
-            print(f"  - {key}: {value}")
-    print(f"\nCon queste impostazioni, hai raggiunto:")
-    print(f"  - % Incassi (DARE) utilizzati: {best_result['percentuale_dare']:.1f}%")
-    print(f"  - % Versamenti (AVERE) riconciliati: {best_result['percentuale_avere']:.1f}%")
-    print(f"  - Tempo di esecuzione: {best_result['tempo_esecuzione_sec']:.2f} secondi")
-    print("\nSuggerimento: Aggiorna il tuo file 'config.json' con questi valori per le elaborazioni future.")
+    print(f"\n🎯 File di configurazione in uso: {config_path.resolve()}")
+    print(f"📄 File di input per l'analisi: {config.get('file_input')}")
 
+    if args.auto:
+        run_auto_optimization(config, config_path)
+    else:
+        # Modalità interattiva
+        print("\n⚙️  Configurazione di base (da config.json):")
+        for key, value in config.items():
+            if key != "commento":
+                print(f"   - {key}: {value}")
+        
+        params_to_test = get_user_parameters()
+        best_params = run_simulation(config, params_to_test)
+        update_config_file(config_path, best_params)
 
 if __name__ == "__main__":
     main()
