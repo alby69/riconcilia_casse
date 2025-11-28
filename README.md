@@ -5,7 +5,10 @@ Questo progetto fornisce un sistema automatico per la riconciliazione di movimen
 ## ✨ Caratteristiche Principali
 
 - **Elaborazione in Batch**: Processa automaticamente tutti i file presenti nella cartella `input/`.
-- **Ottimizzazione Automatica**: Per ogni file, esegue centinaia di simulazioni per trovare la combinazione di parametri che massimizza i risultati della riconciliazione.
+- **Conversione Automatica a Feather**: I file Excel (`.xlsx`, `.xls`) vengono automaticamente convertiti nel formato ad alte prestazioni Apache Feather per accelerare drasticamente i tempi di lettura durante le elaborazioni.
+- **Ottimizzazione Adattiva dei Parametri (`optimizer.py`)**: Per ogni file, il sistema non usa parametri fissi, ma esegue un'ottimizzazione automatica per trovare la configurazione migliore.
+  - **Range Dinamici**: Invece di cercare i parametri in range ampi e fissi (es. `giorni_finestra` da 1 a 100), l'ottimizzatore crea un intervallo di ricerca mirato attorno ai valori di partenza (es. `50 ± 30%`, quindi tra 35 e 65).
+  - **Approccio Evolutivo**: I parametri ottimali trovati vengono salvati. Nelle esecuzioni successive, l'ottimizzazione partirà da questa base migliore, affinando la ricerca in aree sempre più promettenti. Questo rende il processo più veloce ed efficace a ogni ciclo.
 - **Supporto Multi-Formato**: Gestisce file Excel moderni (`.xlsx`), legacy (`.xls`) e CSV (`.csv`).
 - **Architettura Modulare (KISS)**: La logica di business è incapsulata nel "motore" (`core.py`), mentre gli altri script agiscono come orchestratori o wrapper, seguendo la filosofia *Keep It Simple, Stupid*.
 - **Report Dettagliati**: Per ogni file elaborato, genera una cartella dedicata in `output/` contenente:
@@ -39,6 +42,8 @@ Questo progetto fornisce un sistema automatico per la riconciliazione di movimen
 │       ├── config.json     # Configurazione ottimizzata per questo file
 │       └── risultato_...   # Report Excel dettagliato
 ├── batch.py                # ✅ Script principale per avviare l'elaborazione
+├── convert_to_feather.py   # Utility per convertire Excel in Feather per performance
+├── profile_core.py         # Script per la profilazione delle performance di core.py
 ├── main.py                 # Esecutore della singola riconciliazione
 ├── core.py                 # Motore di riconciliazione (logica di business)
 ├── optimizer.py            # Ottimizzatore dei parametri
@@ -59,6 +64,7 @@ Il diagramma seguente illustra come i vari componenti interagiscono tra loro.
 graph TD
     subgraph "Utente"
         A[Avvio: python batch.py]
+        P[Profilazione: python profile_core.py]
     end
 
     subgraph "Processo Batch (batch.py)"
@@ -89,6 +95,8 @@ graph TD
 
     A --> B
     B -- Per ogni file --> C
+    B -- Per ogni file --> X
+    X -- Input Feather/CSV --> C
     C --> D
     D --> E
     E --> H
@@ -96,11 +104,14 @@ graph TD
     I -- Usa --> O
     I --> J
     E -- Ritorna a --> F
+    E -- Ritorna a --> F -- Input Feather --> K
     F --> K
     K --> L
     L -- Chiama --> O
     O -- Ritorna stats --> M
     F -- Ritorna a --> G
+    P --> N
+    P --> O
 ```
 
 ### Descrizione del Flusso
@@ -109,10 +120,12 @@ graph TD
 2.  **Ciclo sui File**: Per ogni file in `input/` (es. `cassa.xlsx`):
     1.  **Setup**: Crea una cartella dedicata `output/cassa/`.
     2.  **Configurazione Locale**: Copia il `config.json` di base in `output/cassa/` e lo aggiorna con i percorsi di input e output specifici per `cassa.xlsx`.
-    3.  **Ottimizzazione (`optimizer.py`)**: `batch.py` esegue `optimizer.py` in modalità automatica, passandogli il percorso del `config.json` locale.
-        - L'`optimizer` esegue centinaia di simulazioni (usando il motore `RiconciliatoreContabile` da `core.py`) per testare diverse combinazioni di parametri.
-        - Una volta trovata la combinazione migliore, aggiorna il file `output/cassa/config.json` con i parametri ottimali.
-    4.  **Esecuzione Finale (`main.py`)**: `batch.py` esegue `main.py`, passandogli il percorso del `config.json` locale (ora ottimizzato).
+    3.  **Ottimizzazione Adattiva (`optimizer.py`)**: `batch.py` esegue `optimizer.py`, passandogli il percorso del `config.json` locale.
+        - L'ottimizzatore (`optimizer.py`) legge i parametri di partenza dal `config.json` locale.
+        - **Crea dinamicamente un intervallo di ricerca** attorno a questi valori (es. `giorni_finestra: 50` diventa un range di ricerca tra `35` e `65`).
+        - Utilizzando la libreria `Optuna`, esegue decine di simulazioni in parallelo per testare diverse combinazioni di parametri all'interno di questo intervallo mirato.
+        - Trovata la combinazione migliore, **aggiorna il file `output/cassa/config.json`** con i parametri ottimali.
+    4.  **Esecuzione Finale (`main.py`)**: `batch.py` esegue `main.py` usando il `config.json` locale, che ora contiene i parametri ottimizzati.
         - `main.py` istanzia il motore `RiconciliatoreContabile` con i parametri ottimali e lancia il processo finale.
         - Il motore esegue la riconciliazione e salva il report Excel dettagliato in `output/cassa/risultato_cassa.xlsx`.
         - Il motore di riconciliazione (`core.py`) ora beneficia di ottimizzazioni come l'elaborazione parallela tramite Dask e algoritmi di ricerca combinatoria con memoization e pruning.

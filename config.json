@@ -1,14 +1,12 @@
 {
-  "tolleranza": 0.1,
+  "tolleranza": 1,
   "timeout_per_file_seconds": 600,
-  "giorni_finestra": 50,
-  "max_combinazioni": 9,
+  "giorni_finestra": 30,
+  "max_combinazioni": 6,
   "giorni_finestra_residui": 30,
-  "soglia_residui": 35,
+  "soglia_residui": 10,
   "cartella_input": "input",
   "cartella_output": "output",
-  "file_input": "/home/aabate/Documenti/PROGR/riconcilia_casse/input/sancesareo_311025.xlsx",
-  "file_output": "/home/aabate/Documenti/PROGR/riconcilia_casse/output/sancesareo_311025/risultato_sancesareo_311025.xlsx",
   "pattern": [
     "*.xlsx",
     "*.csv",

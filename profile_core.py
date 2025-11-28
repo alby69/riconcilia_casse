@@ -10,17 +10,17 @@ def run_profiling():
     # --- CONFIGURA QUI ---
     # Specifica il percorso di un file di test. Usa un file di dimensioni
     # realistiche per ottenere risultati significativi.
-    file_di_test = 'input/alessano_311025.xls' 
+    file_di_test = 'input/sancesareo_311025.feather' # OTTIMIZZATO: Usa il file Feather
     
     # Istanzia il riconciliatore con parametri standard o ottimizzati
     riconciliatore = RiconciliatoreContabile(
         tolleranza=0.10,
-        giorni_finestra=50,
-        max_combinazioni=10,
+        giorni_finestra=20,
+        max_combinazioni=7,
         soglia_residui=20,
-        giorni_finestra_residui=70,
+        giorni_finestra_residui=30,
         sorting_strategy="date",
-        search_direction="both"
+        search_direction="future_only"
     )
 
     # Esegui la funzione che vuoi misurare

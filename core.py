@@ -1,10 +1,10 @@
 import pandas as pd
 from itertools import combinations
+from collections import deque
 from pathlib import Path
 from datetime import datetime
 import warnings
 
-import dask.bag as db
 
 warnings.filterwarnings('ignore')
 from tqdm import tqdm
@@ -32,23 +32,44 @@ class RiconciliatoreContabile:
 
     def carica_file(self, file_path):
         """Carica un file Excel o CSV in un DataFrame."""
+        # Parametri comuni per la lettura di CSV/Excel con formato europeo
+        common_read_params = {
+            'decimal': ',',
+            'thousands': '.'
+        }
+
         if str(file_path).endswith('.csv'):
-            df = pd.read_csv(file_path)
+            df = pd.read_csv(file_path, **common_read_params)
+        elif str(file_path).endswith('.feather'):
+            df = pd.read_feather(file_path)
         else:
-            df = pd.read_excel(file_path)
+            # Questo ramo dovrebbe essere raggiunto solo se non è un feather e non è un CSV.
+            # Per i file Excel, convert_to_feather.py dovrebbe aver già gestito il parsing.
+            df = pd.read_excel(file_path, **common_read_params)
         
         required_cols = {'Data', 'Dare', 'Avere'}
         if not required_cols.issubset(df.columns):
             raise ValueError(f"Il file deve contenere le colonne: {', '.join(required_cols)}")        
         
-        # Converte la colonna 'Data', trasformando qualsiasi valore non valido (es. testo) in NaT (Not a Time).
-        # Questo rende il caricamento robusto a righe di intestazione/piè di pagina nel file.
+        # Dopo la lettura, assicurati che 'Data' sia datetime e 'Dare'/'Avere' siano numerici.
+        # Questo è un fallback nel caso in cui i parametri di lettura non siano stati sufficienti
+        # o se il DataFrame proviene da una fonte già pre-caricata (es. dall'ottimizzatore).
         df['Data'] = pd.to_datetime(df['Data'], errors='coerce', dayfirst=True)
-        
-        # Rimuove le righe dove la data non è stata riconosciuta (quelle diventate NaT).
-        df.dropna(subset=['Data'], inplace=True)
-        
+        df.dropna(subset=['Data'], inplace=True) # Rimuove righe con date non valide
+
+        # Converti 'Dare' e 'Avere' in numerico. Se sono già stati letti correttamente,
+        # questa operazione sarà veloce. Se sono ancora stringhe, pd.to_numeric li gestirà.
+        df['Dare'] = pd.to_numeric(df['Dare'], errors='coerce')
+        df['Avere'] = pd.to_numeric(df['Avere'], errors='coerce')
+
+        # Riempi i valori non numerici con 0 PRIMA di convertire in centesimi
         df[['Dare', 'Avere']] = df[['Dare', 'Avere']].fillna(0)
+
+        # --- OTTIMIZZAZIONE: Converti in interi (centesimi) per evitare errori di floating point ---
+        # Moltiplichiamo per 100 e arrotondiamo per sicurezza, poi convertiamo in interi.
+        df['Dare'] = (df['Dare'] * 100).round().astype(int)
+        df['Avere'] = (df['Avere'] * 100).round().astype(int)
+
         df['indice_orig'] = df.index
         return df
 
@@ -64,32 +85,30 @@ class RiconciliatoreContabile:
         else:
             raise ValueError(f"Strategia di ordinamento non valida: '{self.sorting_strategy}'. Usare 'date' o 'amount'.")
 
-    def _trova_abbinamenti(self, dare_row, avere_df, giorni_finestra, max_combinazioni):
+    def _trova_abbinamenti(self, dare_row, avere_candidati_np, avere_indices_map, giorni_finestra, max_combinazioni):
         """Logica interna per trovare un abbinamento per un singolo DARE."""
         dare_importo = dare_row['Dare']
         dare_data = dare_row['Data']
 
         # Calcola la finestra temporale in base alla direzione di ricerca
         min_data_window, max_data_window = self._calcola_finestra_temporale(dare_data, giorni_finestra, self.search_direction)
-
         
-        # Filtra AVERE per finestra temporale e importo
-        min_data = dare_data - pd.Timedelta(days=giorni_finestra)
-        max_data = dare_data + pd.Timedelta(days=giorni_finestra)
-
-        candidati_avere = avere_df[
-            (~avere_df['indice_orig'].isin(self.used_avere_indices)) & # Modifica qui
-            (avere_df['Data'].between(min_data_window, max_data_window)) &
-            (avere_df['Avere'] <= dare_importo + self.tolleranza)
-        ].copy()
-
-        if candidati_avere.empty:
+        # --- OTTIMIZZAZIONE CORRETTA: Filtra la lista di dizionari ---
+        # avere_candidati_np è ora una lista di dizionari, non un array numpy
+        candidati_avere = [
+            c for c in avere_candidati_np 
+            if c['indice_orig'] not in self.used_avere_indices and
+               min_data_window <= c['Data'] <= max_data_window and
+               c['Avere'] <= dare_importo + self.tolleranza
+        ]
+        
+        if not candidati_avere:
             return None
         
         # 1. Cerca match esatto 1-a-1
-        match_esatto = candidati_avere[abs(candidati_avere['Avere'] - dare_importo) <= self.tolleranza]
-        if not match_esatto.empty:
-            best_match = match_esatto.iloc[0]
+        match_esatto_list = [c for c in candidati_avere if abs(c['Avere'] - dare_importo) <= self.tolleranza]
+        if match_esatto_list:
+            best_match = match_esatto_list[0] # Prende il primo match esatto trovato
             return {
                 'dare_indices': [dare_row['indice_orig']],
                 'dare_date': [dare_data],
@@ -103,7 +122,7 @@ class RiconciliatoreContabile:
             }
 
         # 2. Cerca combinazioni multiple in modo ottimizzato
-        candidati_avere = candidati_avere.sort_values('Avere', ascending=False).to_dict('records')
+        candidati_avere = sorted(candidati_avere, key=lambda x: x['Avere'], reverse=True)
         
         # Aggiunta cache per la memoization
         cache = {}
@@ -135,87 +154,91 @@ class RiconciliatoreContabile:
         return None
 
     def _trova_combinazioni_ricorsivo(self, target, candidati, max_combinazioni, parziale, start_index, somma_parziale, cache, remaining_sum):
-        """Funzione ricorsiva ottimizzata per il subset-sum con pruning."""
-        # --- OTTIMIZZAZIONE: MEMOIZATION ---
-        cache_key = (start_index, round(somma_parziale, 2)) # Arrotonda per evitare problemi di precisione float
-        if cache_key in cache:
-            return cache[cache_key]
+        """Funzione iterativa (basata su stack) per il subset-sum con pruning e memoization."""
+        # Lo stack contiene tuple: (indice_candidato, somma_parziale_corrente, combinazione_parziale_corrente)
+        stack = deque([(start_index, somma_parziale, parziale)])
 
-        # Condizione di successo
-        if abs(target - somma_parziale) <= self.tolleranza and len(parziale) > 1:
-            return parziale
+        # La cache (memoization) memorizza gli stati (indice, somma) per evitare ricalcoli.
+        # Il valore può essere la combinazione trovata o None se non porta a soluzione.
 
-        # Condizioni di pruning (potatura)
-        if len(parziale) >= max_combinazioni or start_index >= len(candidati) or somma_parziale > target + self.tolleranza:
-            return None
-        
-        # --- NUOVA OTTIMIZZAZIONE: PRUNING AGGRESSIVO ---
-        # Se la somma parziale più tutto ciò che rimane non può raggiungere il target, fermati.
-        if somma_parziale + remaining_sum < target - self.tolleranza:
-            return None
+        while stack:
+            idx, current_sum, current_path = stack.pop()
 
-        for i in range(start_index, len(candidati)):
-            candidato = candidati[i]
-            
-            # La somma rimanente per la prossima chiamata ricorsiva sarà quella attuale meno il candidato corrente.
-            next_remaining_sum = remaining_sum - candidato['Avere']
-            # Aggiungi il candidato alla soluzione parziale
-            parziale.append(candidato)
-            
-            # Chiamata ricorsiva
-            risultato = self._trova_combinazioni_ricorsivo(
-                target, 
-                candidati, 
-                max_combinazioni, 
-                parziale, i + 1, 
-                somma_parziale + candidato['Avere'],
-                cache,
-                next_remaining_sum
-            )
-            if risultato:
-                # Non salvare nella cache il percorso di successo, solo i fallimenti
-                return risultato
-            
-            # Backtrack: rimuovi il candidato e prova il prossimo
-            parziale.pop()
-        
-        # Se nessun percorso da qui ha portato a una soluzione, salva il fallimento nella cache
-        cache[cache_key] = None
-        return None
+            cache_key = (idx, current_sum)
+            if cache_key in cache:
+                continue
 
-    def _trova_abbinamenti_dare(self, avere_row, dare_df, giorni_finestra, max_combinazioni):
+            # --- CONDIZIONI DI PRUNING (POTATURA) ---
+            # 1. Superato il numero massimo di combinazioni
+            # 2. La somma parziale supera già il target (con tolleranza)
+            # 3. L'indice è fuori dai limiti dei candidati
+            if len(current_path) >= max_combinazioni or \
+               current_sum > target + self.tolleranza or \
+               idx >= len(candidati):
+                cache[cache_key] = None
+                continue
+
+            # --- CONDIZIONE DI SUCCESSO ---
+            # Trovata una combinazione valida (più di 1 elemento) entro la tolleranza
+            if abs(target - current_sum) <= self.tolleranza and len(current_path) > 1:
+                cache[cache_key] = current_path
+                return current_path
+
+            # Marca lo stato corrente come visitato per evitare cicli/ricalcoli
+            cache[cache_key] = None
+
+            # Se siamo ancora nei limiti dei candidati, esplora i due rami:
+            # 1. Includi il candidato corrente
+            # 2. Escludi il candidato corrente
+            if idx < len(candidati):
+                candidato = candidati[idx]
+                
+                # --- RAMO 1: Escludi il candidato corrente ---
+                # Continua l'esplorazione dal prossimo candidato con la stessa somma e percorso.
+                stack.append((idx + 1, current_sum, current_path))
+
+                # --- RAMO 2: Includi il candidato corrente ---
+                # Aggiungi il candidato al percorso e aggiorna la somma.
+                new_sum = current_sum + candidato['Avere']
+                new_path = current_path + [candidato]
+                stack.append((idx + 1, new_sum, new_path))
+
+        return None # Nessuna combinazione trovata
+
+    def _trova_abbinamenti_dare(self, avere_row, dare_candidati_np, dare_indices_map, giorni_finestra, max_combinazioni):
         """Logica per trovare combinazioni di DARE che corrispondono a un AVERE."""
         avere_importo = avere_row['Avere']
         avere_data = avere_row['Data']
 
-        # Calcola la finestra temporale in base alla direzione di ricerca
-        # Per la combinazione DARE per AVERE, è più logico che i DARE siano precedenti o uguali all'AVERE.
-        # Quindi, anche se search_direction è 'both' o 'future_only', qui forziamo 'past_only' per i DARE.
-        # Questo perché i DARE sono gli incassi che "formano" il versamento (AVERE).
         min_data_window, max_data_window = self._calcola_finestra_temporale(avere_data, giorni_finestra, "past_only")
 
-        candidati_dare = dare_df[
-            (~dare_df['indice_orig'].isin(self.used_dare_indices)) & # Modifica qui
-            (dare_df['Data'].between(min_data_window, max_data_window)) &
-            (dare_df['Dare'] <= avere_importo + self.tolleranza)
-        ].copy()
+        # --- OTTIMIZZAZIONE CORRETTA: Filtra la lista di dizionari ---
+        candidati_dare_list = [
+            c for c in dare_candidati_np
+            if c['indice_orig'] not in self.used_dare_indices and
+               min_data_window <= c['Data'] <= max_data_window and
+               c['Dare'] <= avere_importo + self.tolleranza
+        ]
 
-        if candidati_dare.empty:
+        if not candidati_dare_list:
             return None
 
         # Cerca combinazioni multiple di DARE in modo ottimizzato
-        candidati_dare_list = candidati_dare.sort_values('Dare', ascending=False).to_dict('records')
+        # --- FIX: Crea una copia prima di modificare ---
+        # La lista originale non deve essere alterata per le iterazioni successive.
+        candidati_da_modificare = [c.copy() for c in candidati_dare_list]
+        candidati_da_modificare = sorted(candidati_da_modificare, key=lambda x: x['Dare'], reverse=True)
         
         # Riusiamo la stessa logica ricorsiva, adattandola per i DARE
         # Nota: rinominiamo 'Avere' in 'Dare' per la funzione generica
-        for c in candidati_dare_list:
+        for c in candidati_da_modificare:
             c['Avere'] = c.pop('Dare')
 
         cache = {} # Cache anche qui
-        somma_totale_candidati = sum(c['Avere'] for c in candidati_dare_list)
+        somma_totale_candidati = sum(c['Avere'] for c in candidati_da_modificare)
         match = self._trova_combinazioni_ricorsivo(
             target=avere_importo,
-            candidati=candidati_dare_list,
+            candidati=candidati_da_modificare,
             max_combinazioni=max_combinazioni,
             parziale=[],
             start_index=0,
@@ -239,7 +262,7 @@ class RiconciliatoreContabile:
         return None
 
     def _esegui_passata_riconciliazione_dare(self, dare_df, avere_df, giorni_finestra, max_combinazioni, abbinamenti_list, title, verbose=True):
-        """Esegue una passata cercando combinazioni di DARE per abbinare AVERE."""
+        """Esegue una passata cercando combinazioni di DARE per abbinare AVERE (ottimizzata con NumPy)."""
         avere_da_processare = avere_df[~avere_df['indice_orig'].isin(self.used_avere_indices)].copy() # Modifica qui
 
         if avere_da_processare.empty:
@@ -247,6 +270,10 @@ class RiconciliatoreContabile:
 
         if verbose:
             print(f"\n{title}...")
+
+        # --- OTTIMIZZAZIONE: Prepara array NumPy e dizionario di mapping ---
+        # Convertiamo in una lista di dizionari una sola volta
+        dare_candidati_list = dare_df.to_dict('records')
 
         total_avere = len(avere_da_processare)
         processed_count = 0
@@ -259,7 +286,7 @@ class RiconciliatoreContabile:
                 sys.stdout.write(f"\r   - Avanzamento: {percentuale:.1f}% ({processed_count}/{total_avere})")
                 sys.stdout.flush()
 
-            match = self._trova_abbinamenti_dare(avere_row, dare_df, giorni_finestra, max_combinazioni)
+            match = self._trova_abbinamenti_dare(avere_row, dare_candidati_list, None, giorni_finestra, max_combinazioni)
             if match:
                 match['pass_name'] = title
                 self._registra_abbinamento(match, abbinamenti_list) # Modifica qui
@@ -283,7 +310,7 @@ class RiconciliatoreContabile:
         return min_data, max_data
 
     def _esegui_passata_riconciliazione(self, dare_df, avere_df, giorni_finestra, max_combinazioni, abbinamenti_list, title, verbose=True):
-        """Esegue una passata di riconciliazione e aggiorna i DataFrame."""
+        """Esegue una passata di riconciliazione e aggiorna i DataFrame (ottimizzata con NumPy)."""
         # Filtra i DARE che non sono ancora stati usati
         dare_da_processare = dare_df[~dare_df['indice_orig'].isin(self.used_dare_indices)].copy() # Modifica qui
         
@@ -293,15 +320,14 @@ class RiconciliatoreContabile:
         if verbose:
             print(f"\n{title}...")
         
-        # --- OTTIMIZZAZIONE CON DASK ---
-        # Converti il DataFrame in una lista di record per Dask
+        # --- OTTIMIZZAZIONE: Usa Pandas direttamente ---
         dare_records = dare_da_processare.to_dict('records')
+        avere_candidati_list = avere_df.to_dict('records')
 
-        # Crea un Dask Bag e mappa la funzione di abbinamento in parallelo
-        bag = db.from_sequence(dare_records)
-        
-        # Usiamo una lambda per adattare la firma della funzione
-        matches = bag.map(lambda dare_row: self._trova_abbinamenti(dare_row, avere_df, giorni_finestra, max_combinazioni)).compute()
+        # Mappa la funzione di abbinamento in sequenza con Pandas
+        matches = []
+        for dare_row in dare_records:
+            matches.append(self._trova_abbinamenti(dare_row, avere_candidati_list, None, giorni_finestra, max_combinazioni))
 
         # Filtra i risultati nulli e registra gli abbinamenti trovati
         # Questo blocco rimane sequenziale, ma è molto veloce.
@@ -416,15 +442,15 @@ class RiconciliatoreContabile:
             df_abbinamenti_excel = self.df_abbinamenti.copy()
             if not df_abbinamenti_excel.empty:
                 def format_list(data, is_float=False):
-                    if not isinstance(data, list): return data
-                    items = [i + 2 for i in data] if not is_float else [f"{i:.2f}" for i in data]
+                    if not isinstance(data, list): return data # Should not happen
+                    items = [i + 2 for i in data] if not is_float else [f"{i/100:.2f}" for i in data]
                     return ', '.join(map(str, items))
-                
+
                 for col in ['dare_indices', 'avere_indices']: df_abbinamenti_excel[col] = df_abbinamenti_excel[col].apply(lambda x: format_list(x))
                 for col in ['dare_importi', 'avere_importi']: df_abbinamenti_excel[col] = df_abbinamenti_excel[col].apply(lambda x: format_list(x, is_float=True))
                 df_abbinamenti_excel['dare_date'] = df_abbinamenti_excel['dare_date'].apply(lambda x: ', '.join([d.strftime('%d/%m/%y') for d in x]) if isinstance(x, list) else x.strftime('%d/%m/%y'))
                 df_abbinamenti_excel['avere_data'] = pd.to_datetime(df_abbinamenti_excel['avere_data']).dt.strftime('%d/%m/%y')
-            
+
             df_abbinamenti_excel.to_excel(writer, sheet_name='Abbinamenti', index=False)
 
             # --- Fogli Non Riconciliati ---
@@ -445,17 +471,17 @@ class RiconciliatoreContabile:
             # --- Foglio Statistiche ---
             stats = self.get_stats()
             def format_eur(value): return f"{value:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
-
+            
             df_incassi = pd.DataFrame({
-                'TOT': [stats['Totale Incassi (DARE)'], format_eur(self.dare_df['Dare'].sum())],
-                'USATI': [stats['Incassi (DARE) utilizzati'], format_eur(self.dare_df[self.dare_df['usato']]['Dare'].sum())],
+                'TOT': [stats['Totale Incassi (DARE)'], format_eur(self.dare_df['Dare'].sum() / 100)],
+                'USATI': [stats['Incassi (DARE) utilizzati'], format_eur(self.dare_df[self.dare_df['usato']]['Dare'].sum() / 100)],
                 '% USATI': [stats['% Incassi (DARE) utilizzati'], f"{stats['_raw_perc_dare_importo']:.2f}%"],
                 'Delta': [stats['Incassi (DARE) non utilizzati'], format_eur(stats['_raw_importo_dare_non_util'])]
             }, index=['Numero', 'Importo'])
 
             df_versamenti = pd.DataFrame({
-                'TOT': [stats['Totale Versamenti (AVERE)'], format_eur(self.avere_df['Avere'].sum())],
-                'USATI': [stats['Versamenti (AVERE) riconciliati'], format_eur(self.avere_df[self.avere_df['usato']]['Avere'].sum())],
+                'TOT': [stats['Totale Versamenti (AVERE)'], format_eur(self.avere_df['Avere'].sum() / 100)],
+                'USATI': [stats['Versamenti (AVERE) riconciliati'], format_eur(self.avere_df[self.avere_df['usato']]['Avere'].sum() / 100)],
                 '% USATI': [stats['% Versamenti (AVERE) riconciliati'], f"{stats['_raw_perc_avere_importo']:.2f}%"],
                 'Delta': [stats['Versamenti (AVERE) non riconciliati'], format_eur(stats['_raw_importo_avere_non_riconc'])]
             }, index=['Numero', 'Importo'])
@@ -480,17 +506,17 @@ class RiconciliatoreContabile:
 
         num_dare_tot = len(self.dare_df)
         num_dare_usati = int(self.dare_df['usato'].sum()) # Ora la colonna 'usato' esiste
-        imp_dare_tot = self.dare_df['Dare'].sum()
-        imp_dare_usati = self.dare_df[self.dare_df['usato']]['Dare'].sum()
+        imp_dare_tot = self.dare_df['Dare'].sum() # in cents
+        imp_dare_usati = self.dare_df[self.dare_df['usato']]['Dare'].sum() # in cents
 
         num_avere_tot = len(self.avere_df)
         num_avere_usati = int(self.avere_df['usato'].sum()) # Ora la colonna 'usato' esiste
-        imp_avere_tot = self.avere_df['Avere'].sum()
-        imp_avere_usati = self.avere_df[self.avere_df['usato']]['Avere'].sum()
+        imp_avere_tot = self.avere_df['Avere'].sum() # in cents
+        imp_avere_usati = self.avere_df[self.avere_df['usato']]['Avere'].sum() # in cents
 
         # Ricalcola dare_non_util e avere_non_riconc basandosi sulla colonna 'usato' aggiornata
-        importo_dare_non_util = self.dare_non_util['Dare'].sum() if self.dare_non_util is not None else 0
-        importo_avere_non_riconc = self.avere_non_riconc['Avere'].sum() if self.avere_non_riconc is not None else 0
+        importo_dare_non_util = (self.dare_non_util['Dare'].sum() / 100) if self.dare_non_util is not None else 0
+        importo_avere_non_riconc = (self.avere_non_riconc['Avere'].sum() / 100) if self.avere_non_riconc is not None else 0
 
         return {
             'Totale Incassi (DARE)': num_dare_tot,

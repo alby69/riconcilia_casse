@@ -1,267 +1,240 @@
-"""
-Batch Processor - Wrapper per l'elaborazione multipla di file.
-Questo script orchestra l'elaborazione, chiamando `main.py` per ogni file.
-"""
-
-from pathlib import Path
-from datetime import datetime
-import json
-import shutil
-import sys
 import os
-from tqdm import tqdm
+import json
 import subprocess
-import threading
+import sys
 
-def run_subprocess_interactive(command, description, timeout=None):
+import time
+
+try:
+    # Add the directory of convert_to_feather.py to the Python path
+    # This assumes batch.py and convert_to_feather.py are in the same directory
+    sys.path.append(os.path.dirname(__file__))
+    from convert_to_feather import convert_excel_to_feather
+except ImportError:
+    print("Errore: impossibile importare 'convert_to_feather'. Assicurati che il file 'convert_to_feather.py' sia nella stessa directory.")
+    sys.exit(1)
+
+def process_single_file(filename, input_dir, output_dir, base_config):
     """
-    Esegue un sottoprocesso mostrando l'output in tempo reale.
-    Utile per processi con barre di avanzamento (es. optimizer).
-    Non cattura stdout/stderr, ma restituisce solo il codice di uscita.
+    Elabora un singolo file: converte in feather, esegue l'ottimizzatore e la riconciliazione.
+    Restituisce le statistiche e il tempo di esecuzione.
     """
-    print(f"   -> {description}...")
-    class CompletedProcessMock:
-        def __init__(self, returncode, stdout="", stderr=""):
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
+    start_time = time.time()
+    file_path = os.path.join(input_dir, filename)
+    file_base_name, file_ext = os.path.splitext(filename)
+
+    current_output_folder = os.path.join(output_dir, file_base_name)
+    os.makedirs(current_output_folder, exist_ok=True)
+
+    print(f"\n--- Processing file: {filename} ---")
+
+    # Step 1: Conversione a Feather (se necessario)
+    processed_input_path = _handle_file_conversion(file_path, file_base_name, file_ext, current_output_folder)
+    if not processed_input_path:
+        return None, 0
+
+    # Step 2: Preparazione della configurazione locale
+    local_config_path = _prepare_local_config(processed_input_path, file_base_name, current_output_folder, base_config)
+    if not local_config_path:
+        return None, 0
+
+    # Step 3: Esecuzione dell'ottimizzatore
+    print(f"Avvio ottimizzazione parametri per '{filename}'...")
+    optimizer_success = _run_optimizer(local_config_path, filename)
+    if not optimizer_success:
+        return None, 0
+
+    # Step 4: Esecuzione della riconciliazione finale
+    print(f"Avvio riconciliazione finale per '{filename}'...")
+    stats = _run_main_reconciliation(local_config_path, filename)
+    
+    if stats:
+        stats['original_filename'] = filename
+
+    end_time = time.time()
+    execution_time = end_time - start_time
+
+    if stats:
+        print(f"Completato '{filename}' in {execution_time:.2f} secondi.")
+    
+    return stats, execution_time
+
+def run_batch():
+    input_dir = 'input/'
+    output_dir = 'output/'
+    base_config_path = 'config.json'
+
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Load base config
     try:
-        # Esegue il processo e attende il completamento. L'output viene stampato direttamente.
-        result = subprocess.run(command, text=True, timeout=timeout)
-        return CompletedProcessMock(result.returncode)
-    except subprocess.TimeoutExpired:
-        print(f"\n   ❌ ERRORE: Il processo ha superato il tempo massimo di {timeout} secondi ed è stato terminato.")
-        return CompletedProcessMock(1, stderr=f"TimeoutExpired: Il processo ha superato i {timeout} secondi.")
-    except Exception as e:
-        return CompletedProcessMock(1, stderr=str(e))
-
-def run_subprocess_capture(command, description, timeout=None):
-    """Esegue un sottoprocesso catturando l'output. Utile per leggere risultati (es. main.py)."""
-    print(f"   -> {description} (l'output verrà mostrato al termine)...")
-
-    class CompletedProcessMock:
-        def __init__(self, returncode, stdout, stderr):
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    try:
-        process = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
-        if process.returncode != 0:
-            print("--- ERRORE NEL SOTTOPROCESSO ---")
-            print(process.stderr)
-            print("---------------------------------")
-        return CompletedProcessMock(process.returncode, process.stdout, process.stderr)
-    except subprocess.TimeoutExpired:
-        print(f"\n   ❌ ERRORE: Il processo ha superato il tempo massimo di {timeout} secondi ed è stato terminato.")
-        return CompletedProcessMock(1, stdout="", stderr=f"TimeoutExpired: Il processo ha superato i {timeout} secondi.")
-    except Exception as e:
-        return CompletedProcessMock(1, stdout="", stderr=str(e))
-
-class BatchProcessor:
-    """Orchestra l'elaborazione in batch chiamando main.py per ogni file."""
-    
-    def __init__(self, config=None):
-        self.config = config if config is not None else {}
-        self.base_config_path = 'config.json'
-        self.cartella_input = Path(self.config['cartella_input'])
-        self.cartella_output = Path(self.config['cartella_output'])
-        self.timeout_per_file = self.config.get('timeout_per_file_seconds')
-        
-    def crea_cartelle(self):
-        self.cartella_output.mkdir(exist_ok=True)
-        log_dir = self.cartella_output / 'logs'
-        if log_dir.exists():
-            shutil.rmtree(log_dir)
-        log_dir.mkdir(exist_ok=True)
-        
-    def trova_files(self):
-        if not self.cartella_input.exists():
-            raise FileNotFoundError(f"Cartella '{self.cartella_input}' non trovata!")
-        
-        patterns = self.config['pattern'] if isinstance(self.config['pattern'], list) else [self.config['pattern']]
-        files = []
-        for p in patterns:
-            files.extend(self.cartella_input.glob(p))
-        files = [f for f in files if not f.name.startswith('~')]
-        return sorted(files)
-    
-    def elabora_tutti(self):
-        print("""
-╔════════════════════════════════════════════════════════════╗
-║          BATCH PROCESSOR - ELABORAZIONE MULTIPLA           ║
-╚════════════════════════════════════════════════════════════╝
-        """)
-        self.crea_cartelle()
-        print(f"🔍 Ricerca file in: {self.cartella_input}")
-        files = self.trova_files()
-        
-        if not files:
-            print(f"⚠️  Nessun file trovato con i pattern specificati in: {self.cartella_input}")
-            return
-        print(f"✓ Trovati {len(files)} file da elaborare\n")
-        
-        print(f"⚙️ CONFIGURAZIONE:")
-        print(f"   - Strategia di ottimizzazione: Automatica per ogni file")
-        print(f"   - Cartella di output principale: {self.cartella_output}/")
-        if self.timeout_per_file:
-            print(f"   - Tempo massimo per file: {self.timeout_per_file} secondi")
-        
-        errori = []
-        successi = 0
-        statistiche_globali = [] # Lista per raccogliere le statistiche di ogni file
-        
-        with tqdm(total=len(files), desc="Avanzamento Batch") as pbar:
-            for i, file_path in enumerate(files):
-                start_time_file = datetime.now() # Registra l'inizio dell'elaborazione del file
-                pbar.set_description(f"Processing {file_path.name}")
-                print(f"\n--- [File {i+1}/{len(files)}] Elaborazione di: {file_path.name} ---")
-
-                # 1. Per ogni file in input creare una cartella in output con lo stesso nome
-                file_output_dir = self.cartella_output / file_path.stem
-                file_output_dir.mkdir(exist_ok=True)
-                print(f"1. Creata cartella di lavoro: {file_output_dir}")
-
-                # 2. Copiare il file config base nella cartella appena creata.
-                local_config_path = file_output_dir / 'config.json'
-                shutil.copy(self.base_config_path, local_config_path)
-                
-                # 2.1 AGGIORNAMENTO: Scrivi i percorsi corretti nel config locale
-                output_excel_path = file_output_dir / f"risultato_{file_path.stem}.xlsx"
-                with open(local_config_path, 'r+') as f:
-                    config_data = json.load(f)
-                    config_data['file_input'] = str(file_path.resolve())
-                    config_data['file_output'] = str(output_excel_path.resolve())
-                    f.seek(0)
-                    json.dump(config_data, f, indent=2)
-                    f.truncate()
-                print(f"2. Creato e aggiornato config locale: {local_config_path}")
-
-                # 3. Lanciare l'optimizer.py usando il file config appena sopra
-                print("3. Avvio ottimizzazione parametri (modalità automatica)...")
-                # Aggiungiamo un controllo per assicurarci che l'optimizer non fallisca silenziosamente
-                # se il file di input non è specificato correttamente.
-                optimizer_cmd = [sys.executable, 'optimizer.py', '--config', str(local_config_path), '--auto']
-                result = run_subprocess_interactive(optimizer_cmd, "Esecuzione optimizer.py", timeout=self.timeout_per_file)
-                if result.returncode != 0:
-                    errori.append((file_path.name, f"Optimizer fallito: {result.stderr}"))
-                    pbar.update(1)
-                    continue
-                print("   ✓ Ottimizzazione completata. I parametri migliori sono stati salvati.")
-                
-                # 4. Lanciare l'analisi usando il nuovo file config ottimizzato
-                print("4. Avvio riconciliazione finale con parametri ottimizzati...")
-                main_cmd = [sys.executable, 'main.py', '--config', str(local_config_path)]
-                result = run_subprocess_capture(main_cmd, "Esecuzione main.py", timeout=self.timeout_per_file)
-                if result.returncode != 0:
-                    errori.append((file_path.name, f"Main fallito: {result.stderr}"))
-                    pbar.update(1)
-                    continue
-                
-                # Cattura e parsifica le statistiche JSON dall'output di main.py
-                try:
-                    end_time_file = datetime.now() # Registra la fine
-                    processing_time = (end_time_file - start_time_file).total_seconds()
-                    if result.stdout.strip(): # Assicurati che ci sia output prima di parsare
-                        stats = json.loads(result.stdout)
-                        stats['processing_time_seconds'] = processing_time # Aggiungi il tempo
-                        stats['file_name'] = file_path.name # Aggiungi il nome del file per il riepilogo
-                        statistiche_globali.append(stats)
-                except json.JSONDecodeError:
-                    errori.append((file_path.name, f"Errore nel parsing delle statistiche JSON da main.py: {result.stdout}"))
-
-                print(f"   ✓ Riconciliazione completata. Risultati salvati in {file_output_dir}")
-                successi += 1
-                pbar.update(1)
-        
-        print("\n\n🎉 Processo Batch completato.")
-        print(f"   - File elaborati con successo: {successi}/{len(files)}")
-        print(f"💾 I risultati per ogni file sono stati salvati in cartelle dedicate dentro: {self.cartella_output.resolve()}")
-
-        # Stampa il riepilogo aggregato se sono state raccolte statistiche
-        if statistiche_globali:
-            self.stampa_riepilogo_globale(statistiche_globali)
-            
-        if errori:
-            print("\n⚠️  Si sono verificati degli errori durante l'elaborazione:")
-            for filename, stderr in errori:
-                print(f"  - File: {filename}\n    Errore: {str(stderr)[:200]}...")
-
-    def stampa_riepilogo_globale(self, stats_list):
-        """Stampa una tabella con le statistiche aggregate di tutti i file."""
-        def format_eur(value):
-            return f"{value:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
-
-        print("\n\n╔════════════════════════════════════════════════════════════╗")
-        print("║              📊 RIEPILOGO GLOBALE AGGREGATO 📊             ║")
-        print("╚════════════════════════════════════════════════════════════╝")
-
-        # Header della tabella
-        header = f"{'File':<30} | {'% DARE (€)':>10} | {'% AVERE (€)':>11} | {'Sbilancio':>18} | {'Tempo (s)':>10}"
-        print(header)
-        print("-" * len(header))
-
-        # Righe della tabella
-        for stats in stats_list:
-            file_name = stats.get('file_name', 'N/D')
-            perc_dare_importo = f"{stats.get('_raw_perc_dare_importo', 0):.1f}%"
-            perc_avere_importo = f"{stats.get('_raw_perc_avere_importo', 0):.1f}%"
-            sbilancio = stats.get('Delta finale (DARE - AVERE)', 'N/D')
-            tempo = f"{stats.get('processing_time_seconds', 0):.1f}"
-            
-            row = (f"{file_name:<30} | "
-                   f"{perc_dare_importo:>10} | "
-                   f"{perc_avere_importo:>11} | "
-                   f"{sbilancio:>18} | "
-                   f"{tempo:>10}")
-            print(row)
-
-        print("-" * len(header))
-
-def carica_config():
-    """Carica la configurazione da config.json o usa i valori di default."""
-    config_file = 'config.json'
-    
-    # Configurazione di default
-    default_config = {
-        'timeout_per_file_seconds': None, # Nessun timeout di default
-        'tolleranza': 0.01,
-        'giorni_finestra': 30,
-        'max_combinazioni': 6,
-        'giorni_finestra_residui': 90,
-        'soglia_residui': 100,
-        'cartella_input': 'input',
-        'cartella_output': 'output',
-        'file_input': None, # Aggiunto per il nuovo flusso
-        'file_output': None, # Aggiunto per il nuovo flusso
-        'pattern': ['*.xlsx', '*.csv'],
-        'sorting_strategy': 'date', # Default: ordina per data
-        'search_direction': 'both' # Default: cerca in entrambe le direzioni
-    }
-    
-    try:
-        with open(config_file, 'r', encoding='utf-8') as f:
-            print(f"📄 Caricamento configurazione da '{config_file}'...")
-            user_config = json.load(f)
-            # I valori nel file JSON sovrascrivono quelli di default
-            default_config.update(user_config)
-            print("✓ Configurazione caricata con successo.")
-        return default_config
+        with open(base_config_path, 'r', encoding='utf-8') as f:
+            base_config = json.load(f)
     except FileNotFoundError:
-        print(f"⚠️  File '{config_file}' non trovato. Utilizzo configurazione di default.")
-        return default_config
-    except json.JSONDecodeError as e:
-        print(f"❌ ERRORE: Formato JSON non valido in '{config_file}': {e}")
-        print("Il programma verrà terminato.")
-        sys.exit(1) # Termina lo script in caso di errore JSON
+        print(f"Error: Base config file '{base_config_path}' not found.")
+        sys.exit(1)
+    except json.JSONDecodeError:
+        print(f"Error: Could not decode JSON from '{base_config_path}'. Check file format.")
+        sys.exit(1)
 
+    # List files in input directory
+    input_files = [f for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f))]
 
-def main():
-    """Funzione principale"""
-    config = carica_config()
-    processor = BatchProcessor(config)
-    processor.elabora_tutti()
+    if not input_files:
+        print(f"No files found in '{input_dir}'. Please place your Excel or CSV files there.")
+        return
 
+    all_stats = []
+
+    for filename in input_files:
+        file_stats, exec_time = process_single_file(filename, input_dir, output_dir, base_config)
+        if file_stats:
+            file_stats['execution_time_seconds'] = exec_time
+            all_stats.append(file_stats)
+
+    # --- Step 5: Print global summary ---
+    print("\n" + "="*50)
+    print("GLOBAL RECONCILIATION SUMMARY")
+    print("="*50)
+    if all_stats:
+        total_time = sum(s.get('execution_time_seconds', 0) for s in all_stats)
+        for stats in all_stats:
+            print(f"\nFile: {stats.get('original_filename', 'N/A')}")
+            print(f"  Tempo di esecuzione: {stats.get('execution_time_seconds', 0):.2f} secondi")
+            print(f"  Incassi (DARE): {stats.get('Incassi (DARE) utilizzati', 'N/A')} / {stats.get('Totale Incassi (DARE)', 'N/A')} ({stats.get('% Incassi (DARE) utilizzati', 'N/A')})")
+            print(f"  Versamenti (AVERE): {stats.get('Versamenti (AVERE) riconciliati', 'N/A')} / {stats.get('Totale Versamenti (AVERE)', 'N/A')} ({stats.get('% Versamenti (AVERE) riconciliati', 'N/A')})")
+            
+            # Usa i valori _raw per la formattazione numerica sicura
+            print(f"  % Importo DARE utilizzato: {stats.get('_raw_perc_dare_importo', 0):.2f}%")
+            print(f"  % Importo AVERE utilizzato: {stats.get('_raw_perc_avere_importo', 0):.2f}%")
+            print(f"  Sbilancio finale: {stats.get('Delta finale (DARE - AVERE)', 'N/A')}")
+
+            # --- AGGIUNTA: Stampa i parametri ottimali ---
+            # Leggiamo i parametri direttamente dal file di configurazione locale
+            # che è stato aggiornato dall'ottimizzatore. Questo è più affidabile.
+            file_base_name, _ = os.path.splitext(stats.get('original_filename', ''))
+            local_config_path = os.path.join(output_dir, file_base_name, 'config.json')
+            try:
+                with open(local_config_path, 'r') as f:
+                    optimized_config = json.load(f)
+                
+                print("  Parametri Ottimali Usati:")
+                print(f"    - giorni_finestra: {optimized_config.get('giorni_finestra')}")
+                print(f"    - max_combinazioni: {optimized_config.get('max_combinazioni')}")
+                print(f"    - giorni_finestra_residui: {optimized_config.get('giorni_finestra_residui')}")
+                print(f"    - soglia_residui: {optimized_config.get('soglia_residui')}")
+                print(f"    - sorting_strategy: {optimized_config.get('sorting_strategy')}")
+                print(f"    - search_direction: {optimized_config.get('search_direction')}")
+                print(f"    - tolleranza: {optimized_config.get('tolleranza')}")
+            except (FileNotFoundError, json.JSONDecodeError):
+                print("  Non è stato possibile leggere i parametri ottimali dal file di configurazione locale.")
+        
+        print("\n" + "-"*50)
+        print(f"Tempo totale di esecuzione batch: {total_time:.2f} secondi")
+    else:
+        print("No files were successfully processed or no statistics were collected.")
+    print("="*50)
+
+def _handle_file_conversion(file_path, file_base_name, file_ext, output_folder):
+    """Converte file Excel in Feather per ottimizzare le performance."""
+    if file_ext.lower() in ['.xlsx', '.xls']:
+        print(f"  - Conversione in formato Feather per performance...")
+        feather_output_path = os.path.join(output_folder, f"{file_base_name}.feather")
+        try:
+            processed_path = convert_excel_to_feather(file_path, feather_path=feather_output_path, force_conversion=True)
+            print(f"  - File convertito utilizzato: {processed_path}")
+            return processed_path
+        except Exception as e:
+            print(f"Errore durante la conversione di '{file_base_name}{file_ext}' in Feather: {e}")
+            return None
+    elif file_ext.lower() in ['.feather', '.csv']:
+        print(f"  - Rilevato file '{file_base_name}{file_ext}'. Nessuna conversione necessaria.")
+        return file_path
+    else:
+        print(f"Attenzione: Tipo di file non supportato '{file_ext}' per '{file_base_name}{file_ext}'. Salto il file.")
+        return None
+
+def _prepare_local_config(input_path, file_base_name, output_folder, base_config):
+    """Prepara e salva un file config.json locale per l'elaborazione corrente."""
+    local_config = base_config.copy()
+    local_config['file_input'] = input_path
+    
+    reconciliation_output_filename = f"risultato_{file_base_name}.xlsx"
+    local_config['file_output'] = os.path.join(output_folder, reconciliation_output_filename)
+    local_config_path = os.path.join(output_folder, 'config.json')
+
+    try:
+        with open(local_config_path, 'w', encoding='utf-8') as f:
+            json.dump(local_config, f, indent=4)
+        return local_config_path
+    except IOError as e:
+        print(f"Errore nel salvataggio della configurazione locale per '{file_base_name}': {e}")
+        return None
+
+def _run_optimizer(config_path, filename):
+    """Esegue lo script optimizer.py."""
+    try:
+        process = subprocess.Popen(
+            ['python', '-u', 'optimizer.py', '--config', config_path, '--auto'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8'
+        )
+        for line in iter(process.stdout.readline, ''):
+            print(line, end='')
+        process.wait()
+        if process.returncode != 0:
+            print(f"\nErrore durante l'esecuzione dell'ottimizzatore per '{filename}'. Codice di uscita: {process.returncode}.")
+            return False
+        return True
+    except FileNotFoundError:
+        print("Errore: 'optimizer.py' non trovato. Assicurati che sia nella stessa directory di 'batch.py'.")
+        return False
+    except Exception as e:
+        print(f"Errore imprevisto durante l'esecuzione di optimizer.py per '{filename}': {e}")
+        return False
+
+def _run_main_reconciliation(config_path, filename):
+    """Esegue lo script main.py e recupera le statistiche in formato JSON."""
+    try:
+        main_result = subprocess.run(
+            ['python', 'main.py', '--config', config_path, '--silent'],
+            capture_output=True, text=True, check=True, encoding='utf-8'
+        )
+        
+        # Cerca la riga JSON nell'output
+        stats_line = None
+        for line in reversed(main_result.stdout.splitlines()):
+            stripped_line = line.strip()
+            if stripped_line.startswith('{') and stripped_line.endswith('}'):
+                stats_line = stripped_line
+                break
+        
+        if not stats_line:
+            print(f"Attenzione: Nessuna statistica JSON trovata nell'output di main.py per '{filename}'.")
+            print(f"Output ricevuto:\n{main_result.stdout}")
+            return None
+
+        try:
+            file_stats = json.loads(stats_line)
+            return file_stats
+        except json.JSONDecodeError:
+            print(f"Attenzione: Impossibile decodificare le statistiche JSON dall'output di main.py per '{filename}'.")
+            print(f"Riga JSON rilevata: {stats_line}")
+            return None
+
+    except subprocess.CalledProcessError as e:
+        print(f"Errore durante l'esecuzione della riconciliazione principale per '{filename}': {e}")
+        print(f"Stderr:\n{e.stderr}")
+        return None
+    except FileNotFoundError:
+        print("Errore: 'main.py' non trovato. Assicurati che sia nella stessa directory di 'batch.py'.")
+        return None
+    except Exception as e:
+        print(f"Errore imprevisto durante l'esecuzione di main.py per '{filename}': {e}")
+        return None
 
 if __name__ == "__main__":
-    main()
+    run_batch()

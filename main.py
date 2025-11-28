@@ -49,4 +49,17 @@ if __name__ == "__main__":
     stats = riconciliatore.run(input_file, output_file, verbose=False) # Forza verbose=False
 
     if args.silent and stats:
+        # --- AGGIUNTA: Includi i parametri usati nel report JSON ---
+        # Definisci i parametri di interesse che vuoi visualizzare nel riepilogo finale.
+        parametri_da_includere = [
+            'giorni_finestra', 
+            'max_combinazioni', 
+            'giorni_finestra_residui', 
+            'soglia_residui', 
+            'sorting_strategy', 
+            'search_direction'
+        ]
+        # Aggiungi i parametri trovati nel file di configurazione al dizionario delle statistiche.
+        stats['parametri_ottimali'] = {key: config.get(key) for key in parametri_da_includere}
+
         print(json.dumps(stats)) # Stampa le statistiche in JSON per il processo padre

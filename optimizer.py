@@ -17,47 +17,89 @@ import sys
 import multiprocessing
 from tqdm import tqdm # Importa tqdm
 import optuna # Importa Optuna
-def run_auto_optimization(config, config_path):
-    """Esegue l'ottimizzazione automatica basata su range predefiniti."""
-    print("🔬 Avvio ottimizzazione in modalità automatica...")
-    params_to_test = AUTO_OPTIMIZATION_RANGES
-    
-    # Esegui la simulazione e trova i parametri migliori
-    best_params = run_simulation(config, params_to_test)
 
 def load_optimizer_config(config_path='config_optimizer.json'):
     """Carica la configurazione dell'ottimizzatore da un file JSON."""
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             print(f"📄 Caricamento configurazione optimizer da '{config_path}'...")
-            optimizer_config = json.load(f)
+            config = json.load(f)
             print("✓ Configurazione optimizer caricata con successo.")
-            return optimizer_config
+            # Estrai le due sezioni principali, fornendo valori di default
+            settings = config.get('optimizer_settings', {})
+            params = config.get('optimization_params', {})
+            return settings, params
     except FileNotFoundError:
         print(f"⚠️  File '{config_path}' non trovato. Utilizzo configurazione di default.")
-        return {}
+        # Restituisce una tupla di dizionari vuoti
+        return {}, {}
     except json.JSONDecodeError as e:
         print(f"❌ ERRORE: Formato JSON non valido in '{config_path}': {e}")
         print("Il programma verrà terminato.")
         sys.exit(1)
 
-def run_auto_optimization(config, config_path):
+def generate_dynamic_ranges(base_config, optimizer_config, range_percentage=0.30):
+    """
+    Genera i range di ottimizzazione dinamicamente.
+
+    Per ogni parametro numerico, crea un intervallo simmetrico attorno al valore
+    presente in `base_config`, ampliato di una certa percentuale.
+    I parametri categorici vengono lasciati invariati.
+
+    Args:
+        base_config (dict): La configurazione di partenza (da config.json).
+        optimizer_config (dict): La configurazione dell'ottimizzatore con tipi e step.
+        range_percentage (float): La percentuale per definire l'ampiezza del range (es. 0.3 per ±30%).
+
+    Returns:
+        dict: Una nuova configurazione per l'ottimizzatore con i range dinamici.
+    """
+    dynamic_ranges = optimizer_config.copy()
+    print(f"🧬  Generazione range di ottimizzazione dinamici (ampiezza: ±{range_percentage*100:.0f}%)...")
+
+    for param_name, details in optimizer_config.items():
+        if details['type'] == 'numeric' and param_name in base_config:
+            base_value = base_config[param_name]
+            delta = base_value * range_percentage
+
+            new_min = base_value - delta
+            new_max = base_value + delta
+
+            # Assicura che i valori interi rimangano tali e non scendano sotto 1
+            if details.get('value_type') != 'float':
+                new_min = max(1, round(new_min))
+                new_max = max(1, round(new_max))
+            else: # Per i float, arrotonda e assicurati non sia negativo
+                new_min = max(0.0, round(new_min, 2))
+                new_max = max(0.0, round(new_max, 2))
+
+            dynamic_ranges[param_name]['min'] = new_min
+            dynamic_ranges[param_name]['max'] = new_max
+            print(f"   - Parametro '{param_name}': range impostato a [{new_min}, {new_max}] (step: {details['step']})")
+
+    return dynamic_ranges
+
+def run_auto_optimization(config, config_path, file_input):
     """Esegue l'ottimizzazione automatica basata su range predefiniti."""
     print("🔬 Avvio ottimizzazione in modalità automatica...")
-    
-    # Carica la configurazione dell'ottimizzatore dal file
-    optimizer_config = load_optimizer_config()
-    
-    # Esegui la simulazione e trova i parametri migliori
-    # Passiamo direttamente la configurazione dell'optimizer a run_simulation
-    best_params = run_simulation(config, optimizer_config)
+
+    # Carica sia le impostazioni che i parametri dell'ottimizzatore
+    optimizer_settings, optimization_params = load_optimizer_config()
+
+    # Estrai i parametri specifici dell'ottimizzatore con valori di default
+    range_percentage = optimizer_settings.get('range_percentage', 0.30) # Default 30%
+    n_trials = optimizer_settings.get('n_trials', 50) # Default 50 trial
+
+    # Genera i range e avvia la simulazione
+    dynamic_ranges = generate_dynamic_ranges(config, optimization_params, range_percentage)
+    best_params = run_simulation(config, dynamic_ranges, file_input, n_trials, show_progress=False)
 
     # Scrivi i parametri migliori nel file di configurazione
     update_config_file(config_path, best_params)
 
 # Nuova funzione helper per l'esecuzione in parallelo
 def _run_single_simulation_worker(args):
-    """
+    """ 
     Funzione worker per eseguire una singola simulazione di riconciliazione.
     Progettata per essere utilizzata con multiprocessing.Pool.
     """
@@ -101,17 +143,24 @@ def _run_single_simulation_worker(args):
         }
     return None # Restituisce None se la simulazione è fallita o non ha prodotto statistiche
 
-def run_simulation(base_config, optimizer_config_ranges):
+def run_simulation(base_config, optimizer_config_ranges, file_input, n_trials, show_progress=True):
     """Esegue l'ottimizzazione usando Optuna per trovare i parametri migliori."""
 
-    def objective(trial):
+    def objective(trial, input_data):
         """Funzione obiettivo che Optuna cercherà di massimizzare."""
         # 1. Suggerisci i parametri per questo "trial"
         params = {}
         for param_name, details in optimizer_config_ranges.items():
             if details['type'] == 'numeric':
-                # Usa suggest_int per i parametri interi
-                params[param_name] = trial.suggest_int(param_name, details['min'], details['max'], step=details['step'])
+                # --- MODIFICA: Gestisce sia float che int ---
+                if details.get('value_type') == 'float':
+                    # Usa suggest_float per parametri decimali come la tolleranza
+                    suggested_value = trial.suggest_float(param_name, details['min'], details['max'], step=details['step'])
+                    # Arrotonda il valore a 2 cifre decimali per una maggiore pulizia e coerenza.
+                    params[param_name] = round(suggested_value, 2)
+                else:
+                    # Usa suggest_int per i parametri interi (default)
+                    params[param_name] = trial.suggest_int(param_name, details['min'], details['max'], step=details['step'])
             elif details['type'] == 'categorical':
                 # Usa suggest_categorical per i parametri testuali
                 params[param_name] = trial.suggest_categorical(param_name, details['values'])
@@ -134,11 +183,8 @@ def run_simulation(base_config, optimizer_config_ranges):
             key: run_config[key] for key in expected_params if key in run_config
         }
 
-        # Usa sempre il file di input completo per la massima accuratezza
-        input_data_for_run = run_config['file_input']
-
         riconciliatore_sim = RiconciliatoreContabile(**riconciliatore_config)
-        stats = riconciliatore_sim.run(input_data_for_run, output_file=None, verbose=False)
+        stats = riconciliatore_sim.run(input_data, output_file=None, verbose=False)
 
         # 3. Calcola e restituisci il punteggio da massimizzare
         if stats:
@@ -160,22 +206,43 @@ def run_simulation(base_config, optimizer_config_ranges):
     # La direzione è "maximize" perché vogliamo il punteggio più alto.
     study = optuna.create_study(direction="maximize")
 
+    # --- OTTIMIZZAZIONE: Carica i dati una sola volta prima di avviare i trial ---
+    # Questo evita di leggere lo stesso file dal disco per ogni trial.
+    from core import RiconciliatoreContabile
+    input_file_path = file_input
+    loader = RiconciliatoreContabile()
+    input_df = loader.carica_file(input_file_path)
+
     # Avvia l'ottimizzazione. n_trials è il numero di simulazioni da eseguire.
     # 100 trial sono spesso sufficienti per trovare ottimi risultati.
     # n_jobs=-1 usa tutti i core della CPU per parallelizzare i trial.
     # Dopo le ottimizzazioni in core.py, ogni trial è molto più veloce.
     # Riduciamo il numero di trial per accelerare il processo batch,
     # mantenendo comunque una buona capacità di ricerca.
-    n_trials = 30 
     print(f"🚀 Avvio ottimizzazione con Optuna per {n_trials} trial (in parallelo)...")
 
-    # Aggiungi una barra di avanzamento con tqdm
-    with tqdm(total=n_trials, desc="Ottimizzazione Trial") as pbar:
-        # Definisci un callback per aggiornare la barra di avanzamento dopo ogni trial
-        def callback(study, trial):
-            pbar.update(1)
+    # Utilizza sempre tutti i core disponibili. La logica è stata resa sicura per la parallelizzazione.
+    # Questo è il cambiamento chiave per risolvere il problema di lentezza.
+    n_jobs = -1
 
-        study.optimize(objective, n_trials=n_trials, n_jobs=-1, callbacks=[callback])
+    if show_progress:
+        # Aggiungi una barra di avanzamento con tqdm solo se richiesto
+        with tqdm(total=n_trials, desc="Ottimizzazione Trial") as pbar:
+            # Definisci un callback per aggiornare la barra di avanzamento dopo ogni trial
+            def callback(study, trial):
+                pbar.update(1)
+
+            study.optimize(
+                lambda trial: objective(trial, input_data=input_df),
+                n_trials=n_trials, 
+                n_jobs=n_jobs, 
+                callbacks=[callback])
+    else:
+        # Esegui senza barra di avanzamento (per la modalità batch)
+        study.optimize(
+            lambda trial: objective(trial, input_data=input_df),
+            n_trials=n_trials, 
+            n_jobs=n_jobs)
 
     # Stampa il suggerimento finale
     best_params = study.best_params
@@ -308,10 +375,11 @@ def main():
     print("║        🚀 AVVIO OTTIMIZZATORE PARAMETRI 🚀                 ║")
     print("╚════════════════════════════════════════════════════════════╝")
     print(f"\n🎯 File di configurazione in uso: {config_path.resolve()}")
-    print(f"📄 File di input per l'analisi: {config.get('file_input')}")
+    file_input_for_analysis = config.get('file_input')
+    print(f"📄 File di input per l'analisi: {file_input_for_analysis}")
 
     if args.auto:
-        run_auto_optimization(config, config_path)
+        run_auto_optimization(config, config_path, file_input_for_analysis)
     else:
         # Modalità interattiva
         print("\n⚙️  Configurazione di base (da config.json):")
@@ -320,7 +388,10 @@ def main():
                 print(f"   - {key}: {value}")
         
         params_to_test = get_user_parameters()
-        best_params = run_simulation(config, params_to_test)
+        # Per la modalità interattiva, chiediamo il numero di trial
+        n_trials_interactive = int(input("\nQuanti trial vuoi eseguire per questa ottimizzazione? (es. 50): ") or 50)
+        
+        best_params = run_simulation(config, params_to_test, file_input_for_analysis, n_trials_interactive, show_progress=True)
         update_config_file(config_path, best_params)
 
 if __name__ == "__main__":
