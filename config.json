@@ -12,8 +12,8 @@
     "*.csv",
     "*.xls"
   ],
-  "sorting_strategy": "amount",
-  "search_direction": "both",
+  "sorting_strategy": "date",
+  "search_direction": "future_only",
   "sampling_fraction": 0.3,
   "commento": {
     "descrizione": "File di configurazione per il batch processor. I valori qui specificati sovrascrivono quelli di default.",

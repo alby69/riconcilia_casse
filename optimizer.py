@@ -79,20 +79,26 @@ def generate_dynamic_ranges(base_config, optimizer_config, range_percentage=0.30
 
     return dynamic_ranges
 
-def run_auto_optimization(config, config_path, file_input):
+def run_auto_optimization(config, config_path, file_input, is_first_run):
     """Esegue l'ottimizzazione automatica basata su range predefiniti."""
     print("🔬 Avvio ottimizzazione in modalità automatica...")
 
     # Carica sia le impostazioni che i parametri dell'ottimizzatore
     optimizer_settings, optimization_params = load_optimizer_config()
 
-    # Estrai i parametri specifici dell'ottimizzatore con valori di default
-    range_percentage = optimizer_settings.get('range_percentage', 0.30) # Default 30%
-    n_trials = optimizer_settings.get('n_trials', 50) # Default 50 trial
+    if is_first_run:
+        print(">>> PRIMA ESECUZIONE RILEVATA: Avvio modalità di ESPLORAZIONE AMPIA.")
+        # Usa i range min/max definiti in config_optimizer.json
+        ranges_to_use = optimization_params
+        n_trials = optimizer_settings.get('n_trials_first_run', 70) # Più trial per la prima esplorazione
+    else:
+        print(">>> ESECUZIONE SUCCESSIVA: Avvio modalità di AFFINAMENTO MIRATO.")
+        # Genera range dinamici stretti attorno ai valori già ottimizzati
+        range_percentage = optimizer_settings.get('range_percentage', 0.15) # Range più stretto per affinare
+        ranges_to_use = generate_dynamic_ranges(config, optimization_params, range_percentage)
+        n_trials = optimizer_settings.get('n_trials_refinement', 40) # Meno trial per l'affinamento
 
-    # Genera i range e avvia la simulazione
-    dynamic_ranges = generate_dynamic_ranges(config, optimization_params, range_percentage)
-    best_params = run_simulation(config, dynamic_ranges, file_input, n_trials, show_progress=False)
+    best_params = run_simulation(config, ranges_to_use, file_input, n_trials, show_progress=False)
 
     # Scrivi i parametri migliori nel file di configurazione
     update_config_file(config_path, best_params)
@@ -359,6 +365,7 @@ def main():
     """Funzione principale che orchestra la simulazione."""
     parser = argparse.ArgumentParser(description="Ottimizzatore dei parametri di riconciliazione.")
     parser.add_argument('--config', required=True, help="Percorso del file di configurazione JSON da usare e aggiornare.")
+    parser.add_argument('--first-run', action='store_true', help="Indica che è la prima esecuzione per questo file, attivando una ricerca più ampia.")
     parser.add_argument('--auto', action='store_true', help="Esegui in modalità automatica non interattiva.")
     args = parser.parse_args()
 
@@ -379,7 +386,7 @@ def main():
     print(f"📄 File di input per l'analisi: {file_input_for_analysis}")
 
     if args.auto:
-        run_auto_optimization(config, config_path, file_input_for_analysis)
+        run_auto_optimization(config, config_path, file_input_for_analysis, args.first_run)
     else:
         # Modalità interattiva
         print("\n⚙️  Configurazione di base (da config.json):")

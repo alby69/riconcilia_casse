@@ -1,8 +1,9 @@
 {
   "optimizer_settings": {
-    "range_percentage": 0.1,
-    "n_trials": 30,
-    "commento": "range_percentage: ampiezza del range di ricerca dinamico (es. 0.3 = ±30%). n_trials: numero di simulazioni da eseguire."
+    "range_percentage": 0.15,
+    "n_trials_first_run": 70,
+    "n_trials_refinement": 40,
+    "commento": "range_percentage: ampiezza per l'affinamento (es. 0.15 = ±15%). n_trials_first_run: n. trial per la prima esplorazione ampia. n_trials_refinement: n. trial per le esecuzioni successive di affinamento."
   },
   "optimization_params": {
     "giorni_finestra": {

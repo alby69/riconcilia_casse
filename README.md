@@ -142,6 +142,19 @@ graph TD
     ```
 3.  Attendi il completamento del processo. I risultati per ogni file saranno disponibili nelle rispettive sottocartelle dentro `output/`.
 
+### Esecuzione Iniziale (Prima Ottimizzazione)
+
+La prima volta che esegui il sistema su un nuovo file, è fondamentale capire come funziona l'ottimizzazione automatica:
+
+- **Esplorazione Ampia**: Durante la prima esecuzione, il sistema ignora i valori di partenza nel `config.json` principale e utilizza i range definiti nel `config_optimizer.json` per esplorare un'ampia gamma di possibilità. Questo assicura che, anche se i valori iniziali sono errati, il sistema troverà una combinazione di parametri promettente.
+- **Flag `--first-run`**: Per indicare che è la prima esecuzione, devi aggiungere il flag `--first-run` quando lanci `optimizer.py` da `batch.py`. Questo flag attiva la modalità di esplorazione ampia.
+
+Esempio di esecuzione (il flag `--first-run` è gestito automaticamente da `batch.py`):
+
+```bash
+python ./batch.py
+```
+
 ## 🔧 Configurazione (`config.json`)
 
 Il file `config.json` alla radice del progetto serve come modello di base per tutte le elaborazioni. I parametri più importanti sono:

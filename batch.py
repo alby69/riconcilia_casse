@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 
+from datetime import datetime
 import time
 
 try:
@@ -93,48 +94,8 @@ def run_batch():
             file_stats['execution_time_seconds'] = exec_time
             all_stats.append(file_stats)
 
-    # --- Step 5: Print global summary ---
-    print("\n" + "="*50)
-    print("GLOBAL RECONCILIATION SUMMARY")
-    print("="*50)
-    if all_stats:
-        total_time = sum(s.get('execution_time_seconds', 0) for s in all_stats)
-        for stats in all_stats:
-            print(f"\nFile: {stats.get('original_filename', 'N/A')}")
-            print(f"  Tempo di esecuzione: {stats.get('execution_time_seconds', 0):.2f} secondi")
-            print(f"  Incassi (DARE): {stats.get('Incassi (DARE) utilizzati', 'N/A')} / {stats.get('Totale Incassi (DARE)', 'N/A')} ({stats.get('% Incassi (DARE) utilizzati', 'N/A')})")
-            print(f"  Versamenti (AVERE): {stats.get('Versamenti (AVERE) riconciliati', 'N/A')} / {stats.get('Totale Versamenti (AVERE)', 'N/A')} ({stats.get('% Versamenti (AVERE) riconciliati', 'N/A')})")
-            
-            # Usa i valori _raw per la formattazione numerica sicura
-            print(f"  % Importo DARE utilizzato: {stats.get('_raw_perc_dare_importo', 0):.2f}%")
-            print(f"  % Importo AVERE utilizzato: {stats.get('_raw_perc_avere_importo', 0):.2f}%")
-            print(f"  Sbilancio finale: {stats.get('Delta finale (DARE - AVERE)', 'N/A')}")
-
-            # --- AGGIUNTA: Stampa i parametri ottimali ---
-            # Leggiamo i parametri direttamente dal file di configurazione locale
-            # che è stato aggiornato dall'ottimizzatore. Questo è più affidabile.
-            file_base_name, _ = os.path.splitext(stats.get('original_filename', ''))
-            local_config_path = os.path.join(output_dir, file_base_name, 'config.json')
-            try:
-                with open(local_config_path, 'r') as f:
-                    optimized_config = json.load(f)
-                
-                print("  Parametri Ottimali Usati:")
-                print(f"    - giorni_finestra: {optimized_config.get('giorni_finestra')}")
-                print(f"    - max_combinazioni: {optimized_config.get('max_combinazioni')}")
-                print(f"    - giorni_finestra_residui: {optimized_config.get('giorni_finestra_residui')}")
-                print(f"    - soglia_residui: {optimized_config.get('soglia_residui')}")
-                print(f"    - sorting_strategy: {optimized_config.get('sorting_strategy')}")
-                print(f"    - search_direction: {optimized_config.get('search_direction')}")
-                print(f"    - tolleranza: {optimized_config.get('tolleranza')}")
-            except (FileNotFoundError, json.JSONDecodeError):
-                print("  Non è stato possibile leggere i parametri ottimali dal file di configurazione locale.")
-        
-        print("\n" + "-"*50)
-        print(f"Tempo totale di esecuzione batch: {total_time:.2f} secondi")
-    else:
-        print("No files were successfully processed or no statistics were collected.")
-    print("="*50)
+    # --- Step 5: Genera, stampa e salva il riepilogo globale ---
+    _generate_and_save_summary(all_stats, output_dir)
 
 def _handle_file_conversion(file_path, file_base_name, file_ext, output_folder):
     """Converte file Excel in Feather per ottimizzare le performance."""
@@ -157,12 +118,23 @@ def _handle_file_conversion(file_path, file_base_name, file_ext, output_folder):
 
 def _prepare_local_config(input_path, file_base_name, output_folder, base_config):
     """Prepara e salva un file config.json locale per l'elaborazione corrente."""
-    local_config = base_config.copy()
+    local_config_path = os.path.join(output_folder, 'config.json')
+
+    # --- LOGICA EVOLUTIVA ---
+    # Se esiste già una configurazione locale ottimizzata, usa quella come base.
+    # Altrimenti, parti dalla configurazione di base.
+    if os.path.exists(local_config_path):
+        print(f"  - Trovata configurazione ottimizzata precedente. La uso come base per la nuova ottimizzazione.")
+        with open(local_config_path, 'r', encoding='utf-8') as f:
+            local_config = json.load(f)
+    else:
+        print(f"  - Nessuna configurazione precedente trovata. Parto dalla configurazione di base.")
+        local_config = base_config.copy()
+
+    # Aggiorna sempre i percorsi di input/output per la sessione corrente
     local_config['file_input'] = input_path
-    
     reconciliation_output_filename = f"risultato_{file_base_name}.xlsx"
     local_config['file_output'] = os.path.join(output_folder, reconciliation_output_filename)
-    local_config_path = os.path.join(output_folder, 'config.json')
 
     try:
         with open(local_config_path, 'w', encoding='utf-8') as f:
@@ -235,6 +207,62 @@ def _run_main_reconciliation(config_path, filename):
     except Exception as e:
         print(f"Errore imprevisto durante l'esecuzione di main.py per '{filename}': {e}")
         return None
+
+def _generate_and_save_summary(all_stats, output_dir):
+    """Genera il riepilogo, lo stampa a console e lo salva in un file di log."""
+    summary_lines = []
+    separator = "="*50
+
+    summary_lines.append(separator)
+    summary_lines.append("GLOBAL RECONCILIATION SUMMARY")
+    summary_lines.append(separator)
+
+    if all_stats:
+        total_time = sum(s.get('execution_time_seconds', 0) for s in all_stats)
+        for stats in all_stats:
+            summary_lines.append(f"\nFile: {stats.get('original_filename', 'N/A')}")
+            summary_lines.append(f"  Tempo di esecuzione: {stats.get('execution_time_seconds', 0):.2f} secondi")
+            summary_lines.append(f"  Incassi (DARE): {stats.get('Incassi (DARE) utilizzati', 'N/A')} / {stats.get('Totale Incassi (DARE)', 'N/A')} ({stats.get('% Incassi (DARE) utilizzati', 'N/A')})")
+            summary_lines.append(f"  Versamenti (AVERE): {stats.get('Versamenti (AVERE) riconciliati', 'N/A')} / {stats.get('Totale Versamenti (AVERE)', 'N/A')} ({stats.get('% Versamenti (AVERE) riconciliati', 'N/A')})")
+            summary_lines.append(f"  % Importo DARE utilizzato: {stats.get('_raw_perc_dare_importo', 0):.2f}%")
+            summary_lines.append(f"  % Importo AVERE utilizzato: {stats.get('_raw_perc_avere_importo', 0):.2f}%")
+            summary_lines.append(f"  Sbilancio finale: {stats.get('Delta finale (DARE - AVERE)', 'N/A')}")
+
+            file_base_name, _ = os.path.splitext(stats.get('original_filename', ''))
+            local_config_path = os.path.join(output_dir, file_base_name, 'config.json')
+            try:
+                with open(local_config_path, 'r') as f:
+                    optimized_config = json.load(f)
+                
+                summary_lines.append("  Parametri Ottimali Usati:")
+                summary_lines.append(f"    - giorni_finestra: {optimized_config.get('giorni_finestra')}")
+                summary_lines.append(f"    - max_combinazioni: {optimized_config.get('max_combinazioni')}")
+                summary_lines.append(f"    - giorni_finestra_residui: {optimized_config.get('giorni_finestra_residui')}")
+                summary_lines.append(f"    - soglia_residui: {optimized_config.get('soglia_residui')}")
+                summary_lines.append(f"    - sorting_strategy: {optimized_config.get('sorting_strategy')}")
+                summary_lines.append(f"    - search_direction: {optimized_config.get('search_direction')}")
+                summary_lines.append(f"    - tolleranza: {optimized_config.get('tolleranza')}")
+            except (FileNotFoundError, json.JSONDecodeError):
+                summary_lines.append("  Non è stato possibile leggere i parametri ottimali dal file di configurazione locale.")
+        
+        summary_lines.append("\n" + "-"*50)
+        summary_lines.append(f"Tempo totale di esecuzione batch: {total_time:.2f} secondi")
+    else:
+        summary_lines.append("No files were successfully processed or no statistics were collected.")
+    
+    summary_lines.append(separator)
+    
+    summary_text = "\n".join(summary_lines)
+    print("\n" + summary_text) # Stampa a console
+
+    # Salva su file di log
+    log_dir = 'log'
+    os.makedirs(log_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_filename = os.path.join(log_dir, f"{timestamp}_summary.log")
+    with open(log_filename, 'w', encoding='utf-8') as f:
+        f.write(summary_text)
+    print(f"\n📄 Riepilogo salvato in: {log_filename}")
 
 if __name__ == "__main__":
     run_batch()
