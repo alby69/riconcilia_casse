@@ -1,5 +1,6 @@
 import os
 import json
+import argparse
 import subprocess
 import sys
 
@@ -41,7 +42,7 @@ def process_single_file(filename, input_dir, output_dir, base_config):
 
     # Step 3: Esecuzione dell'ottimizzatore
     print(f"Avvio ottimizzazione parametri per '{filename}'...")
-    optimizer_success = _run_optimizer(local_config_path, filename)
+    optimizer_success = _run_optimizer(local_config_path, filename, sequential=getattr(process_single_file, 'sequential_optimizer', False))
     if not optimizer_success:
         return None, 0
 
@@ -60,7 +61,10 @@ def process_single_file(filename, input_dir, output_dir, base_config):
     
     return stats, execution_time
 
-def run_batch():
+def process_single_file_wrapper(args):
+    return process_single_file(*args)
+
+def run_batch(sequential_optimizer=False):
     input_dir = 'input/'
     output_dir = 'output/'
     base_config_path = 'config.json'
@@ -89,6 +93,8 @@ def run_batch():
     all_stats = []
 
     for filename in input_files:
+        # Imposta l'attributo per passarlo alla funzione
+        process_single_file.sequential_optimizer = sequential_optimizer
         file_stats, exec_time = process_single_file(filename, input_dir, output_dir, base_config)
         if file_stats:
             file_stats['execution_time_seconds'] = exec_time
@@ -97,7 +103,7 @@ def run_batch():
     # --- Step 5: Genera, stampa e salva il riepilogo globale ---
     _generate_and_save_summary(all_stats, output_dir)
 
-def _handle_file_conversion(file_path, file_base_name, file_ext, output_folder):
+def _handle_file_conversion(file_path, file_base_name, file_ext, output_folder, sequential_optimizer=False):
     """Converte file Excel in Feather per ottimizzare le performance."""
     if file_ext.lower() in ['.xlsx', '.xls']:
         print(f"  - Conversione in formato Feather per performance...")
@@ -144,11 +150,15 @@ def _prepare_local_config(input_path, file_base_name, output_folder, base_config
         print(f"Errore nel salvataggio della configurazione locale per '{file_base_name}': {e}")
         return None
 
-def _run_optimizer(config_path, filename):
+def _run_optimizer(config_path, filename, sequential=False):
     """Esegue lo script optimizer.py."""
     try:
-        process = subprocess.Popen(
-            ['python', '-u', 'optimizer.py', '--config', config_path, '--auto'],
+        command = ['python', '-u', 'optimizer.py', '--config', config_path, '--auto']
+        if sequential:
+            command.append('--sequential')
+            print("   - Esecuzione ottimizzatore in modalità SEQUENZIALE.")
+
+        process = subprocess.Popen(command,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -265,4 +275,11 @@ def _generate_and_save_summary(all_stats, output_dir):
     print(f"\n📄 Riepilogo salvato in: {log_filename}")
 
 if __name__ == "__main__":
-    run_batch()
+    parser = argparse.ArgumentParser(description="Esegue il processo di riconciliazione in batch su una cartella di file.")
+    parser.add_argument(
+        '--sequential-optimizer',
+        action='store_true',
+        help="Forza l'esecuzione dell'ottimizzatore in modalità sequenziale (un processo alla volta) per evitare un uso eccessivo della CPU."
+    )
+    args = parser.parse_args()
+    run_batch(sequential_optimizer=args.sequential_optimizer)

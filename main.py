@@ -42,7 +42,8 @@ if __name__ == "__main__":
         soglia_residui=config.get('soglia_residui', 100),
         giorni_finestra_residui=config.get('giorni_finestra_residui', 60),
         sorting_strategy=config.get('sorting_strategy', 'date'),
-        search_direction=config.get('search_direction', 'both')
+        search_direction=config.get('search_direction', 'both'),
+        column_mapping=config.get('column_mapping', None) # AGGIUNTA: Legge la mappatura delle colonne
     )
 
     # Esegui l'intero processo

@@ -79,7 +79,7 @@ def generate_dynamic_ranges(base_config, optimizer_config, range_percentage=0.30
 
     return dynamic_ranges
 
-def run_auto_optimization(config, config_path, file_input, is_first_run):
+def run_auto_optimization(config, config_path, file_input, is_first_run, sequential=False):
     """Esegue l'ottimizzazione automatica basata su range predefiniti."""
     print("🔬 Avvio ottimizzazione in modalità automatica...")
 
@@ -98,7 +98,7 @@ def run_auto_optimization(config, config_path, file_input, is_first_run):
         ranges_to_use = generate_dynamic_ranges(config, optimization_params, range_percentage)
         n_trials = optimizer_settings.get('n_trials_refinement', 40) # Meno trial per l'affinamento
 
-    best_params = run_simulation(config, ranges_to_use, file_input, n_trials, show_progress=False)
+    best_params = run_simulation(config, ranges_to_use, file_input, n_trials, show_progress=False, sequential=sequential)
 
     # Scrivi i parametri migliori nel file di configurazione
     update_config_file(config_path, best_params)
@@ -149,7 +149,7 @@ def _run_single_simulation_worker(args):
         }
     return None # Restituisce None se la simulazione è fallita o non ha prodotto statistiche
 
-def run_simulation(base_config, optimizer_config_ranges, file_input, n_trials, show_progress=True):
+def run_simulation(base_config, optimizer_config_ranges, file_input, n_trials, show_progress=True, sequential=False):
     """Esegue l'ottimizzazione usando Optuna per trovare i parametri migliori."""
 
     def objective(trial, input_data):
@@ -229,8 +229,12 @@ def run_simulation(base_config, optimizer_config_ranges, file_input, n_trials, s
 
     # Utilizza sempre tutti i core disponibili. La logica è stata resa sicura per la parallelizzazione.
     # Questo è il cambiamento chiave per risolvere il problema di lentezza.
-    n_jobs = -1
-
+    if sequential:
+        n_jobs = 1
+        print("🐌 Esecuzione dei trial in modalità sequenziale (n_jobs=1).")
+    else:
+        n_jobs = -1 # Usa tutti i core
+        
     if show_progress:
         # Aggiungi una barra di avanzamento con tqdm solo se richiesto
         with tqdm(total=n_trials, desc="Ottimizzazione Trial") as pbar:
@@ -367,6 +371,7 @@ def main():
     parser.add_argument('--config', required=True, help="Percorso del file di configurazione JSON da usare e aggiornare.")
     parser.add_argument('--first-run', action='store_true', help="Indica che è la prima esecuzione per questo file, attivando una ricerca più ampia.")
     parser.add_argument('--auto', action='store_true', help="Esegui in modalità automatica non interattiva.")
+    parser.add_argument('--sequential', action='store_true', help="Forza l'esecuzione dei trial di Optuna in modalità sequenziale (un processo alla volta).")
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -386,7 +391,7 @@ def main():
     print(f"📄 File di input per l'analisi: {file_input_for_analysis}")
 
     if args.auto:
-        run_auto_optimization(config, config_path, file_input_for_analysis, args.first_run)
+        run_auto_optimization(config, config_path, file_input_for_analysis, args.first_run, sequential=args.sequential)
     else:
         # Modalità interattiva
         print("\n⚙️  Configurazione di base (da config.json):")
@@ -398,7 +403,7 @@ def main():
         # Per la modalità interattiva, chiediamo il numero di trial
         n_trials_interactive = int(input("\nQuanti trial vuoi eseguire per questa ottimizzazione? (es. 50): ") or 50)
         
-        best_params = run_simulation(config, params_to_test, file_input_for_analysis, n_trials_interactive, show_progress=True)
+        best_params = run_simulation(config, params_to_test, file_input_for_analysis, n_trials_interactive, show_progress=True, sequential=args.sequential)
         update_config_file(config_path, best_params)
 
 if __name__ == "__main__":

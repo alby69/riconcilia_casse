@@ -22,12 +22,12 @@ Questo progetto fornisce un sistema automatico per la riconciliazione di movimen
 ## ⚙️ Prerequisiti e Installazione
 
 1.  **Python**: Assicurati di avere Python 3.8 o superiore installato.
-2.  **Ambiente Virtuale (Consigliato)**: È buona norma creare un ambiente virtuale per isolare le dipendenze del progetto.
+2.  **Creazione e Attivazione dell'Ambiente Virtuale (Consigliato)**: È buona norma creare un ambiente virtuale per isolare le dipendenze del progetto. Apri il terminale nella cartella principale del progetto ed esegui:
     ```bash
     python -m venv .venv
     source .venv/bin/activate  # Su Windows: .venv\Scripts\activate
     ```
-3.  **Installazione Dipendenze**: Installa tutte le librerie necessarie tramite il file `requirements.txt`.
+3.  **Installazione Dipendenze**: Con l'ambiente virtuale attivato, installa tutte le librerie necessarie tramite il file `requirements.txt`:
     ```bash
     pip install -r requirements.txt
     ```
@@ -141,6 +141,20 @@ graph TD
     python ./batch.py
     ```
 3.  Attendi il completamento del processo. I risultati per ogni file saranno disponibili nelle rispettive sottocartelle dentro `output/`.
+
+### Esecuzione in Modalità Sequenziale (per CPU meno potenti)
+
+L'ottimizzatore dei parametri (`optimizer.py`) è progettato per sfruttare tutti i core della CPU ed eseguire le simulazioni in parallelo. Questo accelera notevolmente la ricerca dei parametri migliori.
+
+Tuttavia, su macchine con risorse limitate o in caso di problemi di stabilità, l'esecuzione parallela intensiva potrebbe causare blocchi o un'eccessiva lentezza del sistema. In questi casi, è possibile forzare l'ottimizzatore a lavorare in modalità **sequenziale** (un test alla volta) usando il flag `--sequential-optimizer`.
+
+Esegui lo script con il flag in questo modo:
+
+```bash
+python ./batch.py --sequential-optimizer
+```
+
+Questa modalità sarà più lenta, ma garantirà una maggiore stabilità su sistemi con poche risorse.
 
 ### Esecuzione Iniziale (Prima Ottimizzazione)
 

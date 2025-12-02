@@ -1,33 +1,45 @@
 import cProfile
 import pstats
 import io
-from core import RiconciliatoreContabile
+import json
+import os
+from optimizer import run_simulation, load_optimizer_config, generate_dynamic_ranges
 
 def run_profiling():
     """
-    Funzione wrapper che esegue la logica da profilare.
+    Funzione wrapper che esegue la logica di ottimizzazione da profilare.
+    Questo è più utile perché l'ottimizzazione è la parte più lenta del processo.
     """
     # --- CONFIGURA QUI ---
-    # Specifica il percorso di un file di test. Usa un file di dimensioni
-    # realistiche per ottenere risultati significativi.
-    file_di_test = 'input/sancesareo_311025.feather' # OTTIMIZZATO: Usa il file Feather
+    # 1. Specifica il file di configurazione di base e il file di input
+    base_config_path = 'config.json'
+    input_file_path = 'output/alessano_311025/alessano_311025.feather' # Usa un file già convertito
     
-    # Istanzia il riconciliatore con parametri standard o ottimizzati
-    riconciliatore = RiconciliatoreContabile(
-        tolleranza=0.10,
-        giorni_finestra=20,
-        max_combinazioni=7,
-        soglia_residui=20,
-        giorni_finestra_residui=30,
-        sorting_strategy="date",
-        search_direction="future_only"
-    )
+    # 2. Carica le configurazioni
+    with open(base_config_path, 'r') as f:
+        base_config = json.load(f)
+    
+    optimizer_settings, optimization_params = load_optimizer_config()
 
-    # Esegui la funzione che vuoi misurare
-    print(f"Avvio profilazione per il file: {file_di_test}...")
-    riconciliatore.run(file_di_test, output_file=None, verbose=False)
+    # 3. Scegli la modalità di ottimizzazione da profilare
+    #    'True' per una prima esecuzione (esplorazione ampia), 'False' per un affinamento.
+    is_first_run = False
+
+    if is_first_run:
+        print(">>> Profilazione in modalità ESPLORAZIONE AMPIA.")
+        ranges_to_use = optimization_params
+        n_trials = optimizer_settings.get('n_trials_first_run', 20) # Riduci i trial per una profilazione più rapida
+    else:
+        print(">>> Profilazione in modalità AFFINAMENTO MIRATO.")
+        range_percentage = optimizer_settings.get('range_percentage', 0.30)
+        ranges_to_use = generate_dynamic_ranges(base_config, optimization_params, range_percentage)
+        n_trials = optimizer_settings.get('n_trials_refinement', 10) # Riduci i trial
+
+    # Esegui la simulazione (la funzione che vuoi misurare)
+    print(f"Avvio profilazione di 'run_simulation' per il file: {input_file_path}...")
+    # Forziamo la modalità sequenziale per una profilazione più pulita e leggibile
+    run_simulation(base_config, ranges_to_use, input_file_path, n_trials, show_progress=False, sequential=True)
     print("Profilazione completata.")
-
 
 if __name__ == "__main__":
     # 1. Crea un oggetto Profiler
@@ -36,7 +48,7 @@ if __name__ == "__main__":
     # 2. Esegui la tua funzione sotto il controllo del profiler
     profiler.run('run_profiling()')
 
-    # 3. Stampa le statistiche ordinate per il tempo totale speso in ogni funzione
+    # 3. Stampa le statistiche ordinate per il tempo cumulativo speso in ogni funzione
     print("\n--- Risultati Profilazione (ordinate per Tempo Totale 'tottime') ---")
     stats = pstats.Stats(profiler).sort_stats('tottime')
-    stats.print_stats(15) # Mostra le 15 funzioni più lente
+    stats.print_stats(20) # Mostra le 20 funzioni più lente

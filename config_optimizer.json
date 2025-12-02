@@ -1,6 +1,6 @@
 {
   "optimizer_settings": {
-    "range_percentage": 0.15,
+    "range_percentage": 0.20,
     "n_trials_first_run": 70,
     "n_trials_refinement": 40,
     "commento": "range_percentage: ampiezza per l'affinamento (es. 0.15 = ±15%). n_trials_first_run: n. trial per la prima esplorazione ampia. n_trials_refinement: n. trial per le esecuzioni successive di affinamento."
@@ -8,26 +8,26 @@
   "optimization_params": {
     "giorni_finestra": {
       "type": "numeric",
-      "min": 1,
-      "max": 10,
-      "step": 1
+      "min": 10,
+      "max": 30,
+      "step": 5
     },
     "max_combinazioni": {
       "type": "numeric",
-      "min": 6,
-      "max": 8,
+      "min": 8,
+      "max": 10,
       "step": 1
     },
     "giorni_finestra_residui": {
       "type": "numeric",
-      "min": 20,
+      "min": 30,
       "max": 60,
-      "step": 10
+      "step": 5
     },
     "soglia_residui": {
       "type": "numeric",
-      "min": 1,
-      "max": 50,
+      "min": 30,
+      "max": 100,
       "step": 10
     },
     "tolleranza": {
