@@ -1,10 +1,10 @@
 {
-  "tolleranza": 1,
+  "tolleranza": 1.5,
   "timeout_per_file_seconds": 600,
-  "giorni_finestra": 10,
+  "giorni_finestra": 7,
   "max_combinazioni": 8,
   "giorni_finestra_residui": 30,
-  "soglia_residui": 50,
+  "soglia_residui": 100,
   "cartella_input": "input",
   "cartella_output": "output",
   "pattern": [
@@ -13,7 +13,8 @@
     "*.xls"
   ],
   "sorting_strategy": "date",
-  "search_direction": "both",
+  "search_direction": "future_only",
+  "reconciliation_strategy": "greedy_subset_sum",
   "sampling_fraction": 0.3,
   "column_mapping": {
     "Data": "Data",
@@ -23,8 +24,9 @@
   "commento": {
     "descrizione": "File di configurazione per il batch processor. I valori qui specificati sovrascrivono quelli di default.",
     "parametri": {
-      "sorting_strategy": "Strategia di ordinamento iniziale. Valori possibili: 'date' (consigliato, per data crescente), 'amount' (per importo decrescente).",
-      "search_direction": "Direzione della ricerca temporale. Valori possibili: 'future_only' (consigliato, cerca solo nel futuro), 'past_only' (cerca solo nel passato), 'both' (cerca in entrambe le direzioni)."
+      "sorting_strategy": "Strategia di ordinamento iniziale. Valori possibili: 'date' (consigliato, per data crescente).",
+      "search_direction": "Direzione della ricerca temporale. Valori possibili: 'future_only' (consigliato, cerca versamenti solo nel futuro rispetto all'incasso), 'past_only' (cerca solo nel passato), 'both' (cerca in entrambe le direzioni).",
+      "reconciliation_strategy": "Algoritmo di riconciliazione da usare. Valori: 'simple' (ricerca 1-a-1), 'greedy_subset_sum' (ricerca N-M, consigliato)."
     },
     "info": "Questo campo 'commento' viene ignorato dallo script e serve solo come documentazione.",
     "column_mapping_info": "Usa 'column_mapping' per mappare i nomi delle colonne del tuo file ai nomi interni ('Data', 'Dare', 'Avere'). Es: 'Nome Colonna File': 'Nome Interno'"
