@@ -403,8 +403,8 @@ class RiconciliatoreContabile:
             # --- MODIFICA: Creazione dell'ID Transazione con nuovo formato D(..)_A(..) ---
             df_abbinamenti['ID Transazione'] = df_abbinamenti.apply(
                 lambda row: "D({})_A({})".format(
-                    ','.join(map(str, row['dare_indices'])),
-                    ','.join(map(str, row['avere_indices']))
+                    ','.join(map(str, [i + 2 for i in row['dare_indices']])),
+                    ','.join(map(str, [i + 2 for i in row['avere_indices']]))
                 ), axis=1
             )
             df_abbinamenti['sort_date'] = df_abbinamenti['dare_date'].apply(lambda x: x[0] if isinstance(x, list) else x)
@@ -471,7 +471,8 @@ class RiconciliatoreContabile:
                 # Funzione per formattare correttamente le liste di indici
                 def format_index_list(index_list):
                     if not isinstance(index_list, list): return index_list
-                    return ', '.join(map(str, index_list))
+                    # FIX: Aggiunge 2 per allineare l'indice 0-based di pandas con la riga 2 di Excel
+                    return ', '.join(map(str, [i + 2 for i in index_list]))
 
                 # Funzione per formattare correttamente un singolo valore numerico (es. somma_avere, differenza)
                 def format_currency_value(value):
@@ -503,6 +504,8 @@ class RiconciliatoreContabile:
             # --- Fogli Non Riconciliati ---
             if not self.dare_non_util.empty:
                 df_dare_report = self.dare_non_util[['indice_orig', 'Data', 'Dare']].copy()
+                # FIX: Aggiunge 2 per allineare l'indice con la riga di Excel
+                df_dare_report['indice_orig'] = df_dare_report['indice_orig'] + 2
                 df_dare_report['Data'] = pd.to_datetime(df_dare_report['Data']).dt.strftime('%d/%m/%y')
                 df_dare_report['Dare'] = df_dare_report['Dare'].apply(lambda x: f"{x/100:.2f}".replace('.', ','))
                 df_dare_report.rename(columns={'indice_orig': 'Indice Riga', 'Dare': 'Importo'}).to_excel(writer, sheet_name='DARE non utilizzati', index=False)
@@ -510,6 +513,8 @@ class RiconciliatoreContabile:
                 pd.DataFrame(columns=['Indice Riga', 'Data', 'Importo']).to_excel(writer, sheet_name='DARE non utilizzati', index=False)
             if not self.avere_non_riconc.empty:
                 df_avere_report = self.avere_non_riconc[['indice_orig', 'Data', 'Avere']].copy()
+                # FIX: Aggiunge 2 per allineare l'indice con la riga di Excel
+                df_avere_report['indice_orig'] = df_avere_report['indice_orig'] + 2
                 df_avere_report['Data'] = pd.to_datetime(df_avere_report['Data']).dt.strftime('%d/%m/%y')
                 df_avere_report['Avere'] = df_avere_report['Avere'].apply(lambda x: f"{x/100:.2f}".replace('.', ','))
                 df_avere_report.rename(columns={'indice_orig': 'Indice Riga', 'Avere': 'Importo'}).to_excel(writer, sheet_name='AVERE non riconciliati', index=False)

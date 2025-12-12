@@ -1,0 +1,161 @@
+/* =================================
+   Color Scheme & Variables
+   ================================= */
+:root {
+    --primary-color: #005f73;   /* A deep, professional teal/blue */
+    --secondary-color: #0a9396; /* A slightly brighter teal for accents */
+    --accent-color: #94d2bd;    /* A light, soft green for highlights */
+    --background-color: #f8f9fa;/* Off-white background */
+    --card-background: #ffffff; /* White for cards */
+    --text-color: #212529;      /* Standard dark text */
+    --light-text-color: #ffffff; /* For text on dark backgrounds */
+    --border-color: #dee2e6;    /* Light grey for borders */
+    --danger-color: #ae2012;     /* A muted red for errors */
+}
+
+/* =================================
+   General Body & Typography
+   ================================= */
+body {
+    background-color: var(--background-color);
+    color: var(--text-color);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 750px;
+}
+
+/* =================================
+   Banner & Header
+   ================================= */
+.header-banner {
+    background: var(--primary-color);
+    background-image: url('../img/qcassa-banner.svg');
+    background-size: cover;
+    background-position: center;
+    padding: 2rem 1rem;
+    text-align: center;
+    border-radius: 0.5rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+}
+
+.header-logo {
+    max-width: 80px;
+    height: auto;
+}
+
+.header-title {
+    font-size: 2.5rem;
+    font-weight: 300;
+    color: var(--light-text-color);
+    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* =================================
+   Main Application Card
+   ================================= */
+.card {
+    border: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    border-radius: 0.75rem;
+    overflow: hidden; /* Ensures child elements conform to border radius */
+}
+
+.card-header {
+    background-color: transparent;
+    border-bottom: 1px solid var(--border-color);
+    text-align: center;
+    font-size: 1.5rem;
+    font-weight: 500;
+    padding: 1.5rem;
+}
+
+/* =================================
+   Form Elements & Buttons
+   ================================= */
+.btn-primary {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+    font-weight: 500;
+    padding: 0.75rem 1.25rem;
+    transition: all 0.2s ease-in-out;
+}
+
+.btn-primary:hover, .btn-primary:focus {
+    background-color: var(--secondary-color);
+    border-color: var(--secondary-color);
+    box-shadow: 0 0 0 0.25rem rgba(10, 147, 150, 0.5);
+}
+
+.btn-primary:disabled {
+    background-color: var(--secondary-color);
+    border-color: var(--secondary-color);
+}
+
+.btn-success {
+    background-color: var(--secondary-color);
+    border-color: var(--secondary-color);
+    font-weight: 500;
+}
+
+.btn-success:hover, .btn-success:focus {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.form-control:focus {
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 0.25rem rgba(148, 210, 189, 0.5);
+}
+
+/* =================================
+   Results & Logging
+   ================================= */
+#results-container {
+    display: none;
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background-color: var(--card-background);
+    border-radius: 0.5rem;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+#log-output {
+    background-color: #282c34; /* A dark theme for code/log */
+    color: #abb2bf;
+    padding: 1rem;
+    border-radius: 0.25rem;
+    max-height: 400px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 0.875rem;
+}
+
+#progress-container {
+    display: none;
+    margin-top: 1.5rem;
+}
+
+.progress-bar {
+    background-color: var(--primary-color);
+}
+
+#download-button-container {
+    margin-top: 1.5rem;
+    text-align: center;
+}
+
+.alert-danger {
+    background-color: rgba(174, 32, 18, 0.1);
+    color: var(--danger-color);
+    border-color: rgba(174, 32, 18, 0.2);
+}
