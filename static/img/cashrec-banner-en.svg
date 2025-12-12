@@ -1,0 +1,5 @@
+<svg viewBox="0 0 800 250" class="w-full h-auto max-w-full" xmlns="http://www.w3.org/2000/svg" style="font-family: Inter, sans-serif;"><style>
+              @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&amp;display=swap');
+              .title { font-weight: 700; fill: #1a365d; font-family: 'Inter', sans-serif; }
+              .slogan { font-weight: 400; fill: #4b5563; font-family: 'Inter', sans-serif; }
+            </style><text x="50%" y="45%" text-anchor="middle" font-size="90" class="title" letter-spacing="-2">CashRec</text><text x="50%" y="75%" text-anchor="middle" font-size="28" class="slogan">Simplify your accounts, liberate your business.</text></svg>
