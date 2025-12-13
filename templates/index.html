@@ -19,123 +19,780 @@
 
         <h1>Riconciliazione Cassa</h1>
 
-        <div class="cashrec-form-container">
-            <p class="cashrec-text-center cashrec-mb-20">
-                Seleziona un file Excel (.xlsx, .xls) con le colonne 'Data', 'Dare' e 'Avere'.
-            </p>
-            <form id="upload-form">
-                <div class="cashrec-form-group">
-                    <label for="file_input">Seleziona il file da elaborare</label>
-                    <input type="file" id="file_input" name="file_input" accept=".xlsx, .xls" required>
+                <!-- Tab Navigation -->
+
+                <div class="cashrec-tabs">
+
+                    <button class="cashrec-tab-button active" onclick="openTab(event, 'elaborazione')">Elaborazione</button>
+
+                    <button class="cashrec-tab-button" onclick="openTab(event, 'configurazione')">Configurazione</button>
+
+                    <button class="cashrec-tab-button" onclick="openTab(event, 'ottimizzatore')">Ottimizzatore</button>
+
                 </div>
-                <div class="cashrec-btn-container">
-                    <button type="submit" id="submit-button" class="cashrec-btn cashrec-btn-primary">Elabora File</button>
+
+        
+
+                <!-- Tab Content: Elaborazione -->
+
+                <div id="elaborazione" class="cashrec-tab-content" style="display: block;">
+
+                    <div class="cashrec-form-container">
+
+                        <p class="cashrec-text-center cashrec-mb-20">
+
+                            Seleziona un file Excel (.xlsx, .xls) con le colonne 'Data', 'Dare' e 'Avere'.<br>
+
+                            Questo file verrà usato anche per l'ottimizzazione.
+
+                        </p>
+
+                        <form id="upload-form">
+
+                            <div class="cashrec-form-group">
+
+                                <label for="file_input">Seleziona il file da elaborare</label>
+
+                                <input type="file" id="file_input" name="file_input" accept=".xlsx, .xls" required>
+
+                            </div>
+
+                            <div class="cashrec-btn-container">
+
+                                <button type="submit" id="submit-button" class="cashrec-btn cashrec-btn-primary">Elabora File</button>
+
+                            </div>
+
+                        </form>
+
+                        
+
+                        <div id="progress-container" class="cashrec-progress-container">
+
+                            <div class="cashrec-progress-bar-container">
+
+                                <div id="progress-bar"></div>
+
+                            </div>
+
+                        </div>
+
+        
+
+                        <div id="message-container"></div>
+
+                    </div>
+
+        
+
+                    <div id="results-container" class="cashrec-results-container">
+
+                        <h4 class="cashrec-text-center cashrec-mb-20">Riepilogo Elaborazione</h4>
+
+                        <pre id="log-output"></pre>
+
+                        <div id="download-button-container" class="cashrec-btn-container">
+
+                            <!-- Il pulsante di download verrà inserito qui -->
+
+                        </div>
+
+                    </div>
+
                 </div>
-            </form>
-            
-            <div id="progress-container" class="cashrec-progress-container">
-                <div class="cashrec-progress-bar-container">
-                    <div id="progress-bar"></div>
+
+        
+
+                <!-- Tab Content: Configurazione -->
+
+                <div id="configurazione" class="cashrec-tab-content">
+
+                    <form id="config-form" class="cashrec-form-container">
+
+                        <h4 class="cashrec-text-center cashrec-mb-20">Impostazioni Ottimizzatore</h4>
+
+                        
+
+                        <div class="cashrec-form-grid">
+
+                            <div class="cashrec-form-group">
+
+                                <label for="tolleranza">Tolleranza (€)</label>
+
+                                <input type="number" step="0.01" id="tolleranza" name="tolleranza" value="{{ config.tolleranza }}">
+
+                            </div>
+
+                            <div class="cashrec-form-group">
+
+                                <label for="giorni_finestra">Giorni Finestra</label>
+
+                                <input type="number" id="giorni_finestra" name="giorni_finestra" value="{{ config.giorni_finestra }}">
+
+                            </div>
+
+                            <div class="cashrec-form-group">
+
+                                <label for="max_combinazioni">Max Combinazioni</label>
+
+                                <input type="number" id="max_combinazioni" name="max_combinazioni" value="{{ config.max_combinazioni }}">
+
+                            </div>
+
+                        </div>
+
+        
+
+                        <h5 class="cashrec-text-center cashrec-mb-20 cashrec-mt-20">Gestione Residui</h5>
+
+                        <div class="cashrec-form-grid">
+
+                            <div class="cashrec-form-group">
+
+                                <label for="residui_attiva" class="cashrec-checkbox-label">
+
+                                    <input type="checkbox" id="residui_attiva" name="residui_attiva" {% if config.residui.attiva %}checked{% endif %}>
+
+                                    Attiva
+
+                                </label>
+
+                            </div>
+
+                            <div class="cashrec-form-group">
+
+                                <label for="residui_soglia_importo">Soglia Importo Residui (€)</label>
+
+                                <input type="number" step="0.01" id="residui_soglia_importo" name="residui_soglia_importo" value="{{ config.residui.soglia_importo }}">
+
+                            </div>
+
+                            <div class="cashrec-form-group">
+
+                                <label for="residui_giorni_finestra">Giorni Finestra Residui</label>
+
+                                <input type="number" id="residui_giorni_finestra" name="residui_giorni_finestra" value="{{ config.residui.giorni_finestra }}">
+
+                            </div>
+
+                        </div>
+
+        
+
+                        <div id="config-message-container" class="cashrec-mt-20"></div>
+
+        
+
+                        <div class="cashrec-btn-container cashrec-mt-20">
+
+                            <button type="submit" class="cashrec-btn cashrec-btn-primary">Salva Configurazione</button>
+
+                            <button type="button" id="restore-defaults-button" class="cashrec-btn cashrec-btn-secondary">Ripristina Default</button>
+
+                        </div>
+
+                    </form>
+
                 </div>
+
+        
+
+                <!-- Tab Content: Ottimizzatore -->
+
+                <div id="ottimizzatore" class="cashrec-tab-content">
+
+                    <div class="cashrec-form-container">
+
+                        <h4 class="cashrec-text-center cashrec-mb-20">Trova i Parametri Migliori</h4>
+
+                        <p class="cashrec-text-center cashrec-mb-20">
+
+                            L'ottimizzatore eseguirà una serie di simulazioni sul file caricato più di recente per trovare la configurazione che massimizza i risultati.
+
+                            Questo processo può richiedere diversi minuti.
+
+                        </p>
+
+                        <form id="optimizer-form">
+
+                            <div class="cashrec-form-group">
+
+                                <label for="n_trials">Numero di Simulazioni (Trials)</label>
+
+                                <input type="number" id="n_trials" name="n_trials" value="50" min="10" max="500" required>
+
+                            </div>
+
+                            <div class="cashrec-btn-container">
+
+                                <button type="submit" id="optimizer-button" class="cashrec-btn cashrec-btn-primary">Avvia Ottimizzazione</button>
+
+                            </div>
+
+                        </form>
+
+        
+
+                        <div id="optimizer-progress-container" class="cashrec-progress-container cashrec-mt-20">
+
+                            <div class="cashrec-progress-bar-container">
+
+                                <div id="optimizer-progress-bar"></div>
+
+                            </div>
+
+                            <div id="optimizer-progress-text" class="cashrec-text-center cashrec-mt-10"></div>
+
+                        </div>
+
+        
+
+                        <div id="optimizer-message-container" class="cashrec-mt-20"></div>
+
+        
+
+                        <div id="optimizer-results-container" class="cashrec-results-container cashrec-mt-20">
+
+                            <h4 class="cashrec-text-center cashrec-mb-20">🏆 Risultato Ottimale Trovato 🏆</h4>
+
+                            <pre id="optimizer-log-output"></pre>
+
+                            <div class="cashrec-btn-container cashrec-mt-20">
+
+                                 <button type="button" id="apply-best-params-button" class="cashrec-btn cashrec-btn-primary">Applica e Salva Parametri</button>
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+        
+
+        
+
+                <footer class="cashrec-footer">
+
+                    <small>CashRec Reconciliation Service v2.1</small>
+
+                </footer>
+
             </div>
 
-            <div id="message-container"></div>
-        </div>
+        
 
-        <div id="results-container" class="cashrec-results-container">
-            <h4 class="cashrec-text-center cashrec-mb-20">Riepilogo Elaborazione</h4>
-            <pre id="log-output"></pre>
-            <div id="download-button-container" class="cashrec-btn-container">
-                <!-- Il pulsante di download verrà inserito qui -->
-            </div>
-        </div>
+            <script>
 
-        <footer class="cashrec-footer">
-            <small>CashRec Reconciliation Service v2.0</small>
-        </footer>
-    </div>
+                // --- State Globale ---
 
-    <script>
-        const form = document.getElementById('upload-form');
-        const submitButton = document.getElementById('submit-button');
-        const messageContainer = document.getElementById('message-container');
-        const progressContainer = document.getElementById('progress-container');
-        const progressBar = document.getElementById('progress-bar');
-        const resultsContainer = document.getElementById('results-container');
-        const logOutput = document.getElementById('log-output');
-        const downloadButtonContainer = document.getElementById('download-button-container');
+                let bestParamsFound = null;
 
-        form.addEventListener('submit', async (event) => {
-            event.preventDefault();
+                
 
-            messageContainer.innerHTML = '';
-            resultsContainer.style.display = 'none';
-            logOutput.textContent = '';
-            downloadButtonContainer.innerHTML = '';
+                // --- Gestione Tab ---
 
-            const formData = new FormData(form);
-            if (!formData.get('file_input').name) {
-                displayMessage('Per favore, seleziona un file.', 'danger');
-                return;
-            }
+                function openTab(evt, tabName) {
 
-            submitButton.disabled = true;
-            submitButton.textContent = 'Elaborazione...';
-            progressContainer.style.display = 'block';
+                    var i, tabcontent, tablinks;
 
-            let progress = 0;
-            const interval = setInterval(() => {
-                progress += 5;
-                if (progress <= 95) {
-                    progressBar.style.width = progress + '%';
+                    tabcontent = document.getElementsByClassName("cashrec-tab-content");
+
+                    for (i = 0; i < tabcontent.length; i++) {
+
+                        tabcontent[i].style.display = "none";
+
+                    }
+
+                    tablinks = document.getElementsByClassName("cashrec-tab-button");
+
+                    for (i = 0; i < tablinks.length; i++) {
+
+                        tablinks[i].className = tablinks[i].className.replace(" active", "");
+
+                    }
+
+                    document.getElementById(tabName).style.display = "block";
+
+                    evt.currentTarget.className += " active";
+
                 }
-            }, 200);
 
-            try {
-                const response = await fetch('/processa', {
-                    method: 'POST',
-                    body: formData,
+        
+
+                // --- Gestione Form Elaborazione ---
+
+                const form = document.getElementById('upload-form');
+
+                const submitButton = document.getElementById('submit-button');
+
+                const messageContainer = document.getElementById('message-container');
+
+                const progressContainer = document.getElementById('progress-container');
+
+                const progressBar = document.getElementById('progress-bar');
+
+                const resultsContainer = document.getElementById('results-container');
+
+                const logOutput = document.getElementById('log-output');
+
+                const downloadButtonContainer = document.getElementById('download-button-container');
+
+        
+
+                form.addEventListener('submit', async (event) => {
+
+                    event.preventDefault();
+
+        
+
+                    messageContainer.innerHTML = '';
+
+                    resultsContainer.style.display = 'none';
+
+                    logOutput.textContent = '';
+
+                    downloadButtonContainer.innerHTML = '';
+
+                    bestParamsFound = null; // Resetta i parametri ottimali
+
+                    document.getElementById('optimizer-results-container').style.display = 'none';
+
+        
+
+        
+
+                    const formData = new FormData(form);
+
+                    if (!formData.get('file_input').name) {
+
+                        displayMessage('Per favore, seleziona un file.', 'danger', 'message-container');
+
+                        return;
+
+                    }
+
+        
+
+                    submitButton.disabled = true;
+
+                    submitButton.textContent = 'Elaborazione...';
+
+                    progressContainer.style.display = 'block';
+
+        
+
+                    let progress = 0;
+
+                    const interval = setInterval(() => {
+
+                        progress += 5;
+
+                        if (progress <= 95) {
+
+                            progressBar.style.width = progress + '%';
+
+                        }
+
+                    }, 200);
+
+        
+
+                    try {
+
+                        const response = await fetch('/processa', {
+
+                            method: 'POST',
+
+                            body: formData,
+
+                        });
+
+        
+
+                        clearInterval(interval);
+
+                        progressBar.style.width = '100%';
+
+        
+
+                        const result = await response.json();
+
+        
+
+                        if (!response.ok) {
+
+                            throw new Error(result.error || 'Errore del server.');
+
+                        }
+
+                        
+
+                        if (result.version.startsWith('2.')) { // Supporta v2.x
+
+                             throw new Error('Il backend non è aggiornato. Per favore, arresta (Ctrl+C) e riavvia il server python.');
+
+                        }
+
+        
+
+                        logOutput.textContent = result.log_content;
+
+                        const downloadLink = document.createElement('a');
+
+                        downloadLink.href = result.download_url;
+
+                        downloadLink.className = 'cashrec-btn cashrec-btn-primary';
+
+                        downloadLink.textContent = 'Scarica Report Excel';
+
+                        downloadButtonContainer.appendChild(downloadLink);
+
+                        resultsContainer.style.display = 'block';
+
+                        displayMessage('Elaborazione completata. Ora puoi avviare l\'ottimizzatore se lo desideri.', 'success', 'message-container');
+
+        
+
+        
+
+                    } catch (error) {
+
+                        displayMessage(error.message, 'danger', 'message-container');
+
+                        progressContainer.style.display = 'none';
+
+                    } finally {
+
+                        setTimeout(() => {
+
+                            submitButton.disabled = false;
+
+                            submitButton.textContent = 'Elabora File';
+
+                            progressContainer.style.display = 'none';
+
+                            progressBar.style.width = '0%';
+
+                        }, 500);
+
+                    }
+
                 });
 
-                clearInterval(interval);
-                progressBar.style.width = '100%';
+        
 
-                const result = await response.json();
+                function displayMessage(message, type = 'info', containerId = 'message-container') {
 
-                if (!response.ok) {
-                    throw new Error(result.error || 'Errore del server.');
+                    const container = document.getElementById(containerId);
+
+                    const messageClass = type === 'danger' ? 'cashrec-message-danger' : 'cashrec-message-success';
+
+                    container.innerHTML = `<div class="${messageClass}">${message}</div>`;
+
                 }
+
+        
+
+                // --- Gestione Form Configurazione ---
+
+                const configForm = document.getElementById('config-form');
+
                 
-                if (result.version !== '3.0') {
-                    throw new Error('Il backend non è aggiornato. Per favore, arresta (Ctrl+C) e riavvia il server python.');
+
+                configForm.addEventListener('submit', async (event) => {
+
+                    event.preventDefault();
+
+                    await saveConfiguration();
+
+                });
+
+        
+
+                async function saveConfiguration(configData) {
+
+                    // Se non vengono passati dati, li raccoglie dal form
+
+                    if (!configData) {
+
+                        const tolleranzaEuro = parseFloat(document.getElementById('tolleranza').value);
+
+                        const sogliaResiduiEuro = parseFloat(document.getElementById('residui_soglia_importo').value);
+
+        
+
+                        configData = {
+
+                            tolleranza: tolleranzaEuro, // Mantiene il valore in Euro
+
+                            giorni_finestra: parseInt(document.getElementById('giorni_finestra').value, 10),
+
+                            max_combinazioni: parseInt(document.getElementById('max_combinazioni').value, 10),
+
+                            cartella_input: "{{ config.cartella_input }}",
+
+                            cartella_output: "{{ config.cartella_output }}",
+
+                            pattern: {{ config.pattern|tojson }},
+
+                            colonne: {{ config.colonne|tojson }},
+
+                            mapping_colonne: {{ config.mapping_colonne|tojson }},
+
+                            residui: {
+
+                                attiva: document.getElementById('residui_attiva').checked,
+
+                                soglia_importo: sogliaResiduiEuro, // Mantiene il valore in Euro
+
+                                giorni_finestra: parseInt(document.getElementById('residui_giorni_finestra').value, 10)
+
+                            },
+
+                            commento: "{{ config.commento }}"
+
+                        };
+
+                    }
+
+        
+
+                    try {
+
+                        const response = await fetch('/config', {
+
+                            method: 'POST',
+
+                            headers: { 'Content-Type': 'application/json' },
+
+                            body: JSON.stringify(configData)
+
+                        });
+
+        
+
+                        const result = await response.json();
+
+                        if (!response.ok || !result.success) {
+
+                            throw new Error(result.message || 'Errore nel salvataggio.');
+
+                        }
+
+                        
+
+                        displayMessage('Configurazione salvata con successo!', 'success', 'config-message-container');
+
+                        return true;
+
+        
+
+                    } catch (error) {
+
+                        displayMessage(error.message, 'danger', 'config-message-container');
+
+                        return false;
+
+                    }
+
                 }
 
-                logOutput.textContent = result.log_content;
-                const downloadLink = document.createElement('a');
-                downloadLink.href = result.download_url;
-                downloadLink.className = 'cashrec-btn cashrec-btn-primary';
-                downloadLink.textContent = 'Scarica Report Excel';
-                downloadButtonContainer.appendChild(downloadLink);
-                resultsContainer.style.display = 'block';
+                
 
-            } catch (error) {
-                displayMessage(error.message, 'danger');
-                progressContainer.style.display = 'none';
-            } finally {
-                setTimeout(() => {
-                    submitButton.disabled = false;
-                    submitButton.textContent = 'Elabora File';
-                    progressContainer.style.display = 'none';
-                    progressBar.style.width = '0%';
-                }, 500);
-            }
-        });
+                // --- Gestione Ottimizzatore ---
 
-        function displayMessage(message, type = 'info') {
-            const messageClass = type === 'danger' ? 'cashrec-message-danger' : 'cashrec-message-info';
-            messageContainer.innerHTML = `<div class="${messageClass}">${message}</div>`;
-        }
-    </script>
+                const optimizerForm = document.getElementById('optimizer-form');
 
-</body>
-</html>
+                const optimizerButton = document.getElementById('optimizer-button');
+
+                const optimizerProgressContainer = document.getElementById('optimizer-progress-container');
+
+                const optimizerProgressBar = document.getElementById('optimizer-progress-bar');
+
+                const optimizerProgressText = document.getElementById('optimizer-progress-text');
+
+                const optimizerMessageContainer = document.getElementById('optimizer-message-container');
+
+                const optimizerResultsContainer = document.getElementById('optimizer-results-container');
+
+                const optimizerLogOutput = document.getElementById('optimizer-log-output');
+
+        
+
+                optimizerForm.addEventListener('submit', async (event) => {
+
+                    event.preventDefault();
+
+                    optimizerMessageContainer.innerHTML = '';
+
+                    optimizerResultsContainer.style.display = 'none';
+
+        
+
+                    const n_trials = document.getElementById('n_trials').value;
+
+                    if (parseInt(n_trials) <= 0) {
+
+                        displayMessage('Il numero di simulazioni deve essere maggiore di zero.', 'danger', 'optimizer-message-container');
+
+                        return;
+
+                    }
+
+                    
+
+                    optimizerButton.disabled = true;
+
+                    optimizerButton.textContent = 'Ottimizzazione in corso...';
+
+                    optimizerProgressContainer.style.display = 'block';
+
+                    optimizerProgressBar.style.width = '0%';
+
+                    optimizerProgressText.textContent = 'Avvio...';
+
+        
+
+                    try {
+
+                        const response = await fetch('/optimize', {
+
+                            method: 'POST',
+
+                            headers: { 'Content-Type': 'application/json' },
+
+                            body: JSON.stringify({ n_trials: parseInt(n_trials) })
+
+                        });
+
+        
+
+                        const result = await response.json();
+
+        
+
+                        if (!response.ok) {
+
+                            throw new Error(result.error || 'Errore del server durante l\'ottimizzazione.');
+
+                        }
+
+        
+
+                        bestParamsFound = result.best_params; // Salva i parametri
+
+                        
+
+                        let logContent = `Punteggio Ottimale (Somma %): ${result.best_score.toFixed(2)}\n\n`;
+
+                        logContent += "Parametri Migliori Trovati:\n";
+
+                        for (const [key, value] of Object.entries(result.best_params)) {
+
+                            logContent += `  - ${key}: ${value}\n`;
+
+                        }
+
+        
+
+                        optimizerLogOutput.textContent = logContent;
+
+                        optimizerResultsContainer.style.display = 'block';
+
+                        displayMessage('Ottimizzazione completata!', 'success', 'optimizer-message-container');
+
+        
+
+                    } catch (error) {
+
+                        displayMessage(error.message, 'danger', 'optimizer-message-container');
+
+                    } finally {
+
+                        optimizerButton.disabled = false;
+
+                        optimizerButton.textContent = 'Avvia Ottimizzazione';
+
+                        optimizerProgressContainer.style.display = 'none';
+
+                    }
+
+                });
+
+        
+
+                // Pulsante per applicare i parametri
+
+                document.getElementById('apply-best-params-button').addEventListener('click', async () => {
+
+                    if (!bestParamsFound) {
+
+                        displayMessage('Nessun parametro ottimale da applicare.', 'danger', 'optimizer-message-container');
+
+                        return;
+
+                    }
+
+        
+
+                    // Prende la configurazione corrente per non perdere campi non ottimizzati
+
+                    const currentConfigResponse = await fetch('/config');
+
+                    const currentConfig = await currentConfigResponse.json();
+
+        
+
+                    // Sovrascrive con i parametri migliori
+
+                    const newConfig = { ...currentConfig, ...bestParamsFound };
+
+        
+
+                    // Gestisce i residui come oggetto separato
+
+                    if (bestParamsFound.soglia_residui || bestParamsFound.giorni_finestra_residui) {
+
+                        newConfig.residui = { ...currentConfig.residui, ...bestParamsFound };
+
+                    }
+
+        
+
+                    const success = await saveConfiguration(newConfig);
+
+                    if (success) {
+
+                        // Aggiorna anche il form nella scheda configurazione per coerenza
+
+                        for (const [key, value] of Object.entries(bestParamsFound)) {
+
+                            const input = document.getElementById(key);
+
+                            if (input) {
+
+                                if (input.type === 'checkbox') input.checked = value;
+
+                                else input.value = value;
+
+                            }
+
+                        }
+
+                        displayMessage('Parametri ottimali applicati e salvati con successo. Puoi vederli nella scheda Configurazione.', 'success', 'optimizer-message-container');
+
+                    }
+
+                });
+
+        
+
+            </script>
+
+        </body>
+
+        </html>
+
+        

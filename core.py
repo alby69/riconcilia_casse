@@ -459,7 +459,7 @@ class RiconciliatoreContabile:
         # --- MODIFICA: Formatta la data e rimuovi la colonna indice_orig ridondante ---
         if 'Data' in df_originale_report.columns:
             df_originale_report['Data'] = pd.to_datetime(df_originale_report['Data']).dt.strftime('%d/%m/%Y')
-            if 'indice_orig' in df_originale_report.columns and 'usato' not in df_originale_report.columns:
+        if 'indice_orig' in df_originale_report.columns and 'usato' not in df_originale_report.columns:
             df_originale_report.drop(columns=['indice_orig'], inplace=True)
 
 

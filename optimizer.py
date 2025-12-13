@@ -1,410 +1,143 @@
 """
-Optimizer - Script per la Ricerca Operativa dei Parametri di Riconciliazione.
+Optimizer - Libreria per la Ricerca Operativa dei Parametri di Riconciliazione.
 
-Questo script esegue simulazioni multiple su un singolo file di input,
+Questo modulo contiene le funzioni per eseguire simulazioni multiple,
 variando i parametri chiave per trovare la combinazione che massimizza
 le percentuali di riconciliazione.
+Utilizza Optuna per l'ottimizzazione.
 """
 
 import pandas as pd
-import itertools
-import argparse
-from datetime import datetime
-import time
-from pathlib import Path
 import json
 import sys
-import multiprocessing
-from tqdm import tqdm # Importa tqdm
-import optuna # Importa Optuna
+import optuna
+from tqdm import tqdm
+
+from core import RiconciliatoreContabile
+
 
 def load_optimizer_config(config_path='config_optimizer.json'):
     """Carica la configurazione dell'ottimizzatore da un file JSON."""
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
-            print(f"📄 Caricamento configurazione optimizer da '{config_path}'...")
             config = json.load(f)
-            print("✓ Configurazione optimizer caricata con successo.")
-            # Estrai le due sezioni principali, fornendo valori di default
-            settings = config.get('optimizer_settings', {})
-            params = config.get('optimization_params', {})
-            return settings, params
+        settings = config.get('optimizer_settings', {})
+        params = config.get('optimization_params', {})
+        return settings, params
     except FileNotFoundError:
-        print(f"⚠️  File '{config_path}' non trovato. Utilizzo configurazione di default.")
-        # Restituisce una tupla di dizionari vuoti
+        print(f"⚠️  File di configurazione dell'ottimizzatore '{config_path}' non trovato.")
         return {}, {}
     except json.JSONDecodeError as e:
         print(f"❌ ERRORE: Formato JSON non valido in '{config_path}': {e}")
-        print("Il programma verrà terminato.")
-        sys.exit(1)
+        return {}, {}
 
-def generate_dynamic_ranges(base_config, optimizer_config, range_percentage=0.30):
+
+def run_simulation(base_config, file_input_df, n_trials=50, show_progress=True, sequential=False):
     """
-    Genera i range di ottimizzazione dinamicamente.
-
-    Per ogni parametro numerico, crea un intervallo simmetrico attorno al valore
-    presente in `base_config`, ampliato di una certa percentuale.
-    I parametri categorici vengono lasciati invariati.
-
+    Esegue l'ottimizzazione usando Optuna per trovare i parametri migliori.
+    
     Args:
-        base_config (dict): La configurazione di partenza (da config.json).
-        optimizer_config (dict): La configurazione dell'ottimizzatore con tipi e step.
-        range_percentage (float): La percentuale per definire l'ampiezza del range (es. 0.3 per ±30%).
+        base_config (dict): La configurazione di base da cui partire.
+        file_input_df (pd.DataFrame): Il DataFrame già caricato e pre-processato su cui eseguire le simulazioni.
+        n_trials (int): Il numero di simulazioni (trial) da eseguire.
+        show_progress (bool): Se mostrare una barra di progresso (non implementato per il web).
+        sequential (bool): Se forzare l'esecuzione sequenziale (1 solo processo).
 
     Returns:
-        dict: Una nuova configurazione per l'ottimizzatore con i range dinamici.
+        dict: Un dizionario contenente i parametri migliori ('best_params') e il punteggio migliore ('best_score').
     """
-    dynamic_ranges = optimizer_config.copy()
-    print(f"🧬  Generazione range di ottimizzazione dinamici (ampiezza: ±{range_percentage*100:.0f}%)...")
-
-    for param_name, details in optimizer_config.items():
-        if details['type'] == 'numeric' and param_name in base_config:
-            base_value = base_config[param_name]
-            delta = base_value * range_percentage
-
-            new_min = base_value - delta
-            new_max = base_value + delta
-
-            # Assicura che i valori interi rimangano tali e non scendano sotto 1
-            if details.get('value_type') != 'float':
-                new_min = max(1, round(new_min))
-                new_max = max(1, round(new_max))
-            else: # Per i float, arrotonda e assicurati non sia negativo
-                new_min = max(0.0, round(new_min, 2))
-                new_max = max(0.0, round(new_max, 2))
-
-            dynamic_ranges[param_name]['min'] = new_min
-            dynamic_ranges[param_name]['max'] = new_max
-            print(f"   - Parametro '{param_name}': range impostato a [{new_min}, {new_max}] (step: {details['step']})")
-
-    return dynamic_ranges
-
-def run_auto_optimization(config, config_path, file_input, is_first_run, sequential=False):
-    """Esegue l'ottimizzazione automatica basata su range predefiniti."""
-    print("🔬 Avvio ottimizzazione in modalità automatica...")
-
-    # Carica sia le impostazioni che i parametri dell'ottimizzatore
-    optimizer_settings, optimization_params = load_optimizer_config()
-
-    if is_first_run:
-        print(">>> PRIMA ESECUZIONE RILEVATA: Avvio modalità di ESPLORAZIONE AMPIA.")
-        # Usa i range min/max definiti in config_optimizer.json
-        ranges_to_use = optimization_params
-        n_trials = optimizer_settings.get('n_trials_first_run', 70) # Più trial per la prima esplorazione
-    else:
-        print(">>> ESECUZIONE SUCCESSIVA: Avvio modalità di AFFINAMENTO MIRATO.")
-        # Genera range dinamici stretti attorno ai valori già ottimizzati
-        range_percentage = optimizer_settings.get('range_percentage', 0.15) # Range più stretto per affinare
-        ranges_to_use = generate_dynamic_ranges(config, optimization_params, range_percentage)
-        n_trials = optimizer_settings.get('n_trials_refinement', 40) # Meno trial per l'affinamento
-
-    best_params = run_simulation(config, ranges_to_use, file_input, n_trials, show_progress=False, sequential=sequential)
-
-    # Scrivi i parametri migliori nel file di configurazione
-    update_config_file(config_path, best_params)
-
-# Nuova funzione helper per l'esecuzione in parallelo
-def _run_single_simulation_worker(args):
-    """ 
-    Funzione worker per eseguire una singola simulazione di riconciliazione.
-    Progettata per essere utilizzata con multiprocessing.Pool.
-    """
-    run_config, params = args
     
-    # Importa RiconciliatoreContabile all'interno della funzione worker
-    # Questo è cruciale per evitare problemi di serializzazione (pickling)
-    from core import RiconciliatoreContabile 
+    _, optimizer_config_ranges = load_optimizer_config()
+    if not optimizer_config_ranges:
+        raise ValueError("Impossibile caricare i range dei parametri per l'ottimizzazione.")
 
-    riconciliatore_sim = RiconciliatoreContabile(
-        tolleranza=run_config.get('tolleranza', 0.01),
-        giorni_finestra=run_config.get('giorni_finestra', 30),
-        max_combinazioni=run_config.get('max_combinazioni', 6),
-        soglia_residui=run_config.get('soglia_residui', 100),
-        giorni_finestra_residui=run_config.get('giorni_finestra_residui', 60),
-        sorting_strategy=run_config.get('sorting_strategy', 'date'),
-        search_direction=run_config.get('search_direction', 'both')
-    )
-    
-    INPUT_FILE_DA_OTTIMIZZARE = run_config['file_input']
-    start_time = time.time()
-    # verbose=False per evitare output disordinato dai processi paralleli
-    stats = riconciliatore_sim.run(INPUT_FILE_DA_OTTIMIZZARE, output_file=None, verbose=False) 
-    end_time = time.time()
-    execution_time = end_time - start_time
-
-    if stats:
-        perc_dare_str = stats.get('% Incassi (DARE) utilizzati', '0.0%')
-        perc_avere_str = stats.get('% Versamenti (AVERE) riconciliati', '0.0%')
-
-        perc_dare = float(str(perc_dare_str).replace('%', '')) if perc_dare_str else 0.0
-        perc_avere = float(str(perc_avere_str).replace('%', '')) if perc_avere_str else 0.0
-
-        # Restituisce tutte le informazioni necessarie al processo principale
-        return {
-            "params": params,
-            "perc_dare": perc_dare,
-            "perc_avere": perc_avere,
-            "execution_time": execution_time,
-            "full_stats": stats # Opzionalmente restituisce le statistiche complete per il logging
-        }
-    return None # Restituisce None se la simulazione è fallita o non ha prodotto statistiche
-
-def run_simulation(base_config, optimizer_config_ranges, file_input, n_trials, show_progress=True, sequential=False):
-    """Esegue l'ottimizzazione usando Optuna per trovare i parametri migliori."""
-
-    def objective(trial, input_data):
+    def objective(trial):
         """Funzione obiettivo che Optuna cercherà di massimizzare."""
-        # 1. Suggerisci i parametri per questo "trial"
         params = {}
         for param_name, details in optimizer_config_ranges.items():
             if details['type'] == 'numeric':
-                # --- MODIFICA: Gestisce sia float che int ---
                 if details.get('value_type') == 'float':
-                    # Usa suggest_float per parametri decimali come la tolleranza
-                    suggested_value = trial.suggest_float(param_name, details['min'], details['max'], step=details['step'])
-                    # Arrotonda il valore a 2 cifre decimali per una maggiore pulizia e coerenza.
-                    params[param_name] = round(suggested_value, 2)
+                    params[param_name] = trial.suggest_float(param_name, details['min'], details['max'], step=details['step'])
                 else:
-                    # Usa suggest_int per i parametri interi (default)
                     params[param_name] = trial.suggest_int(param_name, details['min'], details['max'], step=details['step'])
             elif details['type'] == 'categorical':
-                # Usa suggest_categorical per i parametri testuali
                 params[param_name] = trial.suggest_categorical(param_name, details['values'])
 
-        # 2. Esegui la simulazione con i parametri suggeriti
         run_config = base_config.copy()
         run_config.update(params)
         
-        # Importa qui per essere compatibile con la parallelizzazione di Optuna
-        from core import RiconciliatoreContabile
-
-        # Filtra il dizionario di configurazione per passare solo i parametri
-        # attesi dal costruttore di RiconciliatoreContabile.
         expected_params = [
             'tolleranza', 'giorni_finestra', 'max_combinazioni', 
             'soglia_residui', 'giorni_finestra_residui', 
             'sorting_strategy', 'search_direction'
         ]
-        riconciliatore_config = {
-            key: run_config[key] for key in expected_params if key in run_config
-        }
+        riconciliatore_config = {key: run_config[key] for key in expected_params if key in run_config}
+        
+        # Gestione speciale per la tolleranza e soglia che sono in Euro nel config e in centesimi nel core
+        if 'tolleranza' in riconciliatore_config:
+            riconciliatore_config['tolleranza'] = int(riconciliatore_config['tolleranza'] * 100)
+        if 'soglia_residui' in riconciliatore_config:
+             riconciliatore_config['soglia_residui'] = int(riconciliatore_config['soglia_residui'] * 100)
+
 
         riconciliatore_sim = RiconciliatoreContabile(**riconciliatore_config)
-        stats = riconciliatore_sim.run(input_data, output_file=None, verbose=False)
+        
+        # Passiamo il DataFrame direttamente per evitare riletture
+        stats = riconciliatore_sim.run(file_input_df.copy(), output_file=None, verbose=False)
 
-        # 3. Calcola e restituisci il punteggio da massimizzare
         if stats:
-            perc_dare_str = stats.get('% Incassi (DARE) utilizzati', '0.0%')
-            perc_avere_str = stats.get('% Versamenti (AVERE) riconciliati', '0.0%')
-            perc_dare = float(str(perc_dare_str).replace('%', ''))
-            perc_avere = float(str(perc_avere_str).replace('%', ''))
-            
-            # Vogliamo massimizzare la somma delle percentuali
+            perc_dare = stats.get('_raw_perc_dare_importo', 0.0)
+            perc_avere = stats.get('_raw_perc_avere_importo', 0.0)
             return perc_dare + perc_avere
         
-        # Se la simulazione fallisce, restituisci un punteggio molto basso
         return 0.0
 
-    # Disabilita il logging verboso di Optuna per mantenere l'output pulito
     optuna.logging.set_verbosity(optuna.logging.WARNING)
-
-    # Crea uno "studio" di ottimizzazione.
-    # La direzione è "maximize" perché vogliamo il punteggio più alto.
     study = optuna.create_study(direction="maximize")
-
-    # --- OTTIMIZZAZIONE: Carica i dati una sola volta prima di avviare i trial ---
-    # Questo evita di leggere lo stesso file dal disco per ogni trial.
-    from core import RiconciliatoreContabile
-    input_file_path = file_input
-    loader = RiconciliatoreContabile()
-    input_df = loader.carica_file(input_file_path)
-
-    # Avvia l'ottimizzazione. n_trials è il numero di simulazioni da eseguire.
-    # 100 trial sono spesso sufficienti per trovare ottimi risultati.
-    # n_jobs=-1 usa tutti i core della CPU per parallelizzare i trial.
-    # Dopo le ottimizzazioni in core.py, ogni trial è molto più veloce.
-    # Riduciamo il numero di trial per accelerare il processo batch,
-    # mantenendo comunque una buona capacità di ricerca.
-    print(f"🚀 Avvio ottimizzazione con Optuna per {n_trials} trial (in parallelo)...")
-
-    # Utilizza sempre tutti i core disponibili. La logica è stata resa sicura per la parallelizzazione.
-    # Questo è il cambiamento chiave per risolvere il problema di lentezza.
-    if sequential:
-        n_jobs = 1
-        print("🐌 Esecuzione dei trial in modalità sequenziale (n_jobs=1).")
-    else:
-        n_jobs = -1 # Usa tutti i core
-        
-    if show_progress:
-        # Aggiungi una barra di avanzamento con tqdm solo se richiesto
-        with tqdm(total=n_trials, desc="Ottimizzazione Trial") as pbar:
-            # Definisci un callback per aggiornare la barra di avanzamento dopo ogni trial
-            def callback(study, trial):
-                pbar.update(1)
-
-            study.optimize(
-                lambda trial: objective(trial, input_data=input_df),
-                n_trials=n_trials, 
-                n_jobs=n_jobs, 
-                callbacks=[callback])
-    else:
-        # Esegui senza barra di avanzamento (per la modalità batch)
-        study.optimize(
-            lambda trial: objective(trial, input_data=input_df),
-            n_trials=n_trials, 
-            n_jobs=n_jobs)
-
-    # Stampa il suggerimento finale
-    best_params = study.best_params
-    best_score = study.best_value
-
-    print("\n\n╔════════════════════════════════════════════════════════════╗")
-    print("║              🏆 RISULTATO OTTIMALE TROVATO 🏆              ║")
-    print("╚════════════════════════════════════════════════════════════╝")
-    print("\nLa combinazione di parametri che ha prodotto i migliori risultati è:")
-    for key, value in best_params.items():
-        print(f"  - {key}: {value}")
-    print(f"\nCon queste impostazioni, hai raggiunto:")
-    # Nota: il punteggio esatto potrebbe non essere recuperabile facilmente, ma possiamo indicare il valore ottimizzato
-    print(f"  - Punteggio ottimizzato (Somma % DARE + % AVERE): {best_score:.2f}")
-    print("\nSuggerimento: Aggiorna il tuo file 'config.json' con questi valori per le elaborazioni future.")
     
-    return best_params
+    n_jobs = 1 if sequential else -1
+        
+    study.optimize(
+        objective,
+        n_trials=n_trials,
+        n_jobs=n_jobs,
+        show_progress_bar=show_progress # Mostra la barra di progresso di Optuna
+    )
 
-def get_user_parameters():
-    """Funzione interattiva per definire i parametri e i range della simulazione."""
-    print("\n--- Configurazione Parametri di Ottimizzazione ---")
-    # Definizione strutturata dei parametri disponibili per l'ottimizzazione
-    available_params = {
-        "1": {"name": "giorni_finestra", "type": "numeric", "prompt": "Finestra temporale standard (giorni)"},
-        "2": {"name": "max_combinazioni", "type": "numeric", "prompt": "Numero massimo di combinazioni"},
-        "3": {"name": "giorni_finestra_residui", "type": "numeric", "prompt": "Finestra temporale per i residui (giorni)"},
-        "4": {"name": "soglia_residui", "type": "numeric", "prompt": "Soglia importo per analisi residui (€)"},
-        "5": {"name": "tolleranza", "type": "numeric", "prompt": "Tolleranza di importo (es. 0.01)"},
-        "6": {"name": "sorting_strategy", "type": "categorical", "values": ["date", "amount"], "prompt": "Strategia di ordinamento"},
-        "7": {"name": "search_direction", "type": "categorical", "values": ["future_only", "past_only", "both"], "prompt": "Direzione della ricerca temporale"}
+    return {
+        "best_params": study.best_params,
+        "best_score": study.best_value
     }
 
-    params_to_test = {}
-    while True:
-        print("\nScegli un parametro da variare (o premi Invio per iniziare la simulazione):")
-        for key, value in available_params.items():
-            print(f"  {key}) {value['prompt']}")
-
-        choice = input("> ")
-        if not choice:
-            if not params_to_test:
-                print("❌ Nessun parametro selezionato. Uscita.")
-                exit()
-            break
-
-        if choice not in available_params:
-            print("❌ Scelta non valida.")
-            continue
-
-        param_info = available_params.pop(choice) # Rimuovi per non sceglierlo di nuovo
-        param_name = param_info['name']
-
-        if param_info['type'] == 'numeric':
-            try:
-                value_type = float if param_name in ['tolleranza', 'soglia_residui'] else int
-                min_val = value_type(input(f"  - Valore MIN per '{param_name}': "))
-                max_val = value_type(input(f"  - Valore MAX per '{param_name}': "))
-                step = value_type(input(f"  - Passo (step) per '{param_name}': "))
-                
-                # Genera la sequenza di valori
-                values = []
-                current = min_val
-                while current <= max_val:
-                    values.append(current)
-                    current += step
-                params_to_test[param_name] = values
-                print(f"✓ Parametro '{param_name}' configurato per testare i valori: {values}")
-            except (ValueError, TypeError):
-                print("❌ Input non valido. Riprova.")
-                available_params[choice] = param_info # Reinserisci per poterlo riselezionare
-        
-        elif param_info['type'] == 'categorical':
-            possible_values = param_info['values']
-            print(f"  Valori possibili per '{param_name}':")
-            for i, val in enumerate(possible_values):
-                print(f"    {i+1}) {val}")
-            
-            user_choice = input("  Scegli i valori da testare (es. '1,3' per il primo e il terzo, o 'tutti'): ")
-            
-            selected_values = []
-            if user_choice.lower() == 'tutti':
-                selected_values = possible_values
-            else:
-                try:
-                    indices = [int(i.strip()) - 1 for i in user_choice.split(',')]
-                    for idx in indices:
-                        if 0 <= idx < len(possible_values):
-                            selected_values.append(possible_values[idx])
-                        else:
-                            print(f"❌ Indice '{idx+1}' non valido.")
-                    if not selected_values:
-                        raise ValueError("Nessun valore valido selezionato.")
-                except (ValueError, IndexError):
-                    print("❌ Selezione non valida. Riprova.")
-                    available_params[choice] = param_info # Reinserisci
-                    continue
-            
-            params_to_test[param_name] = list(set(selected_values)) # Rimuovi duplicati
-            print(f"✓ Parametro '{param_name}' configurato per testare i valori: {params_to_test[param_name]}")
-
-    return params_to_test
 
 def update_config_file(config_path, best_params):
     """Aggiorna il file di configurazione JSON con i parametri migliori trovati."""
-    with open(config_path, 'r+') as f:
-        config_data = json.load(f)
-        config_data.update(best_params)
-        f.seek(0) # Riavvolgi all'inizio del file
-        json.dump(config_data, f, indent=2)
-        f.truncate() # Rimuovi il contenuto rimanente se il nuovo file è più corto
-    print(f"\n✅ File di configurazione '{config_path}' aggiornato con i parametri ottimali.")
+    try:
+        with open(config_path, 'r+') as f:
+            config_data = json.load(f)
+            
+            # Gestione speciale per i parametri annidati come 'residui'
+            residui_params = {}
+            params_to_update = best_params.copy()
 
-def main():
-    """Funzione principale che orchestra la simulazione."""
-    parser = argparse.ArgumentParser(description="Ottimizzatore dei parametri di riconciliazione.")
-    parser.add_argument('--config', required=True, help="Percorso del file di configurazione JSON da usare e aggiornare.")
-    parser.add_argument('--first-run', action='store_true', help="Indica che è la prima esecuzione per questo file, attivando una ricerca più ampia.")
-    parser.add_argument('--auto', action='store_true', help="Esegui in modalità automatica non interattiva.")
-    parser.add_argument('--sequential', action='store_true', help="Forza l'esecuzione dei trial di Optuna in modalità sequenziale (un processo alla volta).")
-    args = parser.parse_args()
+            for key in list(params_to_update.keys()):
+                if key.startswith('residui_'):
+                    residui_key = key.replace('residui_', '')
+                    residui_params[residui_key] = params_to_update.pop(key)
+            
+            # Aggiorna i parametri di primo livello
+            config_data.update(params_to_update)
 
-    config_path = Path(args.config)
-    if not config_path.exists():
-        print(f"❌ Errore: File di configurazione non trovato in '{config_path}'")
-        sys.exit(1)
+            # Aggiorna l'oggetto 'residui' se ci sono parametri per esso
+            if residui_params:
+                if 'residui' not in config_data:
+                    config_data['residui'] = {}
+                config_data['residui'].update(residui_params)
 
-    # Carica la configurazione di base dal file specificato
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-
-    print("╔════════════════════════════════════════════════════════════╗")
-    print("║        🚀 AVVIO OTTIMIZZATORE PARAMETRI 🚀                 ║")
-    print("╚════════════════════════════════════════════════════════════╝")
-    print(f"\n🎯 File di configurazione in uso: {config_path.resolve()}")
-    file_input_for_analysis = config.get('file_input')
-    print(f"📄 File di input per l'analisi: {file_input_for_analysis}")
-
-    if args.auto:
-        run_auto_optimization(config, config_path, file_input_for_analysis, args.first_run, sequential=args.sequential)
-    else:
-        # Modalità interattiva
-        print("\n⚙️  Configurazione di base (da config.json):")
-        for key, value in config.items():
-            if key != "commento":
-                print(f"   - {key}: {value}")
-        
-        params_to_test = get_user_parameters()
-        # Per la modalità interattiva, chiediamo il numero di trial
-        n_trials_interactive = int(input("\nQuanti trial vuoi eseguire per questa ottimizzazione? (es. 50): ") or 50)
-        
-        best_params = run_simulation(config, params_to_test, file_input_for_analysis, n_trials_interactive, show_progress=True, sequential=args.sequential)
-        update_config_file(config_path, best_params)
-
-if __name__ == "__main__":
-    main()
+            f.seek(0)
+            json.dump(config_data, f, indent=2, ensure_ascii=False)
+            f.truncate()
+        return True
+    except Exception as e:
+        print(f"❌ Errore durante l'aggiornamento del file di configurazione: {e}")
+        return False

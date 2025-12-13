@@ -23,7 +23,7 @@ body {
 .cashrec-banner img {
   max-width: 100%;
   height: auto;
-  max-height: 25%;
+  max-height: 200px; /* Ridotta l'altezza massima per un banner meno invasivo */
 }
 
 .cashrec-container {
@@ -166,3 +166,73 @@ select {
     color: white;
     background-color: var(--cashrec-red);
 }
+
+.cashrec-message-success {
+    padding: 10px;
+    border-radius: 4px;
+    color: white;
+    background-color: var(--cashrec-teal-green);
+}
+
+/* Stili per i Tab */
+.cashrec-tabs {
+    border-bottom: 2px solid #ccc;
+    margin-bottom: 20px;
+    display: flex;
+}
+
+.cashrec-tab-button {
+    background-color: transparent;
+    border: none;
+    padding: 10px 20px;
+    cursor: pointer;
+    font-size: 1.1em;
+    color: var(--cashrec-navy-blue);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px; /* Allinea con il bordo inferiore del container */
+}
+
+.cashrec-tab-button:hover {
+    background-color: #f0f0f0;
+}
+
+.cashrec-tab-button.active {
+    border-bottom: 2px solid var(--cashrec-teal-green);
+    font-weight: bold;
+}
+
+.cashrec-tab-content {
+    display: none;
+}
+
+/* Stili per il form di configurazione */
+.cashrec-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+}
+
+.cashrec-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: normal;
+}
+
+.cashrec-checkbox-label input {
+    width: auto;
+}
+
+.cashrec-mt-20 {
+    margin-top: 20px;
+}
+
+.cashrec-mt-10 {
+    margin-top: 10px;
+}
+
+#optimizer-progress-text {
+    font-style: italic;
+    color: var(--cashrec-navy-blue);
+}
+
