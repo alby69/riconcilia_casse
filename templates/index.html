@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="it">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CashRec Riconciliazione</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+    <header class="cashrec-banner">
+        <img src="{{ url_for('static', filename='img/cashrec-banner-it.svg') }}" alt="CashRec Banner">
+    </header>
+
+    <div class="cashrec-container">
+        <div class="cashrec-logo">
+            <img src="{{ url_for('static', filename='img/cashrec-logo-concept-1.svg') }}" alt="CashRec Logo">
+        </div>
+
+        <h1>Riconciliazione Cassa</h1>
+
+        <div class="cashrec-form-container">
+            <p class="cashrec-text-center cashrec-mb-20">
+                Seleziona un file Excel (.xlsx, .xls) con le colonne 'Data', 'Dare' e 'Avere'.
+            </p>
+            <form id="upload-form">
+                <div class="cashrec-form-group">
+                    <label for="file_input">Seleziona il file da elaborare</label>
+                    <input type="file" id="file_input" name="file_input" accept=".xlsx, .xls" required>
+                </div>
+                <div class="cashrec-btn-container">
+                    <button type="submit" id="submit-button" class="cashrec-btn cashrec-btn-primary">Elabora File</button>
+                </div>
+            </form>
+            
+            <div id="progress-container" class="cashrec-progress-container">
+                <div class="cashrec-progress-bar-container">
+                    <div id="progress-bar"></div>
+                </div>
+            </div>
+
+            <div id="message-container"></div>
+        </div>
+
+        <div id="results-container" class="cashrec-results-container">
+            <h4 class="cashrec-text-center cashrec-mb-20">Riepilogo Elaborazione</h4>
+            <pre id="log-output"></pre>
+            <div id="download-button-container" class="cashrec-btn-container">
+                <!-- Il pulsante di download verrà inserito qui -->
+            </div>
+        </div>
+
+        <footer class="cashrec-footer">
+            <small>CashRec Reconciliation Service v2.0</small>
+        </footer>
+    </div>
+
+    <script>
+        const form = document.getElementById('upload-form');
+        const submitButton = document.getElementById('submit-button');
+        const messageContainer = document.getElementById('message-container');
+        const progressContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress-bar');
+        const resultsContainer = document.getElementById('results-container');
+        const logOutput = document.getElementById('log-output');
+        const downloadButtonContainer = document.getElementById('download-button-container');
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            messageContainer.innerHTML = '';
+            resultsContainer.style.display = 'none';
+            logOutput.textContent = '';
+            downloadButtonContainer.innerHTML = '';
+
+            const formData = new FormData(form);
+            if (!formData.get('file_input').name) {
+                displayMessage('Per favore, seleziona un file.', 'danger');
+                return;
+            }
+
+            submitButton.disabled = true;
+            submitButton.textContent = 'Elaborazione...';
+            progressContainer.style.display = 'block';
+
+            let progress = 0;
+            const interval = setInterval(() => {
+                progress += 5;
+                if (progress <= 95) {
+                    progressBar.style.width = progress + '%';
+                }
+            }, 200);
+
+            try {
+                const response = await fetch('/processa', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                clearInterval(interval);
+                progressBar.style.width = '100%';
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || 'Errore del server.');
+                }
+                
+                if (result.version !== '3.0') {
+                    throw new Error('Il backend non è aggiornato. Per favore, arresta (Ctrl+C) e riavvia il server python.');
+                }
+
+                logOutput.textContent = result.log_content;
+                const downloadLink = document.createElement('a');
+                downloadLink.href = result.download_url;
+                downloadLink.className = 'cashrec-btn cashrec-btn-primary';
+                downloadLink.textContent = 'Scarica Report Excel';
+                downloadButtonContainer.appendChild(downloadLink);
+                resultsContainer.style.display = 'block';
+
+            } catch (error) {
+                displayMessage(error.message, 'danger');
+                progressContainer.style.display = 'none';
+            } finally {
+                setTimeout(() => {
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Elabora File';
+                    progressContainer.style.display = 'none';
+                    progressBar.style.width = '0%';
+                }, 500);
+            }
+        });
+
+        function displayMessage(message, type = 'info') {
+            const messageClass = type === 'danger' ? 'cashrec-message-danger' : 'cashrec-message-info';
+            messageContainer.innerHTML = `<div class="${messageClass}">${message}</div>`;
+        }
+    </script>
+
+</body>
+</html>

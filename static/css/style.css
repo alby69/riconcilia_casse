@@ -1,0 +1,168 @@
+/* Palette Colori: Opzione 1 (Professionale) */
+
+:root {
+  --cashrec-navy-blue: #1a365d;
+  --cashrec-teal-green: #48bb78;
+  --cashrec-light-blue: #f0f9ff;
+  --cashrec-red: #e53e3e;
+}
+
+body {
+  font-family: sans-serif;
+  background-color: var(--cashrec-light-blue);
+  color: var(--cashrec-navy-blue);
+  margin: 0;
+}
+
+.cashrec-banner {
+  background-color: var(--cashrec-light-blue);
+  padding: 10px;
+  text-align: center;
+}
+
+.cashrec-banner img {
+  max-width: 100%;
+  height: auto;
+  max-height: 25%;
+}
+
+.cashrec-container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.cashrec-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.cashrec-logo img {
+  max-width: 100px;
+  margin-right: 20px;
+}
+
+h1 {
+  font-size: 2em;
+  text-align: center;
+}
+
+.cashrec-form-container {
+  background-color: white;
+  padding: 40px;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.cashrec-form-group {
+  margin-bottom: 20px;
+}
+
+label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: bold;
+}
+
+input[type="file"],
+select {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.cashrec-btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1em;
+}
+
+.cashrec-btn-primary {
+  background-color: var(--cashrec-teal-green);
+  color: white;
+}
+
+.cashrec-btn-danger {
+  background-color: var(--cashrec-red);
+  color: white;
+}
+
+.cashrec-btn-container {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+}
+
+.cashrec-text-center {
+    text-align: center;
+}
+
+.cashrec-mb-20 {
+    margin-bottom: 20px;
+}
+
+.cashrec-progress-container {
+    display: none;
+    margin-top: 20px;
+}
+
+.cashrec-progress-bar-container {
+    height: 10px;
+    background-color: var(--cashrec-light-blue);
+    border-radius: 5px;
+}
+
+#progress-bar {
+    width: 0%;
+    height: 10px;
+    background-color: var(--cashrec-teal-green);
+    border-radius: 5px;
+}
+
+.cashrec-results-container {
+    display: none;
+    margin-top: 40px;
+    background-color: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+#log-output {
+    background-color: var(--cashrec-light-blue);
+    padding: 15px;
+    border-radius: 4px;
+}
+
+.cashrec-footer {
+    text-align: center;
+    color: var(--cashrec-navy-blue);
+    margin-top: 40px;
+}
+
+#message-container {
+    margin-top: 20px;
+}
+
+#download-button-container {
+    margin-top: 20px;
+}
+
+.cashrec-message-info {
+    padding: 10px;
+    border-radius: 4px;
+    color: white;
+    background-color: var(--cashrec-navy-blue);
+}
+
+.cashrec-message-danger {
+    padding: 10px;
+    border-radius: 4px;
+    color: white;
+    background-color: var(--cashrec-red);
+}

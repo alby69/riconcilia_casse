@@ -1,175 +1,285 @@
-"""
-Batch Processor - Wrapper per l'elaborazione multipla di file.
-Questo script orchestra l'elaborazione, chiamando `main.py` per ogni file.
-"""
-
-from pathlib import Path
-from datetime import datetime
-import json
-import shutil
-import sys
 import os
-from tqdm import tqdm
-import pandas as pd
+import json
+import argparse
 import subprocess
-import concurrent.futures
+import sys
 
-def run_main_py_worker(file_path, config, output_dir):
-    """Funzione eseguita da ogni worker per lanciare main.py come subprocess."""
-    output_file = output_dir / f"risultato_{file_path.stem}.xlsx"
-    command = [
-        sys.executable, 'main.py',
-        '--input', str(file_path), '--output', str(output_file),
-        '--tolleranza', str(config['tolleranza']), '--giorni-finestra', str(config['giorni_finestra']),
-        '--max-combinazioni', str(config['max_combinazioni']), '--soglia-residui', str(config['soglia_residui']),
-        '--giorni-finestra-residui', str(config['giorni_finestra_residui']), '--silent'
-    ]
-    return subprocess.run(command, capture_output=True, text=True)
+from datetime import datetime
+import time
 
-def run_main_py_sequentially(file_path, config, output_dir):
-    """Esegue main.py in modo sequenziale per mostrare l'output dettagliato."""
-    print(f"\n{'='*60}")
-    print(f"📂 Elaborazione dettagliata di: {file_path.name}")
-    print(f"{'='*60}")
-    # Chiama la funzione main direttamente, ma senza l'argomento --silent
-    # Questo richiede di simulare gli argomenti che argparse si aspetterebbe
-    from main import main as main_runner
+try:
+    # Add the directory of convert_to_feather.py to the Python path
+    # This assumes batch.py and convert_to_feather.py are in the same directory
+    sys.path.append(os.path.dirname(__file__))
+    from convert_to_feather import convert_excel_to_feather
+except ImportError:
+    print("Errore: impossibile importare 'convert_to_feather'. Assicurati che il file 'convert_to_feather.py' sia nella stessa directory.")
+    sys.exit(1)
+
+def process_single_file(filename, input_dir, output_dir, base_config):
+    """
+    Elabora un singolo file: converte in feather, esegue l'ottimizzatore e la riconciliazione.
+    Restituisce le statistiche e il tempo di esecuzione.
+    """
+    start_time = time.time()
+    file_path = os.path.join(input_dir, filename)
+    file_base_name, file_ext = os.path.splitext(filename)
+
+    current_output_folder = os.path.join(output_dir, file_base_name)
+    os.makedirs(current_output_folder, exist_ok=True)
+
+    print(f"\n--- Processing file: {filename} ---")
+
+    # Step 1: Conversione a Feather (se necessario)
+    processed_input_path = _handle_file_conversion(file_path, file_base_name, file_ext, current_output_folder)
+    if not processed_input_path:
+        return None, 0
+
+    # Step 2: Preparazione della configurazione locale
+    local_config_path = _prepare_local_config(processed_input_path, file_base_name, current_output_folder, base_config)
+    if not local_config_path:
+        return None, 0
+
+    # Step 3: Esecuzione dell'ottimizzatore
+    print(f"Avvio ottimizzazione parametri per '{filename}'...")
+    optimizer_success = _run_optimizer(local_config_path, filename, sequential=getattr(process_single_file, 'sequential_optimizer', False))
+    if not optimizer_success:
+        return None, 0
+
+    # Step 4: Esecuzione della riconciliazione finale
+    print(f"Avvio riconciliazione finale per '{filename}'...")
+    stats = _run_main_reconciliation(local_config_path, filename)
     
-    output_file = output_dir / f"risultato_{file_path.stem}.xlsx"
-    
-    # Simula l'oggetto 'args' di argparse
-    class Args:
-        input = str(file_path)
-        output = str(output_file)
-        tolleranza = config['tolleranza']
-        giorni_finestra = config['giorni_finestra']
-        max_combinazioni = config['max_combinazioni']
-        soglia_residui = config['soglia_residui']
-        giorni_finestra_residui = config['giorni_finestra_residui']
-        silent = False # Mostra l'output
+    if stats:
+        stats['original_filename'] = filename
 
+    end_time = time.time()
+    execution_time = end_time - start_time
+
+    if stats:
+        print(f"Completato '{filename}' in {execution_time:.2f} secondi.")
+    
+    return stats, execution_time
+
+def process_single_file_wrapper(args):
+    return process_single_file(*args)
+
+def run_batch(sequential_optimizer=False):
+    input_dir = 'input/'
+    output_dir = 'output/'
+    base_config_path = 'config.json'
+
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Load base config
     try:
-        main_runner(Args())
-        return True, ""
-    except Exception as e:
-        return False, str(e)
-
-class BatchProcessor:
-    """Orchestra l'elaborazione in batch chiamando main.py per ogni file."""
-    
-    def __init__(self, config=None):
-        self.config = config if config is not None else {}
-        self.cartella_input = Path(self.config['cartella_input'])
-        self.cartella_output = Path(self.config['cartella_output'])
-        
-    def crea_cartelle(self):
-        self.cartella_output.mkdir(exist_ok=True)
-        log_dir = self.cartella_output / 'logs'
-        if log_dir.exists():
-            shutil.rmtree(log_dir)
-        log_dir.mkdir(exist_ok=True)
-        
-    def trova_files(self):
-        if not self.cartella_input.exists():
-            raise FileNotFoundError(f"Cartella '{self.cartella_input}' non trovata!")
-        
-        patterns = self.config['pattern'] if isinstance(self.config['pattern'], list) else [self.config['pattern']]
-        files = []
-        for p in patterns:
-            files.extend(self.cartella_input.glob(p))
-        files = [f for f in files if not f.name.startswith('~')]
-        return sorted(files)
-    
-    def elabora_tutti(self):
-        print("""
-╔════════════════════════════════════════════════════════════╗
-║          BATCH PROCESSOR - ELABORAZIONE MULTIPLA           ║
-╚════════════════════════════════════════════════════════════╝
-        """)
-        self.crea_cartelle()
-        print(f"🔍 Ricerca file in: {self.cartella_input}")
-        files = self.trova_files()
-        
-        if not files:
-            print(f"⚠️  Nessun file trovato con i pattern specificati in: {self.cartella_input}")
-            return
-        print(f"✓ Trovati {len(files)} file da elaborare\n")
-        
-        print(f"⚙️ CONFIGURAZIONE:")
-        for key, value in self.config.items():
-            if key not in ['cartella_input', 'cartella_output', 'pattern', 'commento']:
-                print(f"   - {key}: {value}")
-        print(f"   - Output: {self.cartella_output}/")
-        
-        errori = []
-        
-        # Esegui tutti i file tranne l'ultimo in parallelo (in background)
-        if len(files) > 1:
-            files_in_parallelo = files[:-1]
-            print(f"\n🚀 Avvio elaborazione parallela di {len(files_in_parallelo)} file su {os.cpu_count()} core...")
-            with concurrent.futures.ProcessPoolExecutor() as executor:
-                futures = {executor.submit(run_main_py_worker, file_path, self.config, self.cartella_output): file_path for file_path in files_in_parallelo}
-                
-                for future in tqdm(concurrent.futures.as_completed(futures), total=len(files_in_parallelo), desc="Avanzamento Batch"):
-                    result = future.result()
-                    if result.returncode != 0:
-                        file_path = futures[future]
-                        errori.append((file_path.name, result.stderr))
-
-        # Esegui l'ultimo file in modo sequenziale per mostrare il progresso dettagliato
-        if files:
-            ultimo_file = files[-1]
-            success, error_msg = run_main_py_sequentially(ultimo_file, self.config, self.cartella_output)
-            if not success:
-                errori.append((ultimo_file.name, error_msg))
-        
-        print("\n\n🎉 Processo Batch completato.")
-        print(f"💾 I risultati sono stati salvati singolarmente nella cartella: {self.cartella_output}")
-        if errori:
-            print("\n⚠️  Si sono verificati degli errori durante l'elaborazione:")
-            for filename, stderr in errori:
-                print(f"  - File: {filename}\n    Errore: {str(stderr)[:200]}...")
-
-
-def carica_config():
-    """Carica la configurazione da config.json o usa i valori di default."""
-    config_file = 'config.json'
-    
-    # Configurazione di default
-    default_config = {
-        'tolleranza': 0.01,
-        'giorni_finestra': 30,
-        'max_combinazioni': 6,
-        'giorni_finestra_residui': 90,
-        'soglia_residui': 100,
-        'cartella_input': 'input',
-        'cartella_output': 'output',
-        'pattern': ['*.xlsx', '*.csv']
-    }
-    
-    try:
-        with open(config_file, 'r', encoding='utf-8') as f:
-            print(f"📄 Caricamento configurazione da '{config_file}'...")
-            user_config = json.load(f)
-            # I valori nel file JSON sovrascrivono quelli di default
-            default_config.update(user_config)
-            print("✓ Configurazione caricata con successo.")
-        return default_config
+        with open(base_config_path, 'r', encoding='utf-8') as f:
+            base_config = json.load(f)
     except FileNotFoundError:
-        print(f"⚠️  File '{config_file}' non trovato. Utilizzo configurazione di default.")
-        return default_config
-    except json.JSONDecodeError as e:
-        print(f"❌ ERRORE: Formato JSON non valido in '{config_file}': {e}")
-        print("Il programma verrà terminato.")
-        sys.exit(1) # Termina lo script in caso di errore JSON
+        print(f"Error: Base config file '{base_config_path}' not found.")
+        sys.exit(1)
+    except json.JSONDecodeError:
+        print(f"Error: Could not decode JSON from '{base_config_path}'. Check file format.")
+        sys.exit(1)
 
+    # List files in input directory
+    input_files = [f for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f))]
 
-def main():
-    """Funzione principale"""
-    config = carica_config()
-    processor = BatchProcessor(config)
-    processor.elabora_tutti()
+    if not input_files:
+        print(f"No files found in '{input_dir}'. Please place your Excel or CSV files there.")
+        return
 
+    all_stats = []
+
+    for filename in input_files:
+        # Imposta l'attributo per passarlo alla funzione
+        process_single_file.sequential_optimizer = sequential_optimizer
+        file_stats, exec_time = process_single_file(filename, input_dir, output_dir, base_config)
+        if file_stats:
+            file_stats['execution_time_seconds'] = exec_time
+            all_stats.append(file_stats)
+
+    # --- Step 5: Genera, stampa e salva il riepilogo globale ---
+    _generate_and_save_summary(all_stats, output_dir)
+
+def _handle_file_conversion(file_path, file_base_name, file_ext, output_folder, sequential_optimizer=False):
+    """Converte file Excel in Feather per ottimizzare le performance."""
+    if file_ext.lower() in ['.xlsx', '.xls']:
+        print(f"  - Conversione in formato Feather per performance...")
+        feather_output_path = os.path.join(output_folder, f"{file_base_name}.feather")
+        try:
+            processed_path = convert_excel_to_feather(file_path, feather_path=feather_output_path, force_conversion=True)
+            print(f"  - File convertito utilizzato: {processed_path}")
+            return processed_path
+        except Exception as e:
+            print(f"Errore durante la conversione di '{file_base_name}{file_ext}' in Feather: {e}")
+            return None
+    elif file_ext.lower() in ['.feather', '.csv']:
+        print(f"  - Rilevato file '{file_base_name}{file_ext}'. Nessuna conversione necessaria.")
+        return file_path
+    else:
+        print(f"Attenzione: Tipo di file non supportato '{file_ext}' per '{file_base_name}{file_ext}'. Salto il file.")
+        return None
+
+def _prepare_local_config(input_path, file_base_name, output_folder, base_config):
+    """Prepara e salva un file config.json locale per l'elaborazione corrente."""
+    local_config_path = os.path.join(output_folder, 'config.json')
+
+    # --- LOGICA EVOLUTIVA ---
+    # Se esiste già una configurazione locale ottimizzata, usa quella come base.
+    # Altrimenti, parti dalla configurazione di base.
+    if os.path.exists(local_config_path):
+        print(f"  - Trovata configurazione ottimizzata precedente. La uso come base per la nuova ottimizzazione.")
+        with open(local_config_path, 'r', encoding='utf-8') as f:
+            local_config = json.load(f)
+    else:
+        print(f"  - Nessuna configurazione precedente trovata. Parto dalla configurazione di base.")
+        local_config = base_config.copy()
+
+    # Aggiorna sempre i percorsi di input/output per la sessione corrente
+    local_config['file_input'] = input_path
+    reconciliation_output_filename = f"risultato_{file_base_name}.xlsx"
+    local_config['file_output'] = os.path.join(output_folder, reconciliation_output_filename)
+
+    try:
+        with open(local_config_path, 'w', encoding='utf-8') as f:
+            json.dump(local_config, f, indent=4)
+        return local_config_path
+    except IOError as e:
+        print(f"Errore nel salvataggio della configurazione locale per '{file_base_name}': {e}")
+        return None
+
+def _run_optimizer(config_path, filename, sequential=False):
+    """Esegue lo script optimizer.py."""
+    try:
+        command = ['python', '-u', 'optimizer.py', '--config', config_path, '--auto']
+        if sequential:
+            command.append('--sequential')
+            print("   - Esecuzione ottimizzatore in modalità SEQUENZIALE.")
+
+        process = subprocess.Popen(command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8'
+        )
+        for line in iter(process.stdout.readline, ''):
+            print(line, end='')
+        process.wait()
+        if process.returncode != 0:
+            print(f"\nErrore durante l'esecuzione dell'ottimizzatore per '{filename}'. Codice di uscita: {process.returncode}.")
+            return False
+        return True
+    except FileNotFoundError:
+        print("Errore: 'optimizer.py' non trovato. Assicurati che sia nella stessa directory di 'batch.py'.")
+        return False
+    except Exception as e:
+        print(f"Errore imprevisto durante l'esecuzione di optimizer.py per '{filename}': {e}")
+        return False
+
+def _run_main_reconciliation(config_path, filename):
+    """Esegue lo script main.py e recupera le statistiche in formato JSON."""
+    try:
+        main_result = subprocess.run(
+            ['python', 'main.py', '--config', config_path, '--silent'],
+            capture_output=True, text=True, check=True, encoding='utf-8'
+        )
+        
+        # Cerca la riga JSON nell'output
+        stats_line = None
+        for line in reversed(main_result.stdout.splitlines()):
+            stripped_line = line.strip()
+            if stripped_line.startswith('{') and stripped_line.endswith('}'):
+                stats_line = stripped_line
+                break
+        
+        if not stats_line:
+            print(f"Attenzione: Nessuna statistica JSON trovata nell'output di main.py per '{filename}'.")
+            print(f"Output ricevuto:\n{main_result.stdout}")
+            return None
+
+        try:
+            file_stats = json.loads(stats_line)
+            return file_stats
+        except json.JSONDecodeError:
+            print(f"Attenzione: Impossibile decodificare le statistiche JSON dall'output di main.py per '{filename}'.")
+            print(f"Riga JSON rilevata: {stats_line}")
+            return None
+
+    except subprocess.CalledProcessError as e:
+        print(f"Errore durante l'esecuzione della riconciliazione principale per '{filename}': {e}")
+        print(f"Stderr:\n{e.stderr}")
+        return None
+    except FileNotFoundError:
+        print("Errore: 'main.py' non trovato. Assicurati che sia nella stessa directory di 'batch.py'.")
+        return None
+    except Exception as e:
+        print(f"Errore imprevisto durante l'esecuzione di main.py per '{filename}': {e}")
+        return None
+
+def _generate_and_save_summary(all_stats, output_dir):
+    """Genera il riepilogo, lo stampa a console e lo salva in un file di log."""
+    summary_lines = []
+    separator = "="*50
+
+    summary_lines.append(separator)
+    summary_lines.append("GLOBAL RECONCILIATION SUMMARY")
+    summary_lines.append(separator)
+
+    if all_stats:
+        total_time = sum(s.get('execution_time_seconds', 0) for s in all_stats)
+        for stats in all_stats:
+            summary_lines.append(f"\nFile: {stats.get('original_filename', 'N/A')}")
+            summary_lines.append(f"  Tempo di esecuzione: {stats.get('execution_time_seconds', 0):.2f} secondi")
+            summary_lines.append(f"  Incassi (DARE): {stats.get('Incassi (DARE) utilizzati', 'N/A')} / {stats.get('Totale Incassi (DARE)', 'N/A')} ({stats.get('% Incassi (DARE) utilizzati', 'N/A')})")
+            summary_lines.append(f"  Versamenti (AVERE): {stats.get('Versamenti (AVERE) riconciliati', 'N/A')} / {stats.get('Totale Versamenti (AVERE)', 'N/A')} ({stats.get('% Versamenti (AVERE) riconciliati', 'N/A')})")
+            summary_lines.append(f"  % Importo DARE utilizzato: {stats.get('_raw_perc_dare_importo', 0):.2f}%")
+            summary_lines.append(f"  % Importo AVERE utilizzato: {stats.get('_raw_perc_avere_importo', 0):.2f}%")
+            summary_lines.append(f"  Sbilancio finale: {stats.get('Delta finale (DARE - AVERE)', 'N/A')}")
+
+            file_base_name, _ = os.path.splitext(stats.get('original_filename', ''))
+            local_config_path = os.path.join(output_dir, file_base_name, 'config.json')
+            try:
+                with open(local_config_path, 'r') as f:
+                    optimized_config = json.load(f)
+                
+                summary_lines.append("  Parametri Ottimali Usati:")
+                summary_lines.append(f"    - giorni_finestra: {optimized_config.get('giorni_finestra')}")
+                summary_lines.append(f"    - max_combinazioni: {optimized_config.get('max_combinazioni')}")
+                summary_lines.append(f"    - giorni_finestra_residui: {optimized_config.get('giorni_finestra_residui')}")
+                summary_lines.append(f"    - soglia_residui: {optimized_config.get('soglia_residui')}")
+                summary_lines.append(f"    - sorting_strategy: {optimized_config.get('sorting_strategy')}")
+                summary_lines.append(f"    - search_direction: {optimized_config.get('search_direction')}")
+                summary_lines.append(f"    - tolleranza: {optimized_config.get('tolleranza')}")
+            except (FileNotFoundError, json.JSONDecodeError):
+                summary_lines.append("  Non è stato possibile leggere i parametri ottimali dal file di configurazione locale.")
+        
+        summary_lines.append("\n" + "-"*50)
+        summary_lines.append(f"Tempo totale di esecuzione batch: {total_time:.2f} secondi")
+    else:
+        summary_lines.append("No files were successfully processed or no statistics were collected.")
+    
+    summary_lines.append(separator)
+    
+    summary_text = "\n".join(summary_lines)
+    print("\n" + summary_text) # Stampa a console
+
+    # Salva su file di log
+    log_dir = 'log'
+    os.makedirs(log_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_filename = os.path.join(log_dir, f"{timestamp}_summary.log")
+    with open(log_filename, 'w', encoding='utf-8') as f:
+        f.write(summary_text)
+    print(f"\n📄 Riepilogo salvato in: {log_filename}")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Esegue il processo di riconciliazione in batch su una cartella di file.")
+    parser.add_argument(
+        '--sequential-optimizer',
+        action='store_true',
+        help="Forza l'esecuzione dell'ottimizzatore in modalità sequenziale (un processo alla volta) per evitare un uso eccessivo della CPU."
+    )
+    args = parser.parse_args()
+    run_batch(sequential_optimizer=args.sequential_optimizer)

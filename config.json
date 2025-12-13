@@ -1,6 +1,7 @@
 {
   "tolleranza": 0.01,
   "giorni_finestra": 10,
+  "max_combinazioni": 6,
   "cartella_input": "input",
   "cartella_output": "output",
   "pattern": [
@@ -18,9 +19,6 @@
     "Avere": "VERSAMENTI",
     "Incassi": "INCASSI",
     "Versamenti": "VERSAMENTI"
-  },
-  "algoritmo": {
-    "max_combinazioni": 6
   },
   "residui": {
     "attiva": true,
