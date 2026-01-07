@@ -133,11 +133,8 @@ def _run_single_simulation_worker(args):
     execution_time = end_time - start_time
 
     if stats:
-        perc_dare_str = stats.get('% Incassi (DARE) utilizzati', '0.0%')
-        perc_avere_str = stats.get('% Versamenti (AVERE) riconciliati', '0.0%')
-
-        perc_dare = float(str(perc_dare_str).replace('%', '')) if perc_dare_str else 0.0
-        perc_avere = float(str(perc_avere_str).replace('%', '')) if perc_avere_str else 0.0
+        perc_dare = stats.get('_raw_perc_dare_importo', 0.0)
+        perc_avere = stats.get('_raw_perc_avere_importo', 0.0)
 
         # Restituisce tutte le informazioni necessarie al processo principale
         return {
@@ -194,10 +191,8 @@ def run_simulation(base_config, optimizer_config_ranges, file_input, n_trials, s
 
         # 3. Calcola e restituisci il punteggio da massimizzare
         if stats:
-            perc_dare_str = stats.get('% Incassi (DARE) utilizzati', '0.0%')
-            perc_avere_str = stats.get('% Versamenti (AVERE) riconciliati', '0.0%')
-            perc_dare = float(str(perc_dare_str).replace('%', ''))
-            perc_avere = float(str(perc_avere_str).replace('%', ''))
+            perc_dare = stats.get('_raw_perc_dare_importo', 0.0)
+            perc_avere = stats.get('_raw_perc_avere_importo', 0.0)
             
             # Vogliamo massimizzare la somma delle percentuali
             return perc_dare + perc_avere

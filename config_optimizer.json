@@ -36,6 +36,14 @@
       "min": 1.00,
       "max": 2.00,
       "step": 0.10
+    },
+    "sorting_strategy": {
+      "type": "categorical",
+      "values": ["date", "amount"]
+    },
+    "search_direction": {
+      "type": "categorical",
+      "values": ["past_only", "future_only", "both"]
     }
   }
 }

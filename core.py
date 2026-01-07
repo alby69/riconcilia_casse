@@ -8,6 +8,8 @@ import numpy as np
 warnings.filterwarnings('ignore')
 from tqdm import tqdm
 import sys
+from openpyxl.styles import PatternFill # Necessario per la colorazione del report
+from openpyxl.chart import BarChart, Reference # Necessario per i grafici
 
 # --- MODIFICA: Gestione di Numba come dipendenza opzionale ---
 try:
@@ -81,6 +83,23 @@ class RiconciliatoreContabile:
         df['Data'] = pd.to_datetime(df['Data'], errors='coerce', dayfirst=True)
         df.dropna(subset=['Data'], inplace=True) # Rimuove righe con date non valide
 
+        # --- CHECK DATE FUTURE ---
+        today = datetime.now()
+        future_rows = df[df['Data'] > today]
+        if not future_rows.empty:
+            print(f"\n⚠️  ATTENZIONE: Trovati {len(future_rows)} movimenti con data futura (rispetto a {today.strftime('%d/%m/%Y')})!")
+            print(f"    Esempio: {future_rows.iloc[0]['Data'].strftime('%d/%m/%Y')} (Riga {future_rows.index[0] + 2})")
+
+        # --- PULIZIA IMPORTI ROBUSTA ---
+        # Rimuove simboli di valuta e spazi che potrebbero far fallire la conversione
+        for col in ['Dare', 'Avere']:
+            if df[col].dtype == object:
+                df[col] = df[col].astype(str).str.replace('€', '', regex=False) \
+                                             .str.replace(' ', '', regex=False)
+                # Gestione manuale formato italiano se necessario (1.000,00 -> 1000.00)
+                # Si applica solo se la stringa contiene virgola e non è già stata parsata
+                df[col] = df[col].apply(lambda x: x.replace('.', '').replace(',', '.') if isinstance(x, str) and ',' in x else x)
+
         # Converti 'Dare' e 'Avere' in numerico. Se sono già stati letti correttamente,
         # questa operazione sarà veloce. Se sono ancora stringhe, pd.to_numeric li gestirà.
         df['Dare'] = pd.to_numeric(df['Dare'], errors='coerce')
@@ -108,11 +127,15 @@ class RiconciliatoreContabile:
         self.avere_df = df[df['Avere'] != 0][['indice_orig', 'Data', 'Avere']].copy()
        
         if self.sorting_strategy == "date":
-            return self.dare_df.sort_values('Data', ascending=True), self.avere_df.sort_values('Data', ascending=True)
+            self.dare_df = self.dare_df.sort_values('Data', ascending=True)
+            self.avere_df = self.avere_df.sort_values('Data', ascending=True)
         elif self.sorting_strategy == "amount":
-            return self.dare_df.sort_values('Dare', ascending=False), self.avere_df.sort_values('Avere', ascending=False)
+            self.dare_df = self.dare_df.sort_values('Dare', ascending=False)
+            self.avere_df = self.avere_df.sort_values('Avere', ascending=False)
         else:
             raise ValueError(f"Strategia di ordinamento non valida: '{self.sorting_strategy}'. Usare 'date' o 'amount'.")
+            
+        return self.dare_df, self.avere_df
 
     def _trova_abbinamenti(self, dare_row, avere_candidati_np, avere_indices_map, giorni_finestra, max_combinazioni, enable_best_fit=False):
         """Logica interna per trovare un abbinamento per un singolo DARE. Riceve candidati pre-filtrati per data."""
@@ -292,7 +315,7 @@ class RiconciliatoreContabile:
             max_combinazioni=max_combinazioni,
             abbinamenti_list=abbinamenti_list,
             title=title,
-            search_direction="past_only", # La passata AVERE->DARE cerca solo nel passato
+            search_direction=self.search_direction, # Usa la direzione principale dalla configurazione
             find_function=self._trova_abbinamenti_dare,
             verbose=verbose,
             enable_best_fit=enable_best_fit
@@ -307,7 +330,7 @@ class RiconciliatoreContabile:
             return
 
         if verbose:
-            print(f"\n{title}...")
+            print(f"\n{title} (Direzione: {search_direction})...")
 
         # Prepara le liste di record una sola volta
         records_da_processare = df_da_processare.to_dict('records')
@@ -338,7 +361,6 @@ class RiconciliatoreContabile:
             if candidati_prefiltrati:
                 match = find_function(record_row, candidati_prefiltrati, None, giorni_finestra, max_combinazioni, enable_best_fit=enable_best_fit)
                 if match:
-                    matches.append(match)
                     # Gestione dello split (Best Fit)
                     residuo = match.get('residuo', 0)
                     if residuo > 0:
@@ -346,10 +368,32 @@ class RiconciliatoreContabile:
                         nuovo_movimento = self._crea_movimento_residuo(record_row, residuo, col_da_processare)
                         nuovi_residui.append(nuovo_movimento)
 
-        if verbose: print(f"\n   - Trovati {len(matches)} potenziali abbinamenti. Registrazione in corso...")
-        for match in matches:
-            match['pass_name'] = title
-            self._registra_abbinamento(match, abbinamenti_list)
+                        # Aggiorna l'importo della riga originale per riflettere solo la parte riconciliata
+                        # Questo corregge le statistiche evitando la duplicazione degli importi (Originale + Residuo)
+                        idx_orig = record_row['indice_orig']
+                        new_amount = record_row[col_da_processare] - residuo
+                        
+                        if col_da_processare == 'Avere':
+                            self.avere_df.loc[self.avere_df['indice_orig'] == idx_orig, 'Avere'] = new_amount
+                            # FIX REPORT: Aggiorna anche il match per mostrare solo la parte usata nell'Excel
+                            match['avere_importi'] = [new_amount]
+                            match['somma_avere'] = new_amount
+                            match['differenza'] = abs(match.get('somma_dare', 0) - new_amount)
+                        elif col_da_processare == 'Dare':
+                            self.dare_df.loc[self.dare_df['indice_orig'] == idx_orig, 'Dare'] = new_amount
+                            # FIX REPORT
+                            match['dare_importi'] = [new_amount]
+                            match['somma_dare'] = new_amount
+                            match['differenza'] = abs(match.get('somma_avere', 0) - new_amount)
+
+                    # --- FIX CRITICO: REGISTRAZIONE IMMEDIATA ---
+                    # Registra subito l'abbinamento per marcare gli indici come usati ed evitare
+                    # che vengano riutilizzati nella stessa passata (Double Spending).
+                    match['pass_name'] = title
+                    self._registra_abbinamento(match, abbinamenti_list)
+                    matches.append(match) # Mantiene la lista solo per il conteggio finale
+
+        if verbose: print(f"\n   - Registrati {len(matches)} abbinamenti.")
             
         # Aggiungi i residui generati al DataFrame originale per essere processati nelle passate successive
         if nuovi_residui:
@@ -398,6 +442,15 @@ class RiconciliatoreContabile:
         # Filtra i DARE che non sono ancora stati usati
         dare_da_processare = dare_df[~dare_df['indice_orig'].isin(self.used_dare_indices)].copy() if dare_df is not None and not dare_df.empty else pd.DataFrame()
         
+        # --- FIX: Inversione logica della direzione per la passata DARE->AVERE ---
+        # Se la strategia globale è "past_only" (DARE prima di AVERE), 
+        # quando partiamo da DARE dobbiamo cercare AVERE nel futuro ("future_only").
+        direction_for_pass2 = self.search_direction
+        if self.search_direction == "past_only":
+            direction_for_pass2 = "future_only"
+        elif self.search_direction == "future_only":
+            direction_for_pass2 = "past_only"
+        
         self._esegui_passata_generica(
             df_da_processare=dare_da_processare,
             df_candidati=avere_df,
@@ -408,12 +461,12 @@ class RiconciliatoreContabile:
             max_combinazioni=max_combinazioni,
             abbinamenti_list=abbinamenti_list,
             title=title,
-            search_direction=self.search_direction, # Usa la direzione principale
+            search_direction=direction_for_pass2, # Usa la direzione corretta (invertita)
             find_function=self._trova_abbinamenti,
             verbose=verbose
         )
 
-    def _riconcilia(self, dare_df, avere_df, verbose=True):
+    def _riconcilia(self, verbose=True):
         """Orchestra il processo di riconciliazione in più passate."""
         
         abbinamenti = []
@@ -423,7 +476,7 @@ class RiconciliatoreContabile:
         # Priorità massima dopo i match 1-a-1 impliciti.
         # ABILITATO BEST FIT: Se non trova match esatto, cerca di riempire il versamento parzialmente.
         self._esegui_passata_riconciliazione_dare(
-            dare_df, avere_df,
+            self.dare_df, self.avere_df,
             self.giorni_finestra,
             self.max_combinazioni,
             abbinamenti,
@@ -435,7 +488,7 @@ class RiconciliatoreContabile:
         # --- Passata 2: Riconciliazione Standard Inversa (1 Incasso -> Molti Versamenti) ---
         # Utile se un incasso molto grande viene versato in più tranche (meno comune ma possibile).
         self._esegui_passata_riconciliazione(
-            dare_df, avere_df,
+            self.dare_df, self.avere_df,
             self.giorni_finestra,
             self.max_combinazioni,
             abbinamenti,
@@ -446,7 +499,7 @@ class RiconciliatoreContabile:
         # --- Passata 3: Analisi Residui (Finestra allargata) ---
         # Tenta di recuperare ciò che è rimasto fuori con una finestra più ampia
         self._esegui_passata_riconciliazione_dare(
-            dare_df, avere_df,
+            self.dare_df, self.avere_df,
             self.giorni_finestra_residui,
             self.max_combinazioni,
             abbinamenti,
@@ -456,8 +509,8 @@ class RiconciliatoreContabile:
         )
 
         # AGGIUNTA: Aggiorna le colonne 'usato' nei DataFrame originali una sola volta alla fine
-        dare_df['usato'] = dare_df['indice_orig'].isin(self.used_dare_indices)
-        avere_df['usato'] = avere_df['indice_orig'].isin(self.used_avere_indices)
+        self.dare_df['usato'] = self.dare_df['indice_orig'].isin(self.used_dare_indices)
+        self.avere_df['usato'] = self.avere_df['indice_orig'].isin(self.used_avere_indices)
 
         # Colonne attese nel DataFrame finale
         final_columns = [
@@ -487,7 +540,7 @@ class RiconciliatoreContabile:
         else:
             df_abbinamenti = pd.DataFrame(columns=final_columns)
             
-        return dare_df, avere_df, df_abbinamenti
+        return self.dare_df, self.avere_df, df_abbinamenti
 
     def _registra_abbinamento(self, match, abbinamenti_list): # Rimosso dare_df, avere_df dagli argomenti
         """Marca gli elementi come 'usati' e registra l'abbinamento."""
@@ -566,17 +619,47 @@ class RiconciliatoreContabile:
         
         return stats.reset_index()
 
+    def _verifica_quadratura_totali(self, tot_dare_orig, tot_avere_orig, verbose=True):
+        """Verifica che il totale finale (usato + residuo) corrisponda al totale originale."""
+        if self.dare_df is None or self.avere_df is None:
+            return
+
+        tot_dare_final = self.dare_df['Dare'].sum()
+        tot_avere_final = self.avere_df['Avere'].sum()
+        
+        diff_dare = tot_dare_final - tot_dare_orig
+        diff_avere = tot_avere_final - tot_avere_orig
+        
+        if verbose:
+            print("\n🔍 Verifica Quadratura Totali (Originale vs Finale):")
+            print(f"   DARE:  {tot_dare_orig/100:,.2f} € (Orig) vs {tot_dare_final/100:,.2f} € (Fin) -> Delta: {diff_dare/100:,.2f} €")
+            print(f"   AVERE: {tot_avere_orig/100:,.2f} € (Orig) vs {tot_avere_final/100:,.2f} € (Fin) -> Delta: {diff_avere/100:,.2f} €")
+            
+        if abs(diff_dare) > 1 or abs(diff_avere) > 1:
+             print(f"⚠️  ATTENZIONE: Rilevata discrepanza nei totali! DARE: {diff_dare}, AVERE: {diff_avere}", file=sys.stderr)
+        elif verbose:
+             print("   ✅ Quadratura confermata: Nessuna perdita di importi durante lo split.")
+
     def _crea_report_excel(self, output_file, original_df):
         """Salva i risultati in un file Excel multi-foglio."""
         # --- Foglio Originale ---
         # Crea una copia per evitare SettingWithCopyWarning e riconverti in euro
         df_originale_report = original_df.copy()
+
+        # --- AGGIUNTA: Ordina per data per calcolare il Saldo Progressivo ---
+        if 'Data' in df_originale_report.columns:
+             df_originale_report.sort_values(by=['Data', 'indice_orig'], inplace=True)
         
         # Riconverte gli importi da centesimi a float per la visualizzazione
         if 'Dare' in df_originale_report.columns:
             df_originale_report['Dare'] = df_originale_report['Dare'] / 100
         if 'Avere' in df_originale_report.columns:
             df_originale_report['Avere'] = df_originale_report['Avere'] / 100
+
+        # --- AGGIUNTA: Calcolo Saldo Progressivo ---
+        if 'Dare' in df_originale_report.columns and 'Avere' in df_originale_report.columns:
+            df_originale_report['Saldo Progressivo'] = (df_originale_report['Dare'] - df_originale_report['Avere']).cumsum()
+
         # --- MODIFICA: Formatta la data e rimuovi la colonna indice_orig ridondante ---
         if 'Data' in df_originale_report.columns:
             df_originale_report['Data'] = pd.to_datetime(df_originale_report['Data']).dt.strftime('%d/%m/%Y')
@@ -622,13 +705,36 @@ class RiconciliatoreContabile:
 
             df_abbinamenti_excel.to_excel(writer, sheet_name='Abbinamenti', index=False)
 
+            # --- COLORAZIONE RIGHE PER PASSATA ---
+            ws = writer.sheets['Abbinamenti']
+            
+            # Definisci i colori (Pastello)
+            fill_pass1 = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid") # Verde Chiaro (Passata 1)
+            fill_pass2 = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid") # Giallo Chiaro (Passata 2)
+            fill_pass3 = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid") # Rosso Chiaro (Passata 3/Residui)
+            
+            # Applica i colori iterando sulle righe
+            # Nota: df_abbinamenti_excel ha le stesse righe del foglio Excel (header è riga 1)
+            if 'pass_name' in df_abbinamenti_excel.columns:
+                for i, row in df_abbinamenti_excel.iterrows():
+                    pass_name = str(row['pass_name'])
+                    fill = None
+                    if "Passata 1" in pass_name: fill = fill_pass1
+                    elif "Passata 2" in pass_name: fill = fill_pass2
+                    elif "Passata 3" in pass_name: fill = fill_pass3
+                    
+                    if fill:
+                        excel_row = i + 2 # +2 perché Excel è 1-based e c'è l'header
+                        for col in range(1, len(df_abbinamenti_excel.columns) + 1):
+                            ws.cell(row=excel_row, column=col).fill = fill
+
             # --- Fogli Non Riconciliati ---
             if not self.dare_non_util.empty:
                 df_dare_report = self.dare_non_util[['indice_orig', 'Data', 'Dare']].copy()
                 # FIX: Aggiunge 2 per allineare l'indice con la riga di Excel
                 df_dare_report['indice_orig'] = df_dare_report['indice_orig'] + 2
                 df_dare_report['Data'] = pd.to_datetime(df_dare_report['Data']).dt.strftime('%d/%m/%y')
-                df_dare_report['Dare'] = df_dare_report['Dare'].apply(lambda x: f"{x/100:.2f}".replace('.', ','))
+                df_dare_report['Dare'] = df_dare_report['Dare'] / 100.0
                 df_dare_report.rename(columns={'indice_orig': 'Indice Riga', 'Dare': 'Importo'}).to_excel(writer, sheet_name='DARE non utilizzati', index=False)
             else:
                 pd.DataFrame(columns=['Indice Riga', 'Data', 'Importo']).to_excel(writer, sheet_name='DARE non utilizzati', index=False)
@@ -637,7 +743,7 @@ class RiconciliatoreContabile:
                 # FIX: Aggiunge 2 per allineare l'indice con la riga di Excel
                 df_avere_report['indice_orig'] = df_avere_report['indice_orig'] + 2
                 df_avere_report['Data'] = pd.to_datetime(df_avere_report['Data']).dt.strftime('%d/%m/%y')
-                df_avere_report['Avere'] = df_avere_report['Avere'].apply(lambda x: f"{x/100:.2f}".replace('.', ','))
+                df_avere_report['Avere'] = df_avere_report['Avere'] / 100.0
                 df_avere_report.rename(columns={'indice_orig': 'Indice Riga', 'Avere': 'Importo'}).to_excel(writer, sheet_name='AVERE non riconciliati', index=False)
             else:
                 pd.DataFrame(columns=['Indice Riga', 'Data', 'Importo']).to_excel(writer, sheet_name='AVERE non riconciliati', index=False)
@@ -669,15 +775,23 @@ class RiconciliatoreContabile:
                     'Delta Conteggio': [delta_conteggio],
                     'Delta Importo (€)': [stats.get('Delta finale (DARE - AVERE)')]
                 }, index=['Incassi vs Versamenti'])
+                
+                # Aggiungi info sullo sbilancio strutturale
+                df_strutturale = pd.DataFrame({
+                    'Info': ['Differenza presente nei dati originali (DARE - AVERE)'],
+                    'Importo': [stats.get('Sbilancio Strutturale (Origine)')]
+                })
 
                 df_incassi.to_excel(writer, sheet_name='Statistiche', startrow=2)
                 df_versamenti.to_excel(writer, sheet_name='Statistiche', startrow=8)
                 df_confronto.to_excel(writer, sheet_name='Statistiche', startrow=14)
+                df_strutturale.to_excel(writer, sheet_name='Statistiche', startrow=18, index=False)
 
             sheet_stats = writer.sheets['Statistiche']
             sheet_stats.cell(row=1, column=1, value="Riepilogo Incassi (DARE)")
             sheet_stats.cell(row=7, column=1, value="Riepilogo Versamenti (AVERE)")
             sheet_stats.cell(row=13, column=1, value="Confronto Sbilancio Finale")
+            sheet_stats.cell(row=17, column=1, value="Analisi Sbilancio Strutturale (Dati Iniziali)")
 
             # --- AGGIUNTA: Foglio Riepilogo Parametri ---
             params_data = {
@@ -708,21 +822,54 @@ class RiconciliatoreContabile:
             # --- AGGIUNTA: Foglio Quadratura Mensile ---
             df_mensile = self._calcola_quadratura_mensile()
             if not df_mensile.empty:
-                # Formattazione per Excel (da centesimi a stringa Euro)
-                cols_to_format = [c for c in df_mensile.columns if c != 'Mese']
-                for col in cols_to_format:
-                    # Converti in float (Euro) e formatta
-                    df_mensile[col] = (df_mensile[col] / 100).apply(
-                        lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                    )
+                # Converti da centesimi a Euro (float) per permettere al grafico di funzionare
+                cols_to_convert = [c for c in df_mensile.columns if c != 'Mese']
+                for col in cols_to_convert:
+                    df_mensile[col] = df_mensile[col] / 100.0
                 
                 df_mensile.to_excel(writer, sheet_name='Quadratura Mensile', index=False)
                 
+                ws = writer.sheets['Quadratura Mensile']
+                
+                # Applica formattazione valuta alle celle (perché ora sono numeri puri)
+                for col_idx, col_name in enumerate(df_mensile.columns, start=1):
+                    if col_name != 'Mese':
+                        for row in range(2, len(df_mensile) + 2):
+                            cell = ws.cell(row=row, column=col_idx)
+                            cell.number_format = '#,##0.00 €'
+                
                 # Adatta larghezza colonne (A-H)
-                worksheet = writer.sheets['Quadratura Mensile']
                 for idx, col in enumerate(df_mensile.columns):
                     max_len = min(50, max(df_mensile[col].astype(str).map(len).max() if not df_mensile.empty else 0, len(str(col)))) + 2
-                    worksheet.column_dimensions[chr(65 + idx)].width = max_len
+                    ws.column_dimensions[chr(65 + idx)].width = max_len
+
+                # --- GRAFICO SBILANCI ---
+                try:
+                    chart = BarChart()
+                    chart.type = "col"
+                    chart.style = 10
+                    chart.title = "Composizione Sbilancio Mensile (Dare vs Avere)"
+                    chart.y_axis.title = "Importo (€)"
+                    chart.x_axis.title = "Mese"
+                    
+                    # Colonne: Mese, Delta DARE, Delta AVERE
+                    col_mese_idx = df_mensile.columns.get_loc('Mese') + 1
+                    col_dare_idx = df_mensile.columns.get_loc('Delta DARE (Non Usato)') + 1
+                    col_avere_idx = df_mensile.columns.get_loc('Delta AVERE (Non Riconc.)') + 1
+                    
+                    # Seleziona le due colonne dei delta (sono adiacenti)
+                    data = Reference(ws, min_col=col_dare_idx, max_col=col_avere_idx, min_row=1, max_row=len(df_mensile)+1)
+                    cats = Reference(ws, min_col=col_mese_idx, min_row=2, max_row=len(df_mensile)+1)
+                    
+                    chart.add_data(data, titles_from_data=True)
+                    chart.set_categories(cats)
+                    chart.shape = 4
+                    chart.width = 25 # Larghezza in cm
+                    chart.height = 12 # Altezza in cm
+                    
+                    ws.add_chart(chart, "K2") # Posiziona il grafico a destra
+                except Exception as e:
+                    print(f"Impossibile creare il grafico: {e}")
 
     def get_stats(self):
         """Calcola e restituisce un dizionario completo di statistiche."""
@@ -742,6 +889,8 @@ class RiconciliatoreContabile:
         importo_dare_non_util = (self.dare_non_util['Dare'].sum() / 100) if self.dare_non_util is not None and not self.dare_non_util.empty else 0
         importo_avere_non_riconc = (self.avere_non_riconc['Avere'].sum() / 100) if self.avere_non_riconc is not None and not self.avere_non_riconc.empty else 0
 
+        sbilancio_strutturale = imp_dare_tot - imp_avere_tot
+
         return {
             'Totale Incassi (DARE)': num_dare_tot,
             'Incassi (DARE) utilizzati': num_dare_usati,
@@ -756,6 +905,7 @@ class RiconciliatoreContabile:
             'Versamenti (AVERE) non riconciliati': num_avere_tot - num_avere_usati,
 
             'Delta finale (DARE - AVERE)': f"{(importo_dare_non_util - importo_avere_non_riconc):,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."),
+            'Sbilancio Strutturale (Origine)': f"{(sbilancio_strutturale / 100):,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."),
             
             # Valori grezzi per aggregazioni e calcoli interni
             '_raw_importo_dare_non_util': importo_dare_non_util,
@@ -787,12 +937,27 @@ class RiconciliatoreContabile:
                 if verbose: print(f"1. Caricamento e validazione del file: {input_file}")
                 df = self.carica_file(input_file)
 
+            # Calcolo totali originali per verifica quadratura
+            tot_dare_orig = df['Dare'].sum()
+            tot_avere_orig = df['Avere'].sum()
+
             if verbose: print("2. Separazione e ordinamento movimenti DARE/AVERE...")
-            dare_df, avere_df = self._separa_movimenti(df)
+            self._separa_movimenti(df)
 
             if verbose: print("3. Avvio passate di riconciliazione...")
             # _riconcilia ora restituisce i DataFrame aggiornati con la colonna 'usato'
-            self.dare_df, self.avere_df, self.df_abbinamenti = self._riconcilia(dare_df, avere_df, verbose=verbose)
+            self.dare_df, self.avere_df, self.df_abbinamenti = self._riconcilia(verbose=verbose)
+
+            # Verifica quadratura
+            self._verifica_quadratura_totali(tot_dare_orig, tot_avere_orig, verbose=verbose)
+
+            # --- CHECK SBILANCIO STRUTTURALE ---
+            diff_strutturale = tot_dare_orig - tot_avere_orig
+            if verbose and abs(diff_strutturale) > 100: # > 1 euro
+                 print(f"\n⚖️  ANALISI DATI INIZIALI: Rilevato sbilancio strutturale!")
+                 print(f"    Totale DARE (Incassi):    {tot_dare_orig/100:,.2f} €")
+                 print(f"    Totale AVERE (Versamenti): {tot_avere_orig/100:,.2f} €")
+                 print(f"    Differenza all'origine:    {diff_strutturale/100:,.2f} € (Questo importo non potrà mai essere riconciliato)")
 
             # Calcola i dataframe dei non utilizzati, necessari per report e statistiche
             self.dare_non_util = self.dare_df[~self.dare_df['usato']].copy()

@@ -237,6 +237,7 @@ def _generate_and_save_summary(all_stats, output_dir):
             summary_lines.append(f"  % Importo DARE utilizzato: {stats.get('_raw_perc_dare_importo', 0):.2f}%")
             summary_lines.append(f"  % Importo AVERE utilizzato: {stats.get('_raw_perc_avere_importo', 0):.2f}%")
             summary_lines.append(f"  Sbilancio finale: {stats.get('Delta finale (DARE - AVERE)', 'N/A')}")
+            summary_lines.append(f"  (Di cui Strutturale/Iniziale: {stats.get('Sbilancio Strutturale (Origine)', 'N/A')})")
 
             file_base_name, _ = os.path.splitext(stats.get('original_filename', ''))
             local_config_path = os.path.join(output_dir, file_base_name, 'config.json')
