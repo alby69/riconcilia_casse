@@ -101,7 +101,8 @@ class TestRiconciliazioneCore(unittest.TestCase):
         incassi = [(datetime(2025, 4, 1), 100)]
 
         df = self._create_df(incassi, versamenti)
-        r = RiconciliatoreContabile()
+        # Disabilitiamo il best fit per evitare che il 100 venga abbinato parzialmente al 1000
+        r = RiconciliatoreContabile(enable_best_fit=False)
         r.run(df, verbose=False)
 
         matches = r.df_abbinamenti
@@ -122,10 +123,10 @@ class TestRiconciliazioneCore(unittest.TestCase):
         
         df = self._create_df(incassi, versamenti)
         
-        # Configura per usare i residui (soglia alta per includere 80, 30, 15)
-        # La riconciliazione principale fallisce se max_combinazioni=2, ma la fase residui dovrebbe prenderli
+        # NOTA: Questo test verifica che una combinazione 3-a-1 venga trovata.
+        # Con max_combinazioni=3, il match viene trovato dalla Passata 1.
         r = RiconciliatoreContabile(
-            max_combinazioni=2, 
+            max_combinazioni=3, 
             soglia_residui=100.0, 
             giorni_finestra_residui=30
         )
@@ -145,7 +146,8 @@ class TestRiconciliazioneCore(unittest.TestCase):
 
         df = self._create_df(incassi, versamenti)
         # Finestra di 10 giorni, quindi il 1° luglio è troppo vecchio per il 15 luglio
-        r = RiconciliatoreContabile(giorni_finestra=10, search_direction='past_only')
+        # Impostiamo giorni_finestra_residui uguale per evitare che la Passata 3 trovi il match.
+        r = RiconciliatoreContabile(giorni_finestra=10, giorni_finestra_residui=10, search_direction='past_only')
         r.run(df, verbose=False)
 
         matches = r.df_abbinamenti
@@ -163,7 +165,8 @@ class TestRiconciliazioneCore(unittest.TestCase):
 
         df = self._create_df(incassi, versamenti)
         # Il match 10+20+30=60 richiede 3 combinazioni, ma il limite è 2
-        r = RiconciliatoreContabile(max_combinazioni=2)
+        # Disabilitiamo il best_fit per evitare che trovi un match parziale (es. 20+30)
+        r = RiconciliatoreContabile(max_combinazioni=2, enable_best_fit=False)
         r.run(df, verbose=False)
 
         matches = r.df_abbinamenti
@@ -171,11 +174,7 @@ class TestRiconciliazioneCore(unittest.TestCase):
 
 if __name__ == '__main__':
     """
-    Esegue la suite di test.
-    Puoi lanciare questo script direttamente dal terminale con:
-    python test_riconciliazione.py
+    Esegue la suite di test quando lo script viene lanciato direttamente.
+    Questo è utile per il debug individuale del file di test.
     """
-    suite = unittest.TestSuite()
-    suite.addTest(unittest.makeSuite(TestRiconciliazioneCore))
-    runner = unittest.TextTestRunner(verbosity=2)
-    runner.run(suite)
+    unittest.main(verbosity=2)

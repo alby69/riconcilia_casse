@@ -1,20 +1,23 @@
 # Servizio Web di Riconciliazione Contabile
 
-Questo progetto è un'applicazione web basata su Flask che fornisce un servizio di riconciliazione contabile. Gli utenti possono caricare un file Excel contenente movimenti di "Dare" e "Avere", e il sistema restituisce un nuovo file Excel con i movimenti riconciliati, le statistiche e i dettagli delle operazioni.
+Questo progetto è un'applicazione web basata su Flask che fornisce un servizio interattivo di riconciliazione contabile. Gli utenti possono caricare file Excel, configurare dinamicamente i parametri di elaborazione tramite un'interfaccia web e ottenere report dettagliati.
 
-Il progetto originale è stato refattorizzato per passare da un'architettura a script batch a un'architettura client-server, più flessibile e accessibile tramite browser.
+L'architettura è stata evoluta da uno script batch a un'applicazione client-server per offrire maggiore flessibilità, accessibilità e un'esperienza utente migliorata.
 
 ## ✨ Caratteristiche Principali
 
-- **Interfaccia Web Semplice**: Un'interfaccia pulita per caricare i file direttamente dal browser.
-- **Elaborazione in Memoria**: I file vengono processati interamente in memoria per garantire la massima velocità e sicurezza, senza la necessità di salvare file temporanei sul disco del server.
-- **Report Dettagliati**: L'output è un file Excel multi-foglio che include:
-  - Abbinamenti trovati (1-a-1 e combinazioni multiple).
-  - Movimenti non riconciliati.
-  - Statistiche complete sull'elaborazione.
-  - Un riepilogo dei parametri utilizzati.
-- **Sicurezza per l'Uso Concorrente**: L'architettura è "stateless", il che significa che ogni richiesta utente è isolata. Più utenti possono usare il servizio contemporaneamente senza che i loro dati si sovrappongano.
-- **Pronto per la Produzione**: Include istruzioni per l'avvio con un server WSGI di produzione come Gunicorn.
+- **Interfaccia Web Intuitiva**: Una UI pulita e organizzata in schede per caricare file e personalizzare le impostazioni di elaborazione.
+- **Algoritmi Multipli**: Supporta diversi algoritmi di riconciliazione, tra cui "Subset Sum" e "Saldo Progressivo", selezionabili dall'utente.
+- **Configurazione Dinamica**: Permette di modificare in tempo reale parametri chiave come tolleranza, finestre temporali e strategie di ricerca direttamente dal browser.
+- **Elaborazione Sicura in Memoria**: I file vengono processati interamente in memoria per garantire velocità e sicurezza, senza salvare dati sensibili su disco in modo permanente.
+- **Report Excel Dettagliati**: L'output è un file Excel multi-foglio che include:
+  - Un **Manuale** con la spiegazione dell'algoritmo e dei parametri usati.
+  - Gli **Abbinamenti** trovati, colorati in base alla passata di riconciliazione.
+  - I movimenti **DARE e AVERE non riconciliati**.
+  - **Statistiche** complete sull'esito dell'elaborazione.
+  - Un'analisi della **Quadratura Mensile** con grafico.
+- **Pronto per la Produzione**: Include istruzioni per l'avvio con un server WSGI di produzione come Gunicorn, capace di gestire richieste multiple concorrenti.
+- **Docker Ready**: Applicazione containerizzata per un deployment rapido e isolato.
 
 ## ⚙️ Installazione
 
@@ -45,14 +48,55 @@ Il progetto originale è stato refattorizzato per passare da un'architettura a s
     ```bash
     pip install -r requirements.txt
     ```
+    *Nota: Per la modalità di produzione, potrebbe essere necessario installare Gunicorn separatamente (`pip install gunicorn`).*
+
+## 🐳 Utilizzo con Docker
+
+Il progetto supporta Docker per un deployment rapido e isolato. Puoi scegliere tra **Docker Compose** (consigliato) o i comandi manuali.
+
+### Opzione A: Docker Compose (Consigliata)
+
+Il metodo più semplice, che gestisce automaticamente la build e la persistenza dei dati (log e output).
+
+1.  **Avviare il servizio**:
+    ```bash
+    docker-compose up -d --build
+    ```
+    L'applicazione sarà accessibile su `http://localhost:5000`.
+
+2.  **Gestione**:
+    - Fermare il servizio: `docker-compose down`
+    - Visualizzare i log: `docker-compose logs -f`
+
+### Opzione B: Docker CLI (Manuale)
+
+#### 1. Costruire l'immagine
+Dalla cartella principale del progetto, esegui:
+```bash
+docker build -t riconcilia-casse .
+```
+
+### 2. Avviare il Container
+Esegui il container mappando la porta 5000:
+```bash
+docker run -p 5000:5000 riconcilia-casse
+```
+L'applicazione sarà accessibile su `http://localhost:5000`.
+
+### 3. Persistenza dei Dati (Opzionale)
+Per salvare i log e i file di output sulla tua macchina host (invece che dentro il container), usa i volumi:
+```bash
+docker run -p 5000:5000 -v $(pwd)/output:/app/output -v $(pwd)/log:/app/log riconcilia-casse
+```
 
 ## 🚀 Utilizzo
 
-Puoi avviare l'applicazione in due modalità: una per lo sviluppo e il test, l'altra ottimizzata per la produzione.
+### 1. Avviare l'Applicazione Web
 
-### 1. Modalità di Sviluppo
+Puoi avviare l'applicazione in due modalità:
 
-Questa modalità è ideale per testare l'applicazione in locale. Utilizza il server integrato di Flask, che è semplice da avviare ma può gestire una sola richiesta alla volta.
+#### Modalità di Sviluppo (per test locali)
+Utilizza il server integrato di Flask, semplice da avviare ma adatto a un solo utente alla volta.
 
 **Avvio del server:**
 ```bash
@@ -288,6 +332,14 @@ Per domande o problemi, contatta: [tua-email@esempio.com]
 
 ## 📜 Changelog
 
+### v3.0.0 (Versione Corrente)
+- **Docker**: Aggiunto supporto ufficiale con `Dockerfile` e `.dockerignore`.
+- **Core Engine**: Riscrittura completa del motore (`core.py`) utilizzando **Pandas DataFrame** per performance elevate.
+- **Testing**: Nuova suite di test in `tests/` con script di automazione `run_tests.sh`.
+- **Refactoring**: Spostamento utility in `tools/` e pulizia del codice.
+- **Logging**: Controllo granulare sul salvataggio dei log (parametro `save_log`).
+- **Best Fit**: Migliorata la logica di abbinamento parziale con opzione per disabilitarla.
+
 ### v1.1.0 (2025-01-15)
 - ✨ Aggiunto Batch Processor per elaborazione multipla
 - 📊 Log JSON e CSV dettagliati
@@ -300,8 +352,8 @@ Per domande o problemi, contatta: [tua-email@esempio.com]
 
 ---
 
-**Versione**: 1.1.0  
-**Ultimo aggiornamento**: Novembre 2025
+**Versione**: 3.0.0
+**Ultimo aggiornamento**: Gennaio 2026
 gunicorn --workers 4 --bind 0.0.0.0:5000 app:app
 ```
 - `--workers 4`: Avvia 4 "operai". Questo significa che il server può processare fino a 4 richieste utente in parallelo. Puoi adattare questo numero in base alla CPU e alla RAM del tuo server.

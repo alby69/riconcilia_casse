@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    image: riconcilia-casse
+    container_name: riconcilia-casse-container
+    ports:
+      - "5000:5000"
+    volumes:
+      # Mappa le cartelle locali per la persistenza dei dati.
+      # L'output e i log generati dal container saranno visibili nella tua cartella di progetto.
+      # Mappa anche la root per aggiornamenti codice in tempo reale (utile in dev)
+      - .:/app
+      - ./output:/app/output
+      - ./log:/app/log
+    restart: unless-stopped

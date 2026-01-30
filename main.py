@@ -43,7 +43,10 @@ if __name__ == "__main__":
         giorni_finestra_residui=config.get('giorni_finestra_residui', 60),
         sorting_strategy=config.get('sorting_strategy', 'date'),
         search_direction=config.get('search_direction', 'both'),
-        column_mapping=config.get('column_mapping', None) # AGGIUNTA: Legge la mappatura delle colonne
+        column_mapping=config.get('column_mapping', None),
+        algorithm=config.get('algorithm', 'subset_sum'),
+        use_numba=config.get('use_numba', True),
+        ignore_tolerance=config.get('ignore_tolerance', False)
     )
 
     # Esegui l'intero processo

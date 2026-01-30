@@ -122,7 +122,8 @@ def _run_single_simulation_worker(args):
         soglia_residui=run_config.get('soglia_residui', 100),
         giorni_finestra_residui=run_config.get('giorni_finestra_residui', 60),
         sorting_strategy=run_config.get('sorting_strategy', 'date'),
-        search_direction=run_config.get('search_direction', 'both')
+        search_direction=run_config.get('search_direction', 'both'),
+        algorithm=run_config.get('algorithm', 'subset_sum')
     )
     
     INPUT_FILE_DA_OTTIMIZZARE = run_config['file_input']
@@ -180,7 +181,8 @@ def run_simulation(base_config, optimizer_config_ranges, file_input, n_trials, s
         expected_params = [
             'tolleranza', 'giorni_finestra', 'max_combinazioni', 
             'soglia_residui', 'giorni_finestra_residui', 
-            'sorting_strategy', 'search_direction'
+            'sorting_strategy', 'search_direction',
+            'algorithm'
         ]
         riconciliatore_config = {
             key: run_config[key] for key in expected_params if key in run_config

@@ -1,10 +1,10 @@
 import io
 import os
 import json
-import uuid
 import pandas as pd
 from datetime import datetime
-from flask import Flask, request, render_template, flash, redirect, url_for, jsonify, send_from_directory, session
+from flask import Flask, request, render_template, jsonify, send_from_directory, session, url_for
+import uuid
 from core import RiconciliatoreContabile
 
 # --- Configurazione dell'App Flask ---
@@ -13,13 +13,53 @@ app.secret_key = 'supersecretkey_dev' # Cambiare in produzione
 
 # --- Configurazione delle cartelle ---
 LOG_FOLDER = 'log'
-OUTPUT_FOLDER = os.path.join('output', 'processed_files')
+OUTPUT_FOLDER = 'output'
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
+CONFIG_FILE_PATH = 'config.json'
 
 # Assicura che le cartelle esistano all'avvio
 os.makedirs(LOG_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
+# --- Funzioni Helper per la Configurazione ---
+def load_config():
+    """Carica la configurazione da config.json."""
+    with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_config(new_config):
+    """Salva la configurazione su config.json."""
+    # Prima carica la configurazione esistente per non perdere chiavi non presenti nella UI
+    current_config = load_config()
+    # Aggiorna la configurazione con i nuovi valori
+    current_config.update(new_config)
+    # Salva il file completo
+    with open(CONFIG_FILE_PATH, 'w', encoding='utf-8') as f:
+        json.dump(current_config, f, indent=2, ensure_ascii=False)
+
+def robust_currency_parser(value):
+    """Converte in modo robusto una stringa o un numero in un formato numerico standard per pd.to_numeric."""
+    # Se è già un numero, è a posto.
+    if isinstance(value, (int, float)):
+        return value
+    # Se non è una stringa, non possiamo farci nulla.
+    if not isinstance(value, str):
+        return None # Verrà convertito in NaN
+    
+    # Pulisci la stringa da spazi e simbolo euro
+    cleaned_str = str(value).strip().replace('€', '').replace(' ', '')
+    
+    # Caso 1: Formato italiano completo (es. "1.234,56")
+    # La presenza di entrambi i separatori è un forte indicatore.
+    if '.' in cleaned_str and ',' in cleaned_str:
+        return cleaned_str.replace('.', '').replace(',', '.')
+    
+    # Caso 2: Formato italiano con solo decimali (es. "1234,56")
+    if ',' in cleaned_str:
+        return cleaned_str.replace(',', '.')
+        
+    # Caso 3: Formato senza virgole (es. "1234" o "1234.56"). Lasciamo il punto.
+    return cleaned_str
 
 # --- Pagina Principale ---
 @app.route('/')
@@ -27,6 +67,21 @@ def index():
     """Mostra la pagina iniziale con il form di upload."""
     return render_template('index.html')
 
+# --- API per la Configurazione ---
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    """Restituisce la configurazione corrente in formato JSON."""
+    try:
+        return jsonify(load_config())
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        return jsonify({'error': f"Impossibile leggere config.json: {e}"}), 500
+
+@app.route('/api/config', methods=['POST'])
+def update_config():
+    """Aggiorna e salva la configurazione da un JSON inviato."""
+    new_config_data = request.json
+    save_config(new_config_data)
+    return jsonify({'status': 'success', 'message': 'Configurazione salvata con successo.'})
 
 # --- Endpoint per l'Elaborazione (modificato per AJAX) ---
 @app.route('/processa', methods=['POST'])
@@ -47,26 +102,51 @@ def processa_file():
         return jsonify({'error': 'Formato file non supportato. Si prega di caricare un file Excel (.xlsx o .xls).'}), 400
     
     try:
-        # --- 1. Preparazione del DataFrame ---
+        # --- 1. Estrazione dei parametri di configurazione dal form ---
+        # I valori inviati dal form sono stringhe, vanno convertiti al tipo corretto.
+        # Estraiamo 'save_log' separatamente perché non va passato al costruttore di RiconciliatoreContabile
+        save_log = request.form.get('save_log') == 'true'
+
+        config_params = {
+            'tolleranza': request.form.get('tolleranza', 0.01, type=float),
+            'giorni_finestra': request.form.get('giorni_finestra', 7, type=int),
+            'max_combinazioni': request.form.get('max_combinazioni', 10, type=int),
+            'soglia_residui': request.form.get('soglia_residui', 100.0, type=float),
+            'giorni_finestra_residui': request.form.get('giorni_finestra_residui', 30, type=int),
+            'sorting_strategy': request.form.get('sorting_strategy', 'date', type=str),
+            'search_direction': request.form.get('search_direction', 'past_only', type=str),
+            'algorithm': request.form.get('algorithm', 'subset_sum', type=str),
+            'ignore_tolerance': request.form.get('ignore_tolerance') == 'true'
+        }
+
+        # --- 2. Preparazione del DataFrame ---
         df_input = pd.read_excel(file.stream)
+
+        # Applicazione del mapping colonne (External -> Internal) prima di accedere ai dati
+        full_config = load_config()
+        mapping_conf = full_config.get('mapping_colonne', {})
+        # Inverte il mapping: {'Data': 'DATA'} -> {'DATA': 'Data'} per rinominare correttamente
+        rename_mapping = {v: k for k, v in mapping_conf.items()}
+        df_input.rename(columns=rename_mapping, inplace=True)
+
         df_input['Data'] = pd.to_datetime(df_input['Data'], errors='coerce', dayfirst=True)
         df_input.dropna(subset=['Data'], inplace=True)
-        if df_input['Dare'].dtype == 'object':
-            df_input['Dare'] = df_input['Dare'].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
-        if df_input['Avere'].dtype == 'object':
-            df_input['Avere'] = df_input['Avere'].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
-        df_input['Dare'] = pd.to_numeric(df_input['Dare'], errors='coerce')
-        df_input['Avere'] = pd.to_numeric(df_input['Avere'], errors='coerce')
+
+        # --- NUOVA LOGICA DI PARSING ROBUSTA ---
+        # Applica il parser a ogni cella, poi converte l'intera colonna.
+        df_input['Dare'] = pd.to_numeric(df_input['Dare'].apply(robust_currency_parser), errors='coerce')
+        df_input['Avere'] = pd.to_numeric(df_input['Avere'].apply(robust_currency_parser), errors='coerce')
+
         df_input[['Dare', 'Avere']] = df_input[['Dare', 'Avere']].fillna(0)
         df_input['Dare'] = (df_input['Dare'] * 100).round().astype(int)
         df_input['Avere'] = (df_input['Avere'] * 100).round().astype(int)
         df_input['indice_orig'] = df_input.index
 
-        # --- 2. Esecuzione della logica di riconciliazione ---
-        riconciliatore = RiconciliatoreContabile()
+        # --- 3. Esecuzione della logica di riconciliazione con i parametri dalla UI ---
+        riconciliatore = RiconciliatoreContabile(**config_params)
         stats = riconciliatore.run(df_input, output_file=None, verbose=False)
 
-        # --- 3. Salvataggio del file di output con nome unico ---
+        # --- 4. Salvataggio del file di output con nome unico ---
         unique_id = uuid.uuid4()
         sanitized_filename = "".join(c for c in file.filename if c.isalnum() or c in ('.', '_')).rstrip()
         unique_output_filename = f"{unique_id}_{sanitized_filename}"
@@ -74,7 +154,7 @@ def processa_file():
         
         riconciliatore._crea_report_excel(output_filepath, df_input)
 
-        # --- 4. Creazione e salvataggio del file di log ---
+        # --- 5. Creazione e salvataggio del file di log ---
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         log_filename = f"{timestamp}_{sanitized_filename}_summary.log"
         log_filepath = os.path.join(LOG_FOLDER, log_filename)
@@ -86,17 +166,19 @@ def processa_file():
             elif '_raw_perc' in key:
                 formatted_stats[key] = f"{value:.2f} %".replace('.', ',')
 
-        with open(log_filepath, 'w', encoding='utf-8') as f:
-            json.dump(formatted_stats, f, indent=4, ensure_ascii=False)
+        # Salva su disco solo se richiesto esplicitamente
+        if save_log:
+            with open(log_filepath, 'w', encoding='utf-8') as f:
+                json.dump(formatted_stats, f, indent=4, ensure_ascii=False)
         
-        # --- 5. Preparazione dei nomi e salvataggio in sessione ---
+        # --- 6. Preparazione dei nomi e salvataggio in sessione ---
         base_name, extension = os.path.splitext(sanitized_filename)
         pretty_download_filename = f"{base_name}_risultato{extension}"
         
         # Salva la mappa {nome_bello: nome_unico} nella sessione utente
         session['download_map'] = {pretty_download_filename: unique_output_filename}
         
-        # --- 6. Restituzione del JSON per il frontend ---
+        # --- 7. Restituzione del JSON per il frontend ---
         return jsonify({
             'log_content': json.dumps(formatted_stats, indent=4, ensure_ascii=False),
             'download_url': url_for('download_file', filename=pretty_download_filename),

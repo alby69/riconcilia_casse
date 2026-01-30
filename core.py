@@ -8,7 +8,7 @@ import numpy as np
 warnings.filterwarnings('ignore')
 from tqdm import tqdm
 import sys
-from openpyxl.styles import PatternFill # Necessario per la colorazione del report
+from openpyxl.styles import PatternFill, Alignment, Font # Necessario per la colorazione e formattazione
 from openpyxl.chart import BarChart, Reference # Necessario per i grafici
 
 # --- MODIFICA: Gestione di Numba come dipendenza opzionale ---
@@ -23,20 +23,73 @@ except ImportError:
             return func
         return decorator
 
+def _robust_currency_parser(value):
+    """
+    Converte in modo robusto una stringa o un numero in un formato numerico standard per pd.to_numeric.
+    Questa funzione helper viene usata da `carica_file`.
+    """
+    # Se è già un numero, è a posto.
+    if isinstance(value, (int, float)):
+        return value
+    # Se non è una stringa, non possiamo farci nulla.
+    if not isinstance(value, str):
+        return None # Verrà convertito in NaN
+    
+    # Pulisci la stringa da spazi e simbolo euro
+    cleaned_str = str(value).strip().replace('€', '').replace(' ', '')
+    
+    # Caso 1: Formato italiano completo (es. "1.234,56")
+    if '.' in cleaned_str and ',' in cleaned_str:
+        return cleaned_str.replace('.', '').replace(',', '.')
+    # Caso 2: Formato italiano con solo decimali (es. "1234,56")
+    elif ',' in cleaned_str:
+        return cleaned_str.replace(',', '.')
+    # Caso 3: Formato senza virgole (es. "1234" o "1234.56"). Lasciamo il punto.
+    return cleaned_str
+
 class RiconciliatoreContabile:
     """Contiene la logica di business per la riconciliazione."""
 
-    def __init__(self, tolleranza=0.01, giorni_finestra=7, max_combinazioni=10, soglia_residui=100, giorni_finestra_residui=30, sorting_strategy="date", search_direction="past_only", column_mapping=None):
-        self.tolleranza = tolleranza
+    def __init__(self, tolleranza=0.01, giorni_finestra=7, max_combinazioni=10, soglia_residui=100.0, giorni_finestra_residui=30, sorting_strategy="date", search_direction="past_only", column_mapping=None, algorithm="subset_sum", use_numba=True, ignore_tolerance=False, enable_best_fit=True):
+        """
+        Inizializza il riconciliatore con i parametri di configurazione.
+
+        Args:
+            tolleranza (float): Differenza massima accettata tra importi (default 0.01).
+            giorni_finestra (int): Finestra temporale di ricerca in giorni (default 7).
+            max_combinazioni (int): Numero massimo di movimenti combinabili (default 10).
+            soglia_residui (float): Importo minimo per considerare un movimento nella fase residui (default 100.0).
+            giorni_finestra_residui (int): Finestra temporale estesa per la fase residui (default 30).
+            sorting_strategy (str): Strategia di ordinamento ('date' o 'amount').
+            search_direction (str): Direzione di ricerca ('past_only', 'future_only', 'both').
+            column_mapping (dict): Mappatura nomi colonne (es. {'Data': 'MyDate', ...}).
+            algorithm (str): Algoritmo da usare ('subset_sum', 'progressive_balance', 'all').
+            use_numba (bool): Se True, utilizza l'accelerazione Numba se disponibile.
+            ignore_tolerance (bool): Se True, forza la chiusura dei blocchi nel saldo progressivo anche se non quadrano.
+            enable_best_fit (bool): Se True, abilita la logica di abbinamento parziale (splitting).
+        """
+        # FIX: Converte i valori in euro (float) a centesimi (int) per coerenza interna
+        self.tolleranza = int(tolleranza * 100)
         self.giorni_finestra = giorni_finestra
         self.max_combinazioni = max_combinazioni
-        self.soglia_residui = soglia_residui
+        # FIX: Converte i valori in euro (float) a centesimi (int)
+        self.soglia_residui = int(soglia_residui * 100)
         self.giorni_finestra_residui = giorni_finestra_residui
         self.sorting_strategy = sorting_strategy
         self.search_direction = search_direction
+        self.algorithm = algorithm
         # AGGIUNTA: Imposta la mappatura delle colonne, con un default se non fornita.
         self.column_mapping = column_mapping or {'Data': 'Data', 'Dare': 'Dare', 'Avere': 'Avere'}
         
+        # Flag per abilitare/disabilitare Numba
+        self.use_numba = use_numba and NUMBA_AVAILABLE
+        
+        # Flag per forzare la chiusura dei blocchi in Saldo Progressivo anche se non quadrano (su timeout finestra)
+        self.ignore_tolerance = ignore_tolerance
+
+        # AGGIUNTA: Flag per abilitare la logica di best-fit (splitting)
+        self.enable_best_fit = enable_best_fit
+
         # Stato interno che verrà popolato durante l'esecuzione
         self.dare_df = self.avere_df = self.df_abbinamenti = None
         self.dare_non_util = self.avere_non_riconc = self.original_df = None
@@ -49,7 +102,18 @@ class RiconciliatoreContabile:
         self.max_id_counter = 0
 
     def carica_file(self, file_path):
-        """Carica un file Excel o CSV in un DataFrame."""
+        """
+        Carica un file Excel, CSV o Feather in un DataFrame Pandas standardizzato.
+
+        Gestisce la lettura, la rinomina delle colonne secondo il mapping configurato,
+        la conversione delle date e la pulizia degli importi.
+
+        Args:
+            file_path (str): Percorso del file da caricare.
+
+        Returns:
+            pd.DataFrame: DataFrame con colonne standardizzate ('Data', 'Dare', 'Avere', 'indice_orig').
+        """
         # Parametri comuni per la lettura di CSV/Excel con formato europeo
         common_read_params = {
             'decimal': ',',
@@ -91,19 +155,9 @@ class RiconciliatoreContabile:
             print(f"    Esempio: {future_rows.iloc[0]['Data'].strftime('%d/%m/%Y')} (Riga {future_rows.index[0] + 2})")
 
         # --- PULIZIA IMPORTI ROBUSTA ---
-        # Rimuove simboli di valuta e spazi che potrebbero far fallire la conversione
+        # Applica il parser robusto a ogni cella, poi converte l'intera colonna.
         for col in ['Dare', 'Avere']:
-            if df[col].dtype == object:
-                df[col] = df[col].astype(str).str.replace('€', '', regex=False) \
-                                             .str.replace(' ', '', regex=False)
-                # Gestione manuale formato italiano se necessario (1.000,00 -> 1000.00)
-                # Si applica solo se la stringa contiene virgola e non è già stata parsata
-                df[col] = df[col].apply(lambda x: x.replace('.', '').replace(',', '.') if isinstance(x, str) and ',' in x else x)
-
-        # Converti 'Dare' e 'Avere' in numerico. Se sono già stati letti correttamente,
-        # questa operazione sarà veloce. Se sono ancora stringhe, pd.to_numeric li gestirà.
-        df['Dare'] = pd.to_numeric(df['Dare'], errors='coerce')
-        df['Avere'] = pd.to_numeric(df['Avere'], errors='coerce')
+            df[col] = pd.to_numeric(df[col].apply(_robust_currency_parser), errors='coerce')
 
         # Riempi i valori non numerici con 0 PRIMA di convertire in centesimi
         df[['Dare', 'Avere']] = df[['Dare', 'Avere']].fillna(0)
@@ -176,7 +230,7 @@ class RiconciliatoreContabile:
         somma_totale_candidati = sum(c['Avere'] for c in candidati_avere)
         
         match = None
-        if NUMBA_AVAILABLE:
+        if self.use_numba:
             # --- OTTIMIZZAZIONE NUMBA ---
             candidati_np_numba = np.array([(c['Avere'], c['indice_orig']) for c in candidati_avere], dtype=np.int64)
             match_indices = _numba_find_combination(dare_importo, candidati_np_numba, max_combinazioni, self.tolleranza)
@@ -260,7 +314,7 @@ class RiconciliatoreContabile:
         match = None
         is_partial = False
         
-        if NUMBA_AVAILABLE:
+        if self.use_numba:
             candidati_np_numba = np.array([(c['Dare'], c['indice_orig']) for c in candidati_da_modificare], dtype=np.int64)
             # Tentativo 1: Match Esatto
             match_indices = _numba_find_combination(avere_importo, candidati_np_numba, max_combinazioni, self.tolleranza)
@@ -324,7 +378,25 @@ class RiconciliatoreContabile:
     def _esegui_passata_generica(self, df_da_processare, df_candidati, col_da_processare, col_candidati, used_indices_candidati, giorni_finestra, max_combinazioni, abbinamenti_list, title, search_direction, find_function, verbose=True, enable_best_fit=False):
         """
         Funzione helper generica che esegue una passata di riconciliazione.
-        Questa funzione astrae la logica comune tra le passate DARE->AVERE e AVERE->DARE.
+        
+        Itera su ogni riga di `df_da_processare` e cerca corrispondenze in `df_candidati`
+        utilizzando la `find_function` fornita. Gestisce la logica di finestra temporale,
+        registrazione match e splitting (Best Fit).
+
+        Args:
+            df_da_processare (pd.DataFrame): DataFrame principale da scorrere.
+            df_candidati (pd.DataFrame): DataFrame dove cercare le combinazioni.
+            col_da_processare (str): Nome colonna importo nel DF principale ('Dare' o 'Avere').
+            col_candidati (str): Nome colonna importo nel DF candidati.
+            used_indices_candidati (set): Set di indici già usati da escludere.
+            giorni_finestra (int): Finestra temporale per la ricerca.
+            max_combinazioni (int): Max elementi combinabili.
+            abbinamenti_list (list): Lista dove appendere i match trovati.
+            title (str): Titolo della passata per il logging.
+            search_direction (str): Direzione temporale ('past_only', 'future_only', 'both').
+            find_function (callable): Funzione che implementa la logica di matching specifica.
+            verbose (bool): Se True, stampa log.
+            enable_best_fit (bool): Se True, abilita la logica di splitting per match parziali.
         """
         if df_da_processare is None or df_da_processare.empty:
             return
@@ -466,8 +538,21 @@ class RiconciliatoreContabile:
             verbose=verbose
         )
 
-    def _riconcilia(self, verbose=True):
-        """Orchestra il processo di riconciliazione in più passate."""
+    def _riconcilia_subset_sum(self, verbose=True):
+        """
+        Esegue la riconciliazione basata sulla ricerca di combinazioni (Subset Sum).
+
+        Orchestra tre passate successive:
+        1. Molti DARE -> 1 AVERE (con Best Fit opzionale).
+        2. 1 DARE -> Molti AVERE (Versamenti frazionati).
+        3. Recupero residui con finestra temporale estesa.
+
+        Args:
+            verbose (bool): Se True, stampa l'avanzamento.
+
+        Returns:
+            list: Lista di dizionari rappresentanti gli abbinamenti trovati.
+        """
         
         abbinamenti = []
 
@@ -482,7 +567,7 @@ class RiconciliatoreContabile:
             abbinamenti,
             "Passata 1: Aggregazione Incassi (Molti DARE -> 1 AVERE) [con Best Fit]",
             verbose,
-            enable_best_fit=True
+            enable_best_fit=self.enable_best_fit
         )
 
         # --- Passata 2: Riconciliazione Standard Inversa (1 Incasso -> Molti Versamenti) ---
@@ -508,15 +593,15 @@ class RiconciliatoreContabile:
             enable_best_fit=False
         )
 
-        # AGGIUNTA: Aggiorna le colonne 'usato' nei DataFrame originali una sola volta alla fine
-        self.dare_df['usato'] = self.dare_df['indice_orig'].isin(self.used_dare_indices)
-        self.avere_df['usato'] = self.avere_df['indice_orig'].isin(self.used_avere_indices)
+        return abbinamenti
 
+    def _finalizza_abbinamenti(self, abbinamenti):
+        """Crea il DataFrame finale, genera gli ID e ordina i risultati."""
         # Colonne attese nel DataFrame finale
         final_columns = [
             'ID Transazione', 'dare_indices', 'dare_date', 'dare_importi', 
             'avere_data', 'num_avere', 'avere_indices', 'avere_importi', 
-            'somma_avere', 'differenza', 'tipo_match', 'pass_name'
+            'somma_avere', 'differenza', 'giorni_diff', 'tipo_match', 'pass_name'
         ]
 
         # Creazione del DataFrame finale degli abbinamenti
@@ -526,6 +611,13 @@ class RiconciliatoreContabile:
             if 'somma_dare' in df_abbinamenti.columns and 'somma_avere' not in df_abbinamenti.columns:
                 df_abbinamenti['somma_avere'] = df_abbinamenti['somma_dare']
             
+            # Calcolo differenza giorni (Avere - Dare)
+            df_abbinamenti['giorni_diff'] = df_abbinamenti.apply(
+                lambda row: (row['avere_data'] - min(row['dare_date'])).days 
+                if isinstance(row['dare_date'], list) and len(row['dare_date']) > 0 and pd.notnull(row['avere_data']) 
+                else None, axis=1
+            )
+
             # --- MODIFICA: Creazione dell'ID Transazione con nuovo formato D(..)_A(..) ---
             df_abbinamenti['ID Transazione'] = df_abbinamenti.apply(
                 lambda row: "D({})_A({})".format(
@@ -540,7 +632,187 @@ class RiconciliatoreContabile:
         else:
             df_abbinamenti = pd.DataFrame(columns=final_columns)
             
-        return self.dare_df, self.avere_df, df_abbinamenti
+        return df_abbinamenti
+
+    def _riconcilia_saldo_progressivo(self, verbose=True):
+        """
+        Algoritmo di riconciliazione basato sul saldo progressivo sequenziale (Two Pointers).
+
+        Simula un operatore che scorre le liste ordinate cronologicamente e chiude
+        un blocco quando la somma progressiva di DARE e AVERE coincide.
+
+        Args:
+            verbose (bool): Se True, stampa l'avanzamento.
+
+        Returns:
+            list: Lista di dizionari rappresentanti gli abbinamenti (blocchi) trovati.
+        """
+        from datetime import timedelta # Assicurati che sia importato
+        if verbose:
+            print("\nAvvio riconciliazione con algoritmo 'Saldo Progressivo' (Sequenziale)...")
+
+        # 1. Prepara i dati: Filtra non usati e Ordina per Data
+        # Nota: Usiamo copie per non modificare i df originali durante l'iterazione
+        df_dare_temp = self.dare_df[~self.dare_df['indice_orig'].isin(self.used_dare_indices)].copy()
+        df_avere_temp = self.avere_df[~self.avere_df['indice_orig'].isin(self.used_avere_indices)].copy()
+        
+        # Ordinamento per data: è fondamentale e intenzionale per questo algoritmo.
+        # L'algoritmo simula un saldo che progredisce nel tempo, quindi ignora la 'sorting_strategy'
+        # globale (es. per importo) e forza sempre un ordinamento cronologico.
+        df_dare_temp.sort_values(by=['Data', 'indice_orig'], inplace=True)
+        df_avere_temp.sort_values(by=['Data', 'indice_orig'], inplace=True)
+
+        dare_rows = df_dare_temp.to_dict('records')
+        avere_rows = df_avere_temp.to_dict('records')
+        
+        n_dare = len(dare_rows)
+        n_avere = len(avere_rows)
+        
+        i = 0 # Puntatore Dare
+        j = 0 # Puntatore Avere
+        
+        cum_dare = 0
+        cum_avere = 0
+        
+        start_i = 0
+        start_j = 0
+        
+        abbinamenti = []
+        
+        if verbose:
+            print(f"   - Analisi sequenziale su {n_dare} movimenti Dare e {n_avere} movimenti Avere...")
+
+        # Loop principale (Two Pointers)
+        while i < n_dare or j < n_avere:
+            # Verifica se abbiamo raggiunto un punto di pareggio (con almeno un movimento processato nel blocco corrente)
+            diff = cum_dare - cum_avere
+            
+            # --- LOGICA DI RESET MIGLIORATA (Block Duration) ---
+            # Calcola la durata del blocco accumulato finora
+            # Data inizio: minimo tra il primo DARE e il primo AVERE del blocco corrente
+            start_date_dare = dare_rows[start_i]['Data'] if start_i < n_dare else None
+            start_date_avere = avere_rows[start_j]['Data'] if start_j < n_avere else None
+            
+            # Data fine: massimo tra l'ultimo DARE e AVERE processati (i-1, j-1) o correnti
+            curr_date_dare = dare_rows[i]['Data'] if i < n_dare else (dare_rows[i-1]['Data'] if i > 0 else None)
+            curr_date_avere = avere_rows[j]['Data'] if j < n_avere else (avere_rows[j-1]['Data'] if j > 0 else None)
+            
+            valid_starts = [d for d in [start_date_dare, start_date_avere] if d is not None]
+            valid_ends = [d for d in [curr_date_dare, curr_date_avere] if d is not None]
+            
+            should_reset = False
+            if valid_starts and valid_ends:
+                block_duration = (max(valid_ends) - min(valid_starts)).days
+                if block_duration > self.giorni_finestra and (cum_dare > 0 or cum_avere > 0):
+                    should_reset = True
+
+            if should_reset:
+                if self.ignore_tolerance:
+                    # --- FORZA CHIUSURA (Accetta errore) ---
+                    # Se l'utente ha scelto di ignorare la tolleranza (o meglio, di forzare su timeout),
+                    # chiudiamo il blocco così com'è.
+                    block_dare = dare_rows[start_i:i]
+                    block_avere = avere_rows[start_j:j]
+                    match = {
+                        'dare_indices': [r['indice_orig'] for r in block_dare],
+                        'dare_date': [r['Data'] for r in block_dare],
+                        'dare_importi': [r['Dare'] for r in block_dare],
+                        'avere_indices': [r['indice_orig'] for r in block_avere],
+                        'avere_date': [r['Data'] for r in block_avere],
+                        'avere_importi': [r['Avere'] for r in block_avere],
+                        'somma_avere': cum_avere,
+                        'differenza': abs(diff),
+                        'tipo_match': f'Forzato (Timeout {self.giorni_finestra}gg)',
+                        'pass_name': 'Saldo Progressivo (Forzato)'
+                    }
+                    self._registra_abbinamento(match, abbinamenti)
+                    # Reset e continua
+                    start_i = i
+                    start_j = j
+                    cum_dare = 0
+                    cum_avere = 0
+                else:
+                    # --- RESET STANDARD (Salta blocco errato) ---
+                    # Abbandona il blocco corrente che non quadra e riparti fresco.
+                    # Questo permette di trovare i match successivi invece di trascinare l'errore.
+                    start_i = i
+                    start_j = j
+                    cum_dare = 0
+                    cum_avere = 0
+            
+            # Condizione di Match: Differenza zero (entro tolleranza) e abbiamo avanzato almeno uno dei puntatori
+            if abs(diff) <= self.tolleranza and (i > start_i or j > start_j):
+                # --- BLOCCO QUADRATO TROVATO ---
+                block_dare = dare_rows[start_i:i]
+                block_avere = avere_rows[start_j:j]
+                
+                match = {
+                    'dare_indices': [r['indice_orig'] for r in block_dare],
+                    'dare_date': [r['Data'] for r in block_dare],
+                    'dare_importi': [r['Dare'] for r in block_dare],
+                    'avere_indices': [r['indice_orig'] for r in block_avere],
+                    'avere_date': [r['Data'] for r in block_avere],
+                    'avere_importi': [r['Avere'] for r in block_avere],
+                    'somma_avere': cum_avere, # O cum_dare, sono uguali
+                    'differenza': abs(diff),
+                    'tipo_match': f'Saldo Progressivo (Seq. {len(block_dare)}D vs {len(block_avere)}A)',
+                    'pass_name': 'Saldo Progressivo'
+                }
+                self._registra_abbinamento(match, abbinamenti)
+
+                # Reset per il prossimo blocco (ripartiamo da zero per evitare accumulo di errori)
+                start_i = i
+                start_j = j
+                cum_dare = 0
+                cum_avere = 0
+                
+                # Se abbiamo finito entrambi, usciamo
+                if i == n_dare and j == n_avere:
+                    break
+            
+            # --- LOGICA DI AVANZAMENTO (GREEDY) ---
+            # Decidiamo quale puntatore avanzare per cercare di pareggiare i conti.
+            
+            can_advance_dare = i < n_dare
+            can_advance_avere = j < n_avere
+            
+            if can_advance_dare and can_advance_avere:
+                # Se Dare è indietro come importo, aggiungiamo Dare
+                if cum_dare < cum_avere:
+                    cum_dare += dare_rows[i]['Dare']
+                    i += 1
+                # Se Avere è indietro come importo, aggiungiamo Avere
+                elif cum_avere < cum_dare:
+                    cum_avere += avere_rows[j]['Avere']
+                    j += 1
+                else:
+                    # Se gli importi sono uguali (inizio blocco o importi zero), avanziamo quello con data antecedente
+                    date_dare = dare_rows[i]['Data']
+                    date_avere = avere_rows[j]['Data']
+                    
+                    if date_dare <= date_avere:
+                        cum_dare += dare_rows[i]['Dare']
+                        i += 1
+                    else:
+                        cum_avere += avere_rows[j]['Avere']
+                        j += 1
+                        
+            elif can_advance_dare:
+                # Possiamo avanzare solo Dare
+                cum_dare += dare_rows[i]['Dare']
+                i += 1
+            elif can_advance_avere:
+                # Possiamo avanzare solo Avere
+                cum_avere += avere_rows[j]['Avere']
+                j += 1
+            else:
+                # Non possiamo avanzare nessuno dei due, ma non abbiamo matchato (caso residuo finale non quadrato)
+                break
+
+        if verbose:
+            print(f"   - Trovati {len(abbinamenti)} blocchi bilanciati.")
+            
+        return abbinamenti
 
     def _registra_abbinamento(self, match, abbinamenti_list): # Rimosso dare_df, avere_df dagli argomenti
         """Marca gli elementi come 'usati' e registra l'abbinamento."""
@@ -601,14 +873,51 @@ class RiconciliatoreContabile:
         stats_avere = aggrega(self.avere_df, 'Avere') # Colonne: Totale Avere, Usato Avere
 
         # Unione dei due dataframe (outer join per coprire tutti i mesi)
-        stats = pd.merge(stats_dare, stats_avere, left_index=True, right_index=True, how='outer').fillna(0)
+        stats = pd.merge(stats_dare, stats_avere, left_index=True, right_index=True, how='outer')
+        
+        # --- NUOVO: Calcolo dello sbilancio assorbito nei match ---
+        sbilancio_assorbito = pd.DataFrame()
+        if self.df_abbinamenti is not None and not self.df_abbinamenti.empty:
+            df_temp_abbinamenti = self.df_abbinamenti.copy()
+            
+            # La data di riferimento per il mese è la data del primo DARE nel blocco
+            df_temp_abbinamenti['Mese'] = df_temp_abbinamenti['dare_date'].apply(
+                lambda x: x[0].to_period('M') if isinstance(x, list) and x else None
+            )
+            df_temp_abbinamenti.dropna(subset=['Mese'], inplace=True)
+            
+            # Calcola la differenza con segno (DARE - AVERE) per ogni blocco
+            df_temp_abbinamenti['somma_dare'] = df_temp_abbinamenti['dare_importi'].apply(lambda x: sum(x) if isinstance(x, list) else 0)
+            df_temp_abbinamenti['sbilancio_blocco'] = df_temp_abbinamenti['somma_dare'] - df_temp_abbinamenti['somma_avere']
+            
+            sbilancio_assorbito = df_temp_abbinamenti.groupby('Mese')['sbilancio_blocco'].sum().to_frame('Sbilancio Assorbito (in match)')
+
+        if not sbilancio_assorbito.empty:
+            stats = pd.merge(stats, sbilancio_assorbito, left_index=True, right_index=True, how='outer')
+
+        stats = stats.fillna(0)
         
         # Calcolo dei Delta (ancora in centesimi)
-        stats['Delta DARE (Non Usato)'] = stats['Totale Dare'] - stats['Usato Dare']
-        stats['Delta AVERE (Non Riconc.)'] = stats['Totale Avere'] - stats['Usato Avere']
+        stats['DARE non abbinati'] = stats['Totale Dare'] - stats['Usato Dare']
+        stats['AVERE non abbinati'] = stats['Totale Avere'] - stats['Usato Avere']
         
-        # Sbilancio netto del mese (quello che avanza in DARE meno quello che avanza in AVERE)
-        stats['Sbilancio (Delta DARE - Delta AVERE)'] = stats['Delta DARE (Non Usato)'] - stats['Delta AVERE (Non Riconc.)']
+        # Sbilancio netto dei soli movimenti non abbinati
+        stats['Sbilancio Residui (DARE - AVERE)'] = stats['DARE non abbinati'] - stats['AVERE non abbinati']
+
+        # Sbilancio Finale del Mese
+        if 'Sbilancio Assorbito (in match)' not in stats.columns:
+            stats['Sbilancio Assorbito (in match)'] = 0
+            
+        stats['Sbilancio Finale Mese'] = stats['Sbilancio Residui (DARE - AVERE)'] + stats['Sbilancio Assorbito (in match)']
+
+        # Riorganizza le colonne per chiarezza
+        stats = stats[[
+            'Totale Dare', 'Usato Dare', 'DARE non abbinati',
+            'Totale Avere', 'Usato Avere', 'AVERE non abbinati',
+            'Sbilancio Residui (DARE - AVERE)',
+            'Sbilancio Assorbito (in match)',
+            'Sbilancio Finale Mese'
+        ]]
 
         # Ordina per mese
         stats = stats.sort_index()
@@ -640,37 +949,100 @@ class RiconciliatoreContabile:
         elif verbose:
              print("   ✅ Quadratura confermata: Nessuna perdita di importi durante lo split.")
 
+    def _crea_foglio_manuale(self, writer):
+        """Crea il foglio 'MANUALE' con la spiegazione dell'algoritmo e dei parametri."""
+        ws = writer.book.create_sheet("MANUALE", 0) # Create as the first sheet
+
+        # Stili
+        title_font = Font(bold=True, size=14)
+        header_font = Font(bold=True, size=12)
+        
+        # Contenuti
+        manual_content = {}
+        if self.algorithm == 'subset_sum':
+            manual_content = {
+                "title": "Algoritmo: Subset Sum (Ricerca Combinazioni)",
+                "description": [
+                    ("Descrizione Generale", "Questo algoritmo tenta di risolvere il 'problema della somma di un sottoinsieme'. Per ogni movimento su un lato (es. un versamento in AVERE), cerca una combinazione di uno o più movimenti sull'altro lato (es. incassi in DARE) la cui somma corrisponda all'importo del movimento di partenza, entro una data tolleranza e finestra temporale."),
+                    ("Logica di Funzionamento", "Il processo avviene in più passate:\n1. **Aggregazione Incassi (Molti DARE -> 1 AVERE)**: Simula la logica umana di raggruppare più incassi per formare un unico versamento. Cerca anche 'best fit' parziali, generando residui.\n2. **Versamenti Frazionati (1 DARE -> Molti AVERE)**: Gestisce il caso meno comune in cui un grande incasso viene versato in più tranche.\n3. **Recupero Residui**: Esegue una passata finale con una finestra temporale più ampia per tentare di abbinare i movimenti rimasti."),
+                ],
+                "params": [
+                    ("Tolleranza", f"{self.tolleranza / 100:.2f} €", "Il margine di errore massimo accettato tra la somma dei movimenti combinati e l'importo target."),
+                    ("Finestra Temporale", f"{self.giorni_finestra} giorni", "L'intervallo di giorni (prima, dopo o entrambi) in cui cercare i movimenti candidati per un abbinamento."),
+                    ("Max Combinazioni", f"{self.max_combinazioni}", "Il numero massimo di movimenti che possono essere combinati per formare un singolo abbinamento."),
+                    ("Direzione Ricerca", f"{self.search_direction}", "Specifica se cercare candidati solo nel passato ('past_only'), solo nel futuro ('future_only') o in entrambe le direzioni ('both') rispetto alla data del movimento target."),
+                    ("Soglia Analisi Residui", f"{self.soglia_residui / 100:.2f} €", "L'importo minimo che un movimento deve avere per essere considerato nella passata di recupero residui."),
+                    ("Finestra Temporale Residui", f"{self.giorni_finestra_residui} giorni", "La finestra temporale, solitamente più ampia, usata specificamente per la passata di recupero residui."),
+                ]
+            }
+        elif self.algorithm == 'progressive_balance':
+            manual_content = {
+                "title": "Algoritmo: Saldo Progressivo (Bilanciamento Continuo)",
+                "description": [
+                    ("Descrizione Generale", "Questo algoritmo simula il comportamento di un operatore che tenta di quadrare i conti scorrendo cronologicamente le liste. Somma progressivamente gli incassi e i versamenti e, appena i due totali coincidono, chiude il blocco e riparte da zero."),
+                    ("Logica di Funzionamento", "1. Ordina separatamente Incassi (Dare) e Versamenti (Avere) per data.\n2. Mantiene due totali progressivi separati.\n3. Se il totale Dare è inferiore al totale Avere, aggiunge il prossimo incasso per 'recuperare'.\n4. Se il totale Avere è inferiore, aggiunge il prossimo versamento.\n5. Quando i totali si equivalgono (differenza zero), il gruppo di movimenti accumulati viene considerato riconciliato.\n6. **Reset/Forzatura**: Se il blocco accumulato supera la durata della finestra temporale senza quadrare, viene resettato (o forzato se l'opzione è attiva) per isolare l'errore e permettere la riconciliazione dei movimenti successivi."),
+                    ("Casi d'uso ideali", "Ideale per situazioni in cui gli incassi vengono versati in blocco o viceversa, ma senza una corrispondenza 1-a-1 immediata. Gestisce naturalmente finestre temporali variabili tra incasso e versamento."),
+                ],
+                "params": [
+                    ("Tolleranza", f"{self.tolleranza / 100:.2f} €", "Il margine di errore massimo per considerare il saldo progressivo 'azzerato' e quindi identificare un blocco di transazioni bilanciate."),
+                ]
+            }
+            
+        # Aggiunta di tutti i parametri comuni al report manuale
+        common_params = [
+             ("Strategia Ordinamento", self.sorting_strategy, "Criterio usato per ordinare i movimenti prima dell'elaborazione (es. Data)."),
+             ("Direzione Ricerca", self.search_direction, "Direzione temporale preferenziale per gli abbinamenti."),
+             ("Ottimizzazione Numba", "Attiva" if self.use_numba else "Disattiva", "Indica se è stato usato il motore di calcolo accelerato."),
+             ("Mappatura Colonne", str(self.column_mapping), "Nomi delle colonne nel file originale mappate su Data/Dare/Avere."),
+             ("Forza Chiusura su Timeout", "Sì" if self.ignore_tolerance else "No", "Se Sì, accetta blocchi non quadrati se superano la finestra temporale.")
+        ]
+        if 'params' in manual_content:
+            manual_content['params'].extend(common_params)
+        else:
+            manual_content['params'] = common_params
+
+        # Scrittura sul foglio
+        row_cursor = 1
+        ws.cell(row=row_cursor, column=1, value=manual_content.get('title')).font = title_font
+        row_cursor += 2
+
+        for header, text in manual_content.get('description', []):
+            ws.cell(row=row_cursor, column=1, value=header).font = header_font
+            row_cursor += 1
+            cell = ws.cell(row=row_cursor, column=1, value=text)
+            cell.alignment = Alignment(wrap_text=True, vertical='top')
+            ws.merge_cells(start_row=row_cursor, start_column=1, end_row=row_cursor, end_column=5)
+            row_cursor += 2
+        
+        ws.cell(row=row_cursor, column=1, value="Parametri Utilizzati in questa Esecuzione").font = title_font
+        row_cursor += 1
+        ws.cell(row=row_cursor, column=1, value="Parametro").font = header_font
+        ws.cell(row=row_cursor, column=2, value="Valore").font = header_font
+        ws.cell(row=row_cursor, column=3, value="Significato").font = header_font
+        row_cursor += 1
+
+        for name, value, desc in manual_content.get('params', []):
+            ws.cell(row=row_cursor, column=1, value=name)
+            ws.cell(row=row_cursor, column=2, value=value)
+            cell = ws.cell(row=row_cursor, column=3, value=desc)
+            cell.alignment = Alignment(wrap_text=True, vertical='top')
+            ws.merge_cells(start_row=row_cursor, start_column=3, end_row=row_cursor, end_column=5)
+            row_cursor += 1
+
+        # Adatta larghezza colonne
+        ws.column_dimensions['A'].width = 30
+        ws.column_dimensions['B'].width = 20
+        ws.column_dimensions['C'].width = 80
+
     def _crea_report_excel(self, output_file, original_df):
         """Salva i risultati in un file Excel multi-foglio."""
-        # --- Foglio Originale ---
-        # Crea una copia per evitare SettingWithCopyWarning e riconverti in euro
-        df_originale_report = original_df.copy()
-
-        # --- AGGIUNTA: Ordina per data per calcolare il Saldo Progressivo ---
-        if 'Data' in df_originale_report.columns:
-             df_originale_report.sort_values(by=['Data', 'indice_orig'], inplace=True)
-        
-        # Riconverte gli importi da centesimi a float per la visualizzazione
-        if 'Dare' in df_originale_report.columns:
-            df_originale_report['Dare'] = df_originale_report['Dare'] / 100
-        if 'Avere' in df_originale_report.columns:
-            df_originale_report['Avere'] = df_originale_report['Avere'] / 100
-
-        # --- AGGIUNTA: Calcolo Saldo Progressivo ---
-        if 'Dare' in df_originale_report.columns and 'Avere' in df_originale_report.columns:
-            df_originale_report['Saldo Progressivo'] = (df_originale_report['Dare'] - df_originale_report['Avere']).cumsum()
-
-        # --- MODIFICA: Formatta la data e rimuovi la colonna indice_orig ridondante ---
-        if 'Data' in df_originale_report.columns:
-            df_originale_report['Data'] = pd.to_datetime(df_originale_report['Data']).dt.strftime('%d/%m/%Y')
-            if 'indice_orig' in df_originale_report.columns and 'usato' not in df_originale_report.columns:
-                df_originale_report.drop(columns=['indice_orig'], inplace=True)
-
-
         with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
+            # --- FOGLIO MANUALE (NUOVO) ---
+            self._crea_foglio_manuale(writer)
+
             # --- Foglio Abbinamenti ---
-            df_abbinamenti_excel = self.df_abbinamenti.copy()
-            if not df_abbinamenti_excel.empty:
+            if self.df_abbinamenti is not None and not self.df_abbinamenti.empty:
+                df_abbinamenti_excel = self.df_abbinamenti.copy()
                 # --- MODIFICA: Semplificata e corretta la formattazione delle liste per l'output Excel ---
                 # Funzione per formattare correttamente le liste di indici
                 def format_index_list(index_list):
@@ -703,52 +1075,61 @@ class RiconciliatoreContabile:
                 df_abbinamenti_excel['somma_avere'] = df_abbinamenti_excel['somma_avere'].apply(format_currency_value)
                 df_abbinamenti_excel['differenza'] = df_abbinamenti_excel['differenza'].apply(format_currency_value)
 
-            df_abbinamenti_excel.to_excel(writer, sheet_name='Abbinamenti', index=False)
+                df_abbinamenti_excel.to_excel(writer, sheet_name='Abbinamenti', index=False)
 
-            # --- COLORAZIONE RIGHE PER PASSATA ---
-            ws = writer.sheets['Abbinamenti']
-            
-            # Definisci i colori (Pastello)
-            fill_pass1 = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid") # Verde Chiaro (Passata 1)
-            fill_pass2 = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid") # Giallo Chiaro (Passata 2)
-            fill_pass3 = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid") # Rosso Chiaro (Passata 3/Residui)
-            
-            # Applica i colori iterando sulle righe
-            # Nota: df_abbinamenti_excel ha le stesse righe del foglio Excel (header è riga 1)
-            if 'pass_name' in df_abbinamenti_excel.columns:
-                for i, row in df_abbinamenti_excel.iterrows():
-                    pass_name = str(row['pass_name'])
-                    fill = None
-                    if "Passata 1" in pass_name: fill = fill_pass1
-                    elif "Passata 2" in pass_name: fill = fill_pass2
-                    elif "Passata 3" in pass_name: fill = fill_pass3
-                    
-                    if fill:
-                        excel_row = i + 2 # +2 perché Excel è 1-based e c'è l'header
-                        for col in range(1, len(df_abbinamenti_excel.columns) + 1):
-                            ws.cell(row=excel_row, column=col).fill = fill
+                # --- COLORAZIONE RIGHE PER PASSATA (MODIFICATA) ---
+                ws = writer.sheets['Abbinamenti']
+                
+                fill_pass1 = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid") # Verde
+                fill_pass2 = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid") # Giallo
+                fill_pass3 = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid") # Rosso
+                fill_progressive = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid") # Blu chiaro
+
+                if 'pass_name' in df_abbinamenti_excel.columns:
+                    for i, row in df_abbinamenti_excel.iterrows():
+                        pass_name = str(row['pass_name'])
+                        fill = None
+                        if self.algorithm == 'subset_sum':
+                            if "Passata 1" in pass_name: fill = fill_pass1
+                            elif "Passata 2" in pass_name: fill = fill_pass2
+                            elif "Passata 3" in pass_name: fill = fill_pass3
+                        elif self.algorithm == 'progressive_balance':
+                            fill = fill_progressive
+                        
+                        if fill:
+                            excel_row = i + 2
+                            for col in range(1, len(df_abbinamenti_excel.columns) + 1):
+                                ws.cell(row=excel_row, column=col).fill = fill
 
             # --- Fogli Non Riconciliati ---
-            if not self.dare_non_util.empty:
+            if self.dare_non_util is not None and not self.dare_non_util.empty:
                 df_dare_report = self.dare_non_util[['indice_orig', 'Data', 'Dare']].copy()
                 # FIX: Aggiunge 2 per allineare l'indice con la riga di Excel
                 df_dare_report['indice_orig'] = df_dare_report['indice_orig'] + 2
                 df_dare_report['Data'] = pd.to_datetime(df_dare_report['Data']).dt.strftime('%d/%m/%y')
                 df_dare_report['Dare'] = df_dare_report['Dare'] / 100.0
                 df_dare_report.rename(columns={'indice_orig': 'Indice Riga', 'Dare': 'Importo'}).to_excel(writer, sheet_name='DARE non utilizzati', index=False)
-            else:
-                pd.DataFrame(columns=['Indice Riga', 'Data', 'Importo']).to_excel(writer, sheet_name='DARE non utilizzati', index=False)
-            if not self.avere_non_riconc.empty:
+
+            if self.avere_non_riconc is not None and not self.avere_non_riconc.empty:
                 df_avere_report = self.avere_non_riconc[['indice_orig', 'Data', 'Avere']].copy()
                 # FIX: Aggiunge 2 per allineare l'indice con la riga di Excel
                 df_avere_report['indice_orig'] = df_avere_report['indice_orig'] + 2
                 df_avere_report['Data'] = pd.to_datetime(df_avere_report['Data']).dt.strftime('%d/%m/%y')
                 df_avere_report['Avere'] = df_avere_report['Avere'] / 100.0
                 df_avere_report.rename(columns={'indice_orig': 'Indice Riga', 'Avere': 'Importo'}).to_excel(writer, sheet_name='AVERE non riconciliati', index=False)
-            else:
-                pd.DataFrame(columns=['Indice Riga', 'Data', 'Importo']).to_excel(writer, sheet_name='AVERE non riconciliati', index=False)
 
             # --- Foglio con i dati originali ---
+            df_originale_report = original_df.copy()
+            if 'Data' in df_originale_report.columns:
+                 df_originale_report.sort_values(by=['Data', 'indice_orig'], inplace=True)
+            if 'Dare' in df_originale_report.columns: df_originale_report['Dare'] = df_originale_report['Dare'] / 100
+            if 'Avere' in df_originale_report.columns: df_originale_report['Avere'] = df_originale_report['Avere'] / 100
+            if 'Dare' in df_originale_report.columns and 'Avere' in df_originale_report.columns:
+                df_originale_report['Saldo Progressivo'] = (df_originale_report['Dare'] - df_originale_report['Avere']).cumsum()
+            if 'Data' in df_originale_report.columns:
+                df_originale_report['Data'] = pd.to_datetime(df_originale_report['Data']).dt.strftime('%d/%m/%Y')
+                if 'indice_orig' in df_originale_report.columns and 'usato' not in df_originale_report.columns:
+                    df_originale_report.drop(columns=['indice_orig'], inplace=True)
             df_originale_report.to_excel(writer, sheet_name='Originale', index=False)
 
             # --- Foglio Statistiche ---
@@ -793,32 +1174,6 @@ class RiconciliatoreContabile:
             sheet_stats.cell(row=13, column=1, value="Confronto Sbilancio Finale")
             sheet_stats.cell(row=17, column=1, value="Analisi Sbilancio Strutturale (Dati Iniziali)")
 
-            # --- AGGIUNTA: Foglio Riepilogo Parametri ---
-            params_data = {
-                "Parametro": [
-                    "Tolleranza",
-                    "Finestra Temporale (giorni)",
-                    "Max Combinazioni per Match",
-                    "Soglia Avvio Analisi Residui",
-                    "Finestra Temporale Residui (giorni)",
-                    "Strategia di Ordinamento Iniziale",
-                    "Direzione Ricerca Temporale",
-                    "Mappatura Colonne di Input"
-                ],
-                "Valore Utilizzato": [
-                    f"{self.tolleranza / 100:.2f}".replace('.', ','), # Mostra in euro
-                    self.giorni_finestra,
-                    self.max_combinazioni,
-                    f"{self.soglia_residui / 100:.2f}".replace('.', ','), # Mostra in euro
-                    self.giorni_finestra_residui,
-                    self.sorting_strategy,
-                    self.search_direction,
-                    str(self.column_mapping)
-                ]
-            }
-            df_params = pd.DataFrame(params_data)
-            df_params.to_excel(writer, sheet_name='Riepilogo Parametri', index=False)
-
             # --- AGGIUNTA: Foglio Quadratura Mensile ---
             df_mensile = self._calcola_quadratura_mensile()
             if not df_mensile.empty:
@@ -827,47 +1182,72 @@ class RiconciliatoreContabile:
                 for col in cols_to_convert:
                     df_mensile[col] = df_mensile[col] / 100.0
                 
+                # --- NUOVO: Colonna helper per il grafico ---
+                # Per visualizzare correttamente, gli AVERE non abbinati devono essere negativi.
+                df_mensile['AVERE non abbinati (Grafico)'] = -df_mensile['AVERE non abbinati']
+                
                 df_mensile.to_excel(writer, sheet_name='Quadratura Mensile', index=False)
                 
                 ws = writer.sheets['Quadratura Mensile']
                 
                 # Applica formattazione valuta alle celle (perché ora sono numeri puri)
                 for col_idx, col_name in enumerate(df_mensile.columns, start=1):
-                    if col_name != 'Mese':
+                    if col_name != 'Mese' and '(Grafico)' not in col_name: # Escludi colonna helper
                         for row in range(2, len(df_mensile) + 2):
                             cell = ws.cell(row=row, column=col_idx)
                             cell.number_format = '#,##0.00 €'
                 
-                # Adatta larghezza colonne (A-H)
+                # Adatta larghezza colonne
                 for idx, col in enumerate(df_mensile.columns):
-                    max_len = min(50, max(df_mensile[col].astype(str).map(len).max() if not df_mensile.empty else 0, len(str(col)))) + 2
-                    ws.column_dimensions[chr(65 + idx)].width = max_len
+                    if '(Grafico)' not in col: # Non adattare la colonna nascosta
+                        max_len = min(50, max(df_mensile[col].astype(str).map(len).max() if not df_mensile.empty else 0, len(str(col)))) + 2
+                        ws.column_dimensions[chr(65 + idx)].width = max_len
 
-                # --- GRAFICO SBILANCI ---
+                # --- GRAFICO SBILANCI (MODIFICATO) ---
                 try:
                     chart = BarChart()
                     chart.type = "col"
                     chart.style = 10
-                    chart.title = "Composizione Sbilancio Mensile (Dare vs Avere)"
+                    chart.title = "Composizione Sbilancio Mensile"
                     chart.y_axis.title = "Importo (€)"
                     chart.x_axis.title = "Mese"
+                    chart.grouping = "stacked"
+                    chart.overlap = 100
                     
-                    # Colonne: Mese, Delta DARE, Delta AVERE
+                    # Colonne: Mese, DARE non abbinati, AVERE non abbinati (Grafico), Sbilancio Assorbito
                     col_mese_idx = df_mensile.columns.get_loc('Mese') + 1
-                    col_dare_idx = df_mensile.columns.get_loc('Delta DARE (Non Usato)') + 1
-                    col_avere_idx = df_mensile.columns.get_loc('Delta AVERE (Non Riconc.)') + 1
+                    col_dare_idx = df_mensile.columns.get_loc('DARE non abbinati') + 1
+                    col_avere_grafico_idx = df_mensile.columns.get_loc('AVERE non abbinati (Grafico)') + 1
+                    col_assorbito_idx = df_mensile.columns.get_loc('Sbilancio Assorbito (in match)') + 1
                     
-                    # Seleziona le due colonne dei delta (sono adiacenti)
-                    data = Reference(ws, min_col=col_dare_idx, max_col=col_avere_idx, min_row=1, max_row=len(df_mensile)+1)
                     cats = Reference(ws, min_col=col_mese_idx, min_row=2, max_row=len(df_mensile)+1)
                     
-                    chart.add_data(data, titles_from_data=True)
+                    # Serie 1: DARE non abbinati
+                    data_dare = Reference(ws, min_col=col_dare_idx, min_row=1, max_row=len(df_mensile)+1)
+                    chart.add_data(data_dare, titles_from_data=True)
+                    chart.series[0].title = "DARE non abbinati"
+                    
+                    # Serie 2: AVERE non abbinati (negativi)
+                    data_avere = Reference(ws, min_col=col_avere_grafico_idx, min_row=1, max_row=len(df_mensile)+1)
+                    chart.add_data(data_avere, titles_from_data=True)
+                    chart.series[1].title = "AVERE non abbinati" # Il titolo è positivo per la legenda
+                    
+                    # Serie 3: Sbilancio Assorbito
+                    data_assorbito = Reference(ws, min_col=col_assorbito_idx, min_row=1, max_row=len(df_mensile)+1)
+                    chart.add_data(data_assorbito, titles_from_data=True)
+                    chart.series[2].title = "Sbilancio Assorbito (in match)"
+
                     chart.set_categories(cats)
                     chart.shape = 4
                     chart.width = 25 # Larghezza in cm
                     chart.height = 12 # Altezza in cm
                     
-                    ws.add_chart(chart, "K2") # Posiziona il grafico a destra
+                    # Posiziona il grafico sotto i dati, con un paio di righe di margine
+                    chart_anchor = f"A{len(df_mensile) + 4}"
+                    ws.add_chart(chart, chart_anchor)
+                    
+                    # Nascondi la colonna helper per il grafico
+                    ws.column_dimensions[chr(65 + col_avere_grafico_idx - 1)].hidden = True
                 except Exception as e:
                     print(f"Impossibile creare il grafico: {e}")
 
@@ -916,7 +1296,20 @@ class RiconciliatoreContabile:
 
     def run(self, input_file, output_file=None, verbose=True):
         """
-        Metodo pubblico principale per eseguire l'intero processo di riconciliazione.
+        Esegue l'intero processo di riconciliazione.
+
+        1. Carica (o riceve) i dati.
+        2. Separa i movimenti in DARE e AVERE.
+        3. Esegue gli algoritmi di riconciliazione configurati.
+        4. Genera statistiche e report.
+
+        Args:
+            input_file (str or pd.DataFrame): Percorso del file di input o DataFrame già caricato.
+            output_file (str, optional): Percorso dove salvare il report Excel. Se None, non salva.
+            verbose (bool): Se True, stampa log dettagliati su console.
+
+        Returns:
+            dict: Dizionario contenente le statistiche finali della riconciliazione.
         """
         if not NUMBA_AVAILABLE and verbose:
             # Stampa un avviso se Numba non è disponibile
@@ -945,8 +1338,29 @@ class RiconciliatoreContabile:
             self._separa_movimenti(df)
 
             if verbose: print("3. Avvio passate di riconciliazione...")
-            # _riconcilia ora restituisce i DataFrame aggiornati con la colonna 'usato'
-            self.dare_df, self.avere_df, self.df_abbinamenti = self._riconcilia(verbose=verbose)
+            
+            all_abbinamenti = []
+
+            # --- SCELTA DELL'ALGORITMO ---
+            # Se 'all', esegue prima il saldo progressivo (per i blocchi) poi il subset sum (per i residui)
+            algorithms_to_run = []
+            if self.algorithm == 'all':
+                algorithms_to_run = ['progressive_balance', 'subset_sum']
+            elif self.algorithm == 'progressive_balance':
+                algorithms_to_run = ['progressive_balance']
+            else: # subset_sum o default
+                algorithms_to_run = ['subset_sum']
+
+            for algo in algorithms_to_run:
+                if algo == 'progressive_balance':
+                    all_abbinamenti.extend(self._riconcilia_saldo_progressivo(verbose=verbose))
+                elif algo == 'subset_sum':
+                    all_abbinamenti.extend(self._riconcilia_subset_sum(verbose=verbose))
+
+            # Finalizzazione comune
+            self.dare_df['usato'] = self.dare_df['indice_orig'].isin(self.used_dare_indices)
+            self.avere_df['usato'] = self.avere_df['indice_orig'].isin(self.used_avere_indices)
+            self.df_abbinamenti = self._finalizza_abbinamenti(all_abbinamenti)
 
             # Verifica quadratura
             self._verifica_quadratura_totali(tot_dare_orig, tot_avere_orig, verbose=verbose)

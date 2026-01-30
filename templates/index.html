@@ -4,138 +4,357 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>CashRec Riconciliazione</title>
+    <!-- Bootstrap CSS (Necessario per le Tabs e i Form di index.html) -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Custom CSS (Stile base di index2.html) -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        /* Piccoli aggiustamenti per integrare Bootstrap nel design personalizzato */
+        .nav-tabs .nav-link { color: var(--cashrec-navy-blue); }
+        .nav-tabs .nav-link.active { color: var(--cashrec-navy-blue); font-weight: bold; border-bottom-color: white; }
+        .tab-content { background-color: white; border: 1px solid #dee2e6; border-top: none; border-radius: 0 0 0.375rem 0.375rem; }
+    </style>
 </head>
 <body>
 
+    <!-- Header (da index2.html) -->
     <header class="cashrec-banner">
         <img src="{{ url_for('static', filename='img/cashrec-banner-it.svg') }}" alt="CashRec Banner">
     </header>
 
     <div class="cashrec-container">
+        <!-- Logo (da index2.html) -->
         <div class="cashrec-logo">
             <img src="{{ url_for('static', filename='img/cashrec-logo-concept-1.svg') }}" alt="CashRec Logo">
         </div>
 
         <h1>Riconciliazione Cassa</h1>
 
-        <div class="cashrec-form-container">
-            <p class="cashrec-text-center cashrec-mb-20">
-                Seleziona un file Excel (.xlsx, .xls) con le colonne 'Data', 'Dare' e 'Avere'.
-            </p>
-            <form id="upload-form">
-                <div class="cashrec-form-group">
-                    <label for="file_input">Seleziona il file da elaborare</label>
-                    <input type="file" id="file_input" name="file_input" accept=".xlsx, .xls" required>
+        <!-- Struttura a Schede (da index.html) integrata nel container -->
+        <div class="mt-4">
+            <ul class="nav nav-tabs" id="main-tabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="upload-tab" data-bs-toggle="tab" data-bs-target="#upload-tab-pane" type="button" role="tab" aria-controls="upload-tab-pane" aria-selected="true">1. Elabora File</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings-tab-pane" type="button" role="tab" aria-controls="settings-tab-pane" aria-selected="false">2. Impostazioni</button>
+                </li>
+            </ul>
+
+            <div class="tab-content p-4 shadow-sm" id="myTabContent">
+                <!-- Scheda 1: Elaborazione -->
+                <div class="tab-pane fade show active" id="upload-tab-pane" role="tabpanel" aria-labelledby="upload-tab" tabindex="0">
+                    <div class="card border-0">
+                        <div class="card-body p-0">
+                            <p class="mb-3">Seleziona un file Excel (.xlsx, .xls) con le colonne 'Data', 'Dare' e 'Avere'.</p>
+                            <form id="upload-form" enctype="multipart/form-data">
+                                <div class="mb-3">
+                                    <input class="form-control" type="file" id="file_input" name="file_input" accept=".xlsx,.xls" required>
+                                </div>
+                                <button type="submit" id="submit-btn" class="btn btn-primary w-100">
+                                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" id="spinner" style="display:none;"></span>
+                                    Elabora File
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div id="results-area" style="display:none; margin-top: 30px;">
+                        <h4 class="mb-3">Risultati Elaborazione</h4>
+                        <div class="alert" id="results-alert" role="alert"></div>
+                        <pre class="bg-light p-3 border rounded"><code id="results-log"></code></pre>
+                        <div class="text-center mt-3">
+                            <a href="#" id="download-link" class="btn btn-success btn-lg" style="display: none;">Scarica Report Excel</a>
+                        </div>
+                    </div>
                 </div>
-                <div class="cashrec-btn-container">
-                    <button type="submit" id="submit-button" class="cashrec-btn cashrec-btn-primary">Elabora File</button>
-                </div>
-            </form>
-            
-            <div id="progress-container" class="cashrec-progress-container">
-                <div class="cashrec-progress-bar-container">
-                    <div id="progress-bar"></div>
+
+                <!-- Scheda 2: Impostazioni -->
+                <div class="tab-pane fade" id="settings-tab-pane" role="tabpanel" aria-labelledby="settings-tab" tabindex="0">
+                    <div class="card border-0">
+                        <div class="card-body p-0">
+                            <form id="settings-form">
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label for="tolleranza" class="form-label fw-bold">Tolleranza (€)</label>
+                                        <input type="number" class="form-control" id="tolleranza" name="tolleranza" step="0.01" min="0">
+                                        <div class="form-text">Valore decimale, es. 0.01 per 1 centesimo.</div>
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label for="algorithm" class="form-label fw-bold">Algoritmo Principale</label>
+                                        <select class="form-select" id="algorithm" name="algorithm">
+                                            <option value="subset_sum">Subset Sum (Standard)</option>
+                                            <option value="progressive_balance">Saldo Progressivo</option>
+                                            <option value="all">Tutti (Sequenza Ottimizzata)</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <!-- Opzioni Condivise -->
+                                <div id="shared-options-container">
+                                    <hr>
+                                    <h6 class="fw-bold">Parametri Comuni</h6>
+                                    <div class="row">
+                                        <div class="col-md-6 mb-3">
+                                            <label for="giorni_finestra" class="form-label">Finestra Temporale (giorni)</label>
+                                            <input type="number" class="form-control" id="giorni_finestra" name="giorni_finestra" step="1" min="0">
+                                            <div class="form-text">Subset Sum: intervallo ricerca. Saldo Prog.: timeout reset.</div>
+                                        </div>
+                                        <div class="col-md-6 mb-3">
+                                            <label for="sorting_strategy" class="form-label">Strategia Ordinamento Iniziale</label>
+                                            <select class="form-select" id="sorting_strategy" name="sorting_strategy">
+                                                <option value="date">Data</option>
+                                                <option value="amount">Importo</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Opzioni Subset Sum -->
+                                <div id="subset-sum-options-container">
+                                    <hr>
+                                    <h6 class="fw-bold">Parametri Subset Sum</h6>
+                                    <div class="row">
+                                        <div class="col-md-6 mb-3">
+                                            <label for="max_combinazioni" class="form-label">Max Combinazioni per Match</label>
+                                            <input type="number" class="form-control" id="max_combinazioni" name="max_combinazioni" step="1" min="1">
+                                        </div>
+                                        <div class="col-md-6 mb-3">
+                                            <label for="search_direction" class="form-label">Direzione Ricerca Temporale</label>
+                                            <select class="form-select" id="search_direction" name="search_direction">
+                                                <option value="past_only">Solo Passato</option>
+                                                <option value="future_only">Solo Futuro</option>
+                                                <option value="both">Entrambe le direzioni</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    
+                                    <h6 class="mt-2 fw-bold">Analisi Residui</h6>
+                                    <div class="row">
+                                        <div class="col-md-6 mb-3">
+                                            <label for="soglia_residui" class="form-label">Soglia Avvio Analisi (€)</label>
+                                            <input type="number" class="form-control" id="soglia_residui" name="soglia_residui" step="1" min="0">
+                                        </div>
+                                        <div class="col-md-6 mb-3">
+                                            <label for="giorni_finestra_residui" class="form-label">Finestra Temporale Residui (giorni)</label>
+                                            <input type="number" class="form-control" id="giorni_finestra_residui" name="giorni_finestra_residui" step="1" min="0">
+                                        </div>
+                                    </div>
+                                    <div class="mb-3 form-check">
+                                        <input type="checkbox" class="form-check-input" id="disable_numba" name="disable_numba">
+                                        <label class="form-check-label" for="disable_numba">Disabilita Ottimizzazione Numba (Usa Python Puro)</label>
+                                    </div>
+                                </div>
+
+                                <!-- Opzioni Saldo Progressivo -->
+                                <div id="progressive-options-container">
+                                    <hr>
+                                    <h6 class="fw-bold">Parametri Saldo Progressivo</h6>
+                                    <div class="mb-3 form-check">
+                                        <input type="checkbox" class="form-check-input" id="ignore_tolerance" name="ignore_tolerance">
+                                        <label class="form-check-label" for="ignore_tolerance">Forza chiusura blocchi (Saldo Progressivo) se superano la finestra temporale</label>
+                                    </div>
+                                </div>
+
+                                <div class="d-flex justify-content-end mt-3 gap-2">
+                                    <button type="button" id="reset-settings-btn" class="btn btn-outline-secondary">Reset Impostazioni</button>
+                                    <button type="button" id="save-settings-btn" class="btn btn-success">Salva Impostazioni</button>
+                                </div>
+                                 <div id="save-feedback" class="mt-3"></div>
+                            </form>
+                        </div>
+                    </div>
                 </div>
             </div>
-
-            <div id="message-container"></div>
         </div>
 
-        <div id="results-container" class="cashrec-results-container">
-            <h4 class="cashrec-text-center cashrec-mb-20">Riepilogo Elaborazione</h4>
-            <pre id="log-output"></pre>
-            <div id="download-button-container" class="cashrec-btn-container">
-                <!-- Il pulsante di download verrà inserito qui -->
-            </div>
-        </div>
-
+        <!-- Footer (da index2.html) -->
         <footer class="cashrec-footer">
-            <small>CashRec Reconciliation Service v2.0</small>
+            <small>CashRec Reconciliation Service v3.0</small>
         </footer>
     </div>
 
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const form = document.getElementById('upload-form');
-        const submitButton = document.getElementById('submit-button');
-        const messageContainer = document.getElementById('message-container');
-        const progressContainer = document.getElementById('progress-container');
-        const progressBar = document.getElementById('progress-bar');
-        const resultsContainer = document.getElementById('results-container');
-        const logOutput = document.getElementById('log-output');
-        const downloadButtonContainer = document.getElementById('download-button-container');
+        document.addEventListener('DOMContentLoaded', function() {
+            const settingsForm = document.getElementById('settings-form');
+            const uploadForm = document.getElementById('upload-form');
+            const saveSettingsBtn = document.getElementById('save-settings-btn');
+            const resetSettingsBtn = document.getElementById('reset-settings-btn');
+            const submitBtn = document.getElementById('submit-btn');
+            const spinner = document.getElementById('spinner');
+            const resultsArea = document.getElementById('results-area');
+            const resultsAlert = document.getElementById('results-alert');
+            const resultsLog = document.getElementById('results-log');
+            const downloadLink = document.getElementById('download-link');
+            const algorithmSelect = document.getElementById('algorithm');
+            
+            // Contenitori delle opzioni
+            const sharedOptionsContainer = document.getElementById('shared-options-container');
+            const subsetSumOptionsContainer = document.getElementById('subset-sum-options-container');
+            const progressiveOptionsContainer = document.getElementById('progressive-options-container');
 
-        form.addEventListener('submit', async (event) => {
-            event.preventDefault();
+            // Elementi specifici da controllare
+            const sortingStrategySelect = document.getElementById('sorting_strategy');
 
-            messageContainer.innerHTML = '';
-            resultsContainer.style.display = 'none';
-            logOutput.textContent = '';
-            downloadButtonContainer.innerHTML = '';
+            // Gestione visibilità opzioni algoritmo
+            function toggleAlgorithmOptions() {
+                const val = algorithmSelect.value;
 
-            const formData = new FormData(form);
-            if (!formData.get('file_input').name) {
-                displayMessage('Per favore, seleziona un file.', 'danger');
-                return;
+                // Nascondi tutto per poi mostrare solo il necessario
+                sharedOptionsContainer.style.display = 'none';
+                subsetSumOptionsContainer.style.display = 'none';
+                progressiveOptionsContainer.style.display = 'none';
+
+                // Nascondi tutte le intestazioni di gruppo inizialmente
+                sharedOptionsContainer.querySelector('h6').style.display = 'none';
+                subsetSumOptionsContainer.querySelector('h6').style.display = 'none';
+                progressiveOptionsContainer.querySelector('h6').style.display = 'none';
+
+                // Abilita sorting_strategy di default, poi disabilita se necessario
+                sortingStrategySelect.disabled = false;
+
+                if (val === 'progressive_balance') {
+                    sharedOptionsContainer.style.display = 'block';
+                    progressiveOptionsContainer.style.display = 'block';
+                    sortingStrategySelect.disabled = true; // Disabilita per Saldo Progressivo
+                } else if (val === 'subset_sum') {
+                    sharedOptionsContainer.style.display = 'block';
+                    subsetSumOptionsContainer.style.display = 'block';
+                } else if (val === 'all') { // Algoritmo "Tutti"
+                    sharedOptionsContainer.style.display = 'block';
+                    subsetSumOptionsContainer.style.display = 'block';
+                    progressiveOptionsContainer.style.display = 'block';
+
+                    // Mostra le intestazioni di gruppo solo per l'opzione "Tutti"
+                    sharedOptionsContainer.querySelector('h6').style.display = 'block';
+                    subsetSumOptionsContainer.querySelector('h6').style.display = 'block';
+                    progressiveOptionsContainer.querySelector('h6').style.display = 'block';
+                }
+
+                // Se sorting_strategy è disabilitato, assicurati che il valore sia 'date'
+                // per coerenza con la logica del backend.
+                if (sortingStrategySelect.disabled) {
+                    sortingStrategySelect.value = 'date';
+                }
+
+            }
+            algorithmSelect.addEventListener('change', toggleAlgorithmOptions);
+
+            // Funzione per caricare/resettare la configurazione dal backend
+            function loadConfig() {
+                fetch('/api/config')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) return alert(`Errore config: ${data.error}`);
+                        settingsForm.tolleranza.value = data.tolleranza;
+                        settingsForm.giorni_finestra.value = data.giorni_finestra;
+                        settingsForm.max_combinazioni.value = data.max_combinazioni;
+                        settingsForm.sorting_strategy.value = data.sorting_strategy;
+                        settingsForm.search_direction.value = data.search_direction;
+                        settingsForm.algorithm.value = data.algorithm;
+                        settingsForm.disable_numba.checked = (data.use_numba === false);
+                        settingsForm.ignore_tolerance.checked = (data.ignore_tolerance === true);
+                        if (data.residui) {
+                            settingsForm.soglia_residui.value = data.residui.soglia_importo;
+                            settingsForm.giorni_finestra_residui.value = data.residui.giorni_finestra;
+                        }
+                        toggleAlgorithmOptions();
+                    })
+                    .catch(console.error);
             }
 
-            submitButton.disabled = true;
-            submitButton.textContent = 'Elaborazione...';
-            progressContainer.style.display = 'block';
+            // Carica la configurazione iniziale al caricamento della pagina
+            loadConfig();
 
-            let progress = 0;
-            const interval = setInterval(() => {
-                progress += 5;
-                if (progress <= 95) {
-                    progressBar.style.width = progress + '%';
+            // Event listener per il pulsante di reset
+            resetSettingsBtn.addEventListener('click', function() {
+                if (confirm("Sei sicuro di voler ripristinare le impostazioni? Le modifiche non salvate andranno perse.")) {
+                    loadConfig();
+                    const fb = document.getElementById('save-feedback');
+                    fb.innerHTML = '<div class="alert alert-info" role="alert">Impostazioni ripristinate ai valori salvati.</div>';
+                    setTimeout(() => fb.innerHTML = '', 3000);
                 }
-            }, 200);
+            });
+            
+            // Salvataggio Impostazioni
+            saveSettingsBtn.addEventListener('click', function() {
+                const formData = new FormData(settingsForm);
+                const configData = {
+                    tolleranza: parseFloat(formData.get('tolleranza')),
+                    giorni_finestra: parseInt(formData.get('giorni_finestra')),
+                    max_combinazioni: parseInt(formData.get('max_combinazioni')),
+                    sorting_strategy: formData.get('sorting_strategy'),
+                    search_direction: formData.get('search_direction'),
+                    algorithm: formData.get('algorithm'),
+                    use_numba: !document.getElementById('disable_numba').checked,
+                    ignore_tolerance: document.getElementById('ignore_tolerance').checked,
+                    residui: {
+                        attiva: true,
+                        soglia_importo: parseFloat(formData.get('soglia_residui')),
+                        giorni_finestra: parseInt(formData.get('giorni_finestra_residui'))
+                    }
+                };
 
-            try {
-                const response = await fetch('/processa', {
+                fetch('/api/config', {
                     method: 'POST',
-                    body: formData,
-                });
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(configData)
+                })
+                .then(r => r.json())
+                .then(d => {
+                    const fb = document.getElementById('save-feedback');
+                    fb.innerHTML = d.status === 'success' ? 
+                        '<div class="alert alert-success">Impostazioni salvate!</div>' : 
+                        `<div class="alert alert-danger">Errore: ${d.message}</div>`;
+                    setTimeout(() => fb.innerHTML = '', 3000);
+                })
+                .catch(console.error);
+            });
 
-                clearInterval(interval);
-                progressBar.style.width = '100%';
+            // Invio Form Elaborazione
+            uploadForm.addEventListener('submit', function(event) {
+                event.preventDefault();
+                spinner.style.display = 'inline-block';
+                submitBtn.disabled = true;
+                resultsArea.style.display = 'none';
 
-                const result = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(result.error || 'Errore del server.');
-                }
+                const formData = new FormData();
+                formData.append('file_input', document.getElementById('file_input').files[0]);
                 
-                if (result.version !== '3.0') {
-                    throw new Error('Il backend non è aggiornato. Per favore, arresta (Ctrl+C) e riavvia il server python.');
-                }
+                // Aggiunge i parametri dal form impostazioni
+                new FormData(settingsForm).forEach((value, key) => formData.append(key, value));
+                formData.set('use_numba', !document.getElementById('disable_numba').checked);
+                formData.set('ignore_tolerance', document.getElementById('ignore_tolerance').checked);
 
-                logOutput.textContent = result.log_content;
-                const downloadLink = document.createElement('a');
-                downloadLink.href = result.download_url;
-                downloadLink.className = 'cashrec-btn cashrec-btn-primary';
-                downloadLink.textContent = 'Scarica Report Excel';
-                downloadButtonContainer.appendChild(downloadLink);
-                resultsContainer.style.display = 'block';
-
-            } catch (error) {
-                displayMessage(error.message, 'danger');
-                progressContainer.style.display = 'none';
-            } finally {
-                setTimeout(() => {
-                    submitButton.disabled = false;
-                    submitButton.textContent = 'Elabora File';
-                    progressContainer.style.display = 'none';
-                    progressBar.style.width = '0%';
-                }, 500);
-            }
+                fetch('/processa', { method: 'POST', body: formData })
+                .then(r => r.json())
+                .then(data => {
+                    resultsArea.style.display = 'block';
+                    if (data.error) {
+                        resultsAlert.className = 'alert alert-danger';
+                        resultsAlert.textContent = `Errore: ${data.error}`;
+                        downloadLink.style.display = 'none';
+                    } else {
+                        resultsAlert.className = 'alert alert-success';
+                        resultsAlert.textContent = 'Elaborazione completata con successo!';
+                        resultsLog.textContent = data.log_content;
+                        downloadLink.href = data.download_url;
+                        downloadLink.style.display = 'inline-block';
+                    }
+                })
+                .catch(err => {
+                    resultsArea.style.display = 'block';
+                    resultsAlert.className = 'alert alert-danger';
+                    resultsAlert.textContent = `Errore server: ${err}`;
+                })
+                .finally(() => {
+                    spinner.style.display = 'none';
+                    submitBtn.disabled = false;
+                });
+            });
         });
-
-        function displayMessage(message, type = 'info') {
-            const messageClass = type === 'danger' ? 'cashrec-message-danger' : 'cashrec-message-info';
-            messageContainer.innerHTML = `<div class="${messageClass}">${message}</div>`;
-        }
     </script>
-
 </body>
 </html>

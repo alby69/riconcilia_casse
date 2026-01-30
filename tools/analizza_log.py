@@ -18,10 +18,14 @@ def analizza_log(data_str=None, export_csv=False):
     Questo script è stato adattato alla struttura dei log generati da batch.py.
     """
     log_dir = 'log'
+    # Cerca la cartella log nella directory corrente o in quella superiore (se spostato in tools/)
     if not os.path.isdir(log_dir):
-        print(f"Errore: La cartella '{log_dir}' non è stata trovata.")
-        print("Assicurati di eseguire lo script dalla cartella principale del progetto 'riconcilia_casse'.")
-        return
+        if os.path.isdir(os.path.join('..', 'log')):
+            log_dir = os.path.join('..', 'log')
+        else:
+            print(f"Errore: La cartella '{log_dir}' non è stata trovata.")
+            print("Assicurati di eseguire lo script dalla cartella principale del progetto 'riconcilia_casse'.")
+            return
 
     if data_str:
         try:

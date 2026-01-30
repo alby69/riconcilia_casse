@@ -11,7 +11,13 @@ try:
     # Add the directory of convert_to_feather.py to the Python path
     # This assumes batch.py and convert_to_feather.py are in the same directory
     sys.path.append(os.path.dirname(__file__))
-    from convert_to_feather import convert_excel_to_feather
+    try:
+        from convert_to_feather import convert_excel_to_feather
+    except ImportError:
+        # Fallback: cerca nella cartella tools se il file è stato spostato
+        sys.path.append(os.path.join(os.path.dirname(__file__), 'tools'))
+        from convert_to_feather import convert_excel_to_feather
+
 except ImportError:
     print("Errore: impossibile importare 'convert_to_feather'. Assicurati che il file 'convert_to_feather.py' sia nella stessa directory.")
     sys.exit(1)
@@ -64,7 +70,7 @@ def process_single_file(filename, input_dir, output_dir, base_config):
 def process_single_file_wrapper(args):
     return process_single_file(*args)
 
-def run_batch(sequential_optimizer=False):
+def run_batch(sequential_optimizer=False, save_log=False):
     input_dir = 'input/'
     output_dir = 'output/'
     base_config_path = 'config.json'
@@ -101,7 +107,7 @@ def run_batch(sequential_optimizer=False):
             all_stats.append(file_stats)
 
     # --- Step 5: Genera, stampa e salva il riepilogo globale ---
-    _generate_and_save_summary(all_stats, output_dir)
+    _generate_and_save_summary(all_stats, output_dir, save_log)
 
 def _handle_file_conversion(file_path, file_base_name, file_ext, output_folder, sequential_optimizer=False):
     """Converte file Excel in Feather per ottimizzare le performance."""
@@ -218,7 +224,7 @@ def _run_main_reconciliation(config_path, filename):
         print(f"Errore imprevisto durante l'esecuzione di main.py per '{filename}': {e}")
         return None
 
-def _generate_and_save_summary(all_stats, output_dir):
+def _generate_and_save_summary(all_stats, output_dir, save_log=False):
     """Genera il riepilogo, lo stampa a console e lo salva in un file di log."""
     summary_lines = []
     separator = "="*50
@@ -266,14 +272,15 @@ def _generate_and_save_summary(all_stats, output_dir):
     summary_text = "\n".join(summary_lines)
     print("\n" + summary_text) # Stampa a console
 
-    # Salva su file di log
-    log_dir = 'log'
-    os.makedirs(log_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_filename = os.path.join(log_dir, f"{timestamp}_summary.log")
-    with open(log_filename, 'w', encoding='utf-8') as f:
-        f.write(summary_text)
-    print(f"\n📄 Riepilogo salvato in: {log_filename}")
+    if save_log:
+        # Salva su file di log solo se richiesto
+        log_dir = 'log'
+        os.makedirs(log_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_filename = os.path.join(log_dir, f"{timestamp}_summary.log")
+        with open(log_filename, 'w', encoding='utf-8') as f:
+            f.write(summary_text)
+        print(f"\n📄 Riepilogo salvato in: {log_filename}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Esegue il processo di riconciliazione in batch su una cartella di file.")
@@ -282,5 +289,10 @@ if __name__ == "__main__":
         action='store_true',
         help="Forza l'esecuzione dell'ottimizzatore in modalità sequenziale (un processo alla volta) per evitare un uso eccessivo della CPU."
     )
+    parser.add_argument(
+        '--save-log',
+        action='store_true',
+        help="Salva il riepilogo dell'esecuzione in un file nella cartella log/."
+    )
     args = parser.parse_args()
-    run_batch(sequential_optimizer=args.sequential_optimizer)
+    run_batch(sequential_optimizer=args.sequential_optimizer, save_log=args.save_log)

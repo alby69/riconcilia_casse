@@ -44,6 +44,10 @@
     "search_direction": {
       "type": "categorical",
       "values": ["past_only", "future_only", "both"]
+    },
+    "algorithm": {
+      "type": "categorical",
+      "values": ["subset_sum", "progressive_balance", "all"]
     }
   }
 }

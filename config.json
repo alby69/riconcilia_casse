@@ -1,6 +1,6 @@
 {
-  "tolleranza": 0.01,
-  "giorni_finestra": 10,
+  "tolleranza": 1,
+  "giorni_finestra": 6,
   "max_combinazioni": 6,
   "cartella_input": "input",
   "cartella_output": "output",
@@ -20,10 +20,15 @@
     "Incassi": "INCASSI",
     "Versamenti": "VERSAMENTI"
   },
+  "algorithm": "progressive_balance",
   "residui": {
     "attiva": true,
     "soglia_importo": 100,
     "giorni_finestra": 90
   },
-  "commento": "File di configurazione per il sistema di riconciliazione. Permette di personalizzare il comportamento degli script senza modificare il codice sorgente."
+  "commento": "File di configurazione per il sistema di riconciliazione. Permette di personalizzare il comportamento degli script senza modificare il codice sorgente.",
+  "sorting_strategy": null,
+  "search_direction": null,
+  "use_numba": true,
+  "ignore_tolerance": true
 }

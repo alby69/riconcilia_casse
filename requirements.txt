@@ -1,7 +1,9 @@
 Flask
 pandas
+numpy
 openpyxl
 xlrd
 tqdm
 optuna
 numba
+pyarrow
