@@ -1,40 +1,40 @@
-# Servizio Web di Riconciliazione Contabile
+# Accounting Reconciliation Web Service
 
-Questo progetto è un'applicazione web basata su Flask che fornisce un servizio interattivo di riconciliazione contabile. Gli utenti possono caricare file Excel, configurare dinamicamente i parametri di elaborazione tramite un'interfaccia web e ottenere report dettagliati.
+This project is a Flask-based web application that provides an interactive accounting reconciliation service. Users can upload Excel files, dynamically configure processing parameters through a web interface, and obtain detailed reports.
 
-L'architettura è stata evoluta da uno script batch a un'applicazione client-server per offrire maggiore flessibilità, accessibilità e un'esperienza utente migliorata.
+The architecture has evolved from a batch script to a client-server application to offer greater flexibility, accessibility, and an improved user experience.
 
-## ✨ Caratteristiche Principali
+## ✨ Key Features
 
-- **Interfaccia Web Intuitiva**: Una UI pulita e organizzata in schede per caricare file e personalizzare le impostazioni di elaborazione.
-- **Algoritmi Multipli**: Supporta diversi algoritmi di riconciliazione, tra cui "Subset Sum" e "Saldo Progressivo", selezionabili dall'utente.
-- **Configurazione Dinamica**: Permette di modificare in tempo reale parametri chiave come tolleranza, finestre temporali e strategie di ricerca direttamente dal browser.
-- **Elaborazione Sicura in Memoria**: I file vengono processati interamente in memoria per garantire velocità e sicurezza, senza salvare dati sensibili su disco in modo permanente.
-- **Report Excel Dettagliati**: L'output è un file Excel multi-foglio che include:
-  - Un **Manuale** con la spiegazione dell'algoritmo e dei parametri usati.
-  - Gli **Abbinamenti** trovati, colorati in base alla passata di riconciliazione.
-  - I movimenti **DARE e AVERE non riconciliati**.
-  - **Statistiche** complete sull'esito dell'elaborazione.
-  - Un'analisi della **Quadratura Mensile** con grafico.
-- **Pronto per la Produzione**: Include istruzioni per l'avvio con un server WSGI di produzione come Gunicorn, capace di gestire richieste multiple concorrenti.
-- **Docker Ready**: Applicazione containerizzata per un deployment rapido e isolato.
+- **Intuitive Web Interface**: A clean, tab-organized UI for uploading files and customizing processing settings.
+- **Multiple Algorithms**: Supports various reconciliation algorithms, including "Subset Sum" and "Progressive Balance," selectable by the user.
+- **Dynamic Configuration**: Allows real-time modification of key parameters like tolerance, time windows, and search strategies directly from the browser.
+- **Secure In-Memory Processing**: Files are processed entirely in memory to ensure speed and security, without permanently saving sensitive data to disk.
+- **Detailed Excel Reports**: The output is a multi-sheet Excel file that includes:
+  - A **Manual** explaining the algorithm and parameters used.
+  - The **Matches** found, colored according to the reconciliation pass.
+  - **Unreconciled DEBIT and CREDIT** movements.
+  - Complete **Statistics** on the processing outcome.
+  - A **Monthly Balance** analysis with a chart.
+- **Production Ready**: Includes instructions for starting with a production WSGI server like Gunicorn, capable of handling multiple concurrent requests.
+- **Docker Ready**: Containerized application for fast and isolated deployment.
 
-## ⚙️ Installazione
+## ⚙️ Installation
 
-1.  **Prerequisiti**: Assicurati di avere Python 3.9 o superiore installato.
+1.  **Prerequisites**: Ensure you have Python 3.9 or higher installed.
 
-2.  **Clona il Repository (se necessario)**:
+2.  **Clone the Repository (if necessary)**:
     ```bash
     git clone <URL_DEL_TUO_REPOSITORY>
     cd riconcilia_casse
     ```
 
-3.  **Crea un Ambiente Virtuale**: È una buona pratica isolare le dipendenze del progetto.
+3.  **Create a Virtual Environment**: It's good practice to isolate project dependencies.
     ```bash
     python -m venv .venv
     ```
 
-4.  **Attiva l'Ambiente Virtuale**:
+4.  **Activate the Virtual Environment**:
     - Su macOS/Linux:
       ```bash
       source .venv/bin/activate
@@ -44,34 +44,34 @@ L'architettura è stata evoluta da uno script batch a un'applicazione client-ser
       .venv\Scripts\activate
       ```
 
-5.  **Installa le Dipendenze**: Installa tutte le librerie necessarie, inclusa Flask.
+5.  **Install Dependencies**: Install all necessary libraries, including Flask.
     ```bash
     pip install -r requirements.txt
     ```
-    *Nota: Per la modalità di produzione, potrebbe essere necessario installare Gunicorn separatamente (`pip install gunicorn`).*
+    *Note: For production mode, you might need to install Gunicorn separately (`pip install gunicorn`).*
 
-## 🐳 Utilizzo con Docker
+## 🐳 Usage with Docker
 
-Il progetto supporta Docker per un deployment rapido e isolato. Puoi scegliere tra **Docker Compose** (consigliato) o i comandi manuali.
+The project supports Docker for quick and isolated deployment. You can choose between **Docker Compose** (recommended) or manual commands.
 
-### Opzione A: Docker Compose (Consigliata)
+### Option A: Docker Compose (Recommended)
 
-Il metodo più semplice, che gestisce automaticamente la build e la persistenza dei dati (log e output).
+The easiest method, which automatically handles the build and data persistence (logs and output).
 
-1.  **Avviare il servizio**:
+1.  **Start the service**:
     ```bash
-    docker-compose up -d --build
+    docker compose up -d --build
     ```
-    L'applicazione sarà accessibile su `http://localhost:5000`.
+    The application will be accessible at `http://localhost:5000`.
 
-2.  **Gestione**:
-    - Fermare il servizio: `docker-compose down`
-    - Visualizzare i log: `docker-compose logs -f`
+2.  **Management**:
+    - Stop the service: `docker compose down`
+    - View logs: `docker compose logs -f`
 
-### Opzione B: Docker CLI (Manuale)
+### Option B: Docker CLI (Manual)
 
-#### 1. Costruire l'immagine
-Dalla cartella principale del progetto, esegui:
+#### 1. Build the image
+From the project's root folder, run:
 ```bash
 docker build -t riconcilia-casse .
 ```
@@ -114,7 +114,7 @@ Per un uso reale con più utenti, è necessario un server WSGI come **Gunicorn**
 
 **a. Installa Gunicorn:**
 ```bash
-pip install gunicorn
+pip install gunicorn  # Già incluso in requirements.txt
 ```
 
 **b. Avvia il server con Gunicorn:**

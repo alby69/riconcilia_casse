@@ -7,104 +7,104 @@ from flask import Flask, request, render_template, jsonify, send_from_directory,
 import uuid
 from core import RiconciliatoreContabile
 
-# --- Configurazione dell'App Flask ---
+# --- Flask App Configuration ---
 app = Flask(__name__)
-app.secret_key = 'supersecretkey_dev' # Cambiare in produzione
+app.secret_key = 'supersecretkey_dev' # Change in production
 
-# --- Configurazione delle cartelle ---
+# --- Folder Configuration ---
 LOG_FOLDER = 'log'
 OUTPUT_FOLDER = 'output'
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 CONFIG_FILE_PATH = 'config.json'
 
-# Assicura che le cartelle esistano all'avvio
+# Ensure folders exist on startup
 os.makedirs(LOG_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# --- Funzioni Helper per la Configurazione ---
+# --- Configuration Helper Functions ---
 def load_config():
-    """Carica la configurazione da config.json."""
+    """Loads the configuration from config.json."""
     with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 def save_config(new_config):
-    """Salva la configurazione su config.json."""
-    # Prima carica la configurazione esistente per non perdere chiavi non presenti nella UI
+    """Saves the configuration to config.json."""
+    # First, load the existing configuration to avoid losing keys not present in the UI
     current_config = load_config()
-    # Aggiorna la configurazione con i nuovi valori
+    # Update the configuration with the new values
     current_config.update(new_config)
-    # Salva il file completo
+    # Save the complete file
     with open(CONFIG_FILE_PATH, 'w', encoding='utf-8') as f:
         json.dump(current_config, f, indent=2, ensure_ascii=False)
 
 def robust_currency_parser(value):
-    """Converte in modo robusto una stringa o un numero in un formato numerico standard per pd.to_numeric."""
-    # Se è già un numero, è a posto.
+    """Robustly converts a string or number into a standard numeric format for pd.to_numeric."""
+    # If it's already a number, it's fine.
     if isinstance(value, (int, float)):
         return value
-    # Se non è una stringa, non possiamo farci nulla.
+    # If it's not a string, we can't do anything.
     if not isinstance(value, str):
-        return None # Verrà convertito in NaN
+        return None # Will be converted to NaN
     
-    # Pulisci la stringa da spazi e simbolo euro
+    # Clean the string from spaces and euro symbol
     cleaned_str = str(value).strip().replace('€', '').replace(' ', '')
     
-    # Caso 1: Formato italiano completo (es. "1.234,56")
-    # La presenza di entrambi i separatori è un forte indicatore.
+    # Case 1: Full Italian format (e.g., "1.234,56")
+    # The presence of both separators is a strong indicator.
     if '.' in cleaned_str and ',' in cleaned_str:
         return cleaned_str.replace('.', '').replace(',', '.')
     
-    # Caso 2: Formato italiano con solo decimali (es. "1234,56")
+    # Case 2: Italian format with only decimals (e.g., "1234,56")
     if ',' in cleaned_str:
         return cleaned_str.replace(',', '.')
         
-    # Caso 3: Formato senza virgole (es. "1234" o "1234.56"). Lasciamo il punto.
+    # Case 3: Format without commas (e.g., "1234" or "1234.56"). We leave the dot.
     return cleaned_str
 
 # --- Pagina Principale ---
 @app.route('/')
 def index():
-    """Mostra la pagina iniziale con il form di upload."""
+    """Displays the initial page with the upload form."""
     return render_template('index.html')
 
 # --- API per la Configurazione ---
 @app.route('/api/config', methods=['GET'])
 def get_config():
-    """Restituisce la configurazione corrente in formato JSON."""
+    """Returns the current configuration in JSON format."""
     try:
         return jsonify(load_config())
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        return jsonify({'error': f"Impossibile leggere config.json: {e}"}), 500
+        return jsonify({'error': f"Unable to read config.json: {e}"}), 500
 
 @app.route('/api/config', methods=['POST'])
 def update_config():
-    """Aggiorna e salva la configurazione da un JSON inviato."""
+    """Updates and saves the configuration from a submitted JSON."""
     new_config_data = request.json
     save_config(new_config_data)
-    return jsonify({'status': 'success', 'message': 'Configurazione salvata con successo.'})
+    return jsonify({'status': 'success', 'message': 'Configuration saved successfully.'})
 
 # --- Endpoint per l'Elaborazione (modificato per AJAX) ---
 @app.route('/processa', methods=['POST'])
 def processa_file():
     """
-    Gestisce il caricamento del file, l'elaborazione, salva i risultati
-    e restituisce un JSON con il link per il download e il log.
+    Handles file upload, processing, saves the results,
+    and returns a JSON with the download link and log.
     """
     if 'file_input' not in request.files:
-        return jsonify({'error': 'Nessun file selezionato.'}), 400
+        return jsonify({'error': 'No file selected.'}), 400
 
     file = request.files['file_input']
 
     if file.filename == '':
-        return jsonify({'error': 'Nessun file selezionato.'}), 400
+        return jsonify({'error': 'No file selected.'}), 400
 
     if not (file.filename.endswith('.xlsx') or file.filename.endswith('.xls')):
-        return jsonify({'error': 'Formato file non supportato. Si prega di caricare un file Excel (.xlsx o .xls).'}), 400
+        return jsonify({'error': 'Unsupported file format. Please upload an Excel file (.xlsx or .xls).'}), 400
     
     try:
-        # --- 1. Estrazione dei parametri di configurazione dal form ---
-        # I valori inviati dal form sono stringhe, vanno convertiti al tipo corretto.
-        # Estraiamo 'save_log' separatamente perché non va passato al costruttore di RiconciliatoreContabile
+        # --- 1. Extract configuration parameters from the form ---
+        # Values sent from the form are strings, they need to be converted to the correct type.
+        # We extract 'save_log' separately because it's not passed to the RiconciliatoreContabile constructor
         save_log = request.form.get('save_log') == 'true'
 
         config_params = {
@@ -119,13 +119,15 @@ def processa_file():
             'ignore_tolerance': request.form.get('ignore_tolerance') == 'true'
         }
 
-        # --- 2. Preparazione del DataFrame ---
-        df_input = pd.read_excel(file.stream)
+        # --- 2. DataFrame Preparation ---
+        # Fix for Python 3.9 SpooledTemporaryFile error: read into BytesIO
+        file.stream.seek(0)
+        df_input = pd.read_excel(io.BytesIO(file.stream.read()))
 
-        # Applicazione del mapping colonne (External -> Internal) prima di accedere ai dati
+        # Apply column mapping (External -> Internal) before accessing data
         full_config = load_config()
         mapping_conf = full_config.get('mapping_colonne', {})
-        # Inverte il mapping: {'Data': 'DATA'} -> {'DATA': 'Data'} per rinominare correttamente
+        # Invert the mapping: {'Data': 'DATE'} -> {'DATE': 'Data'} to rename correctly
         rename_mapping = {v: k for k, v in mapping_conf.items()}
         df_input.rename(columns=rename_mapping, inplace=True)
 
@@ -133,7 +135,7 @@ def processa_file():
         df_input.dropna(subset=['Data'], inplace=True)
 
         # --- NUOVA LOGICA DI PARSING ROBUSTA ---
-        # Applica il parser a ogni cella, poi converte l'intera colonna.
+        # Apply the parser to each cell, then convert the entire column.
         df_input['Dare'] = pd.to_numeric(df_input['Dare'].apply(robust_currency_parser), errors='coerce')
         df_input['Avere'] = pd.to_numeric(df_input['Avere'].apply(robust_currency_parser), errors='coerce')
 
@@ -142,11 +144,11 @@ def processa_file():
         df_input['Avere'] = (df_input['Avere'] * 100).round().astype(int)
         df_input['indice_orig'] = df_input.index
 
-        # --- 3. Esecuzione della logica di riconciliazione con i parametri dalla UI ---
+        # --- 3. Execute reconciliation logic with parameters from the UI ---
         riconciliatore = RiconciliatoreContabile(**config_params)
         stats = riconciliatore.run(df_input, output_file=None, verbose=False)
 
-        # --- 4. Salvataggio del file di output con nome unico ---
+        # --- 4. Save the output file with a unique name ---
         unique_id = uuid.uuid4()
         sanitized_filename = "".join(c for c in file.filename if c.isalnum() or c in ('.', '_')).rstrip()
         unique_output_filename = f"{unique_id}_{sanitized_filename}"
@@ -154,7 +156,7 @@ def processa_file():
         
         riconciliatore._crea_report_excel(output_filepath, df_input)
 
-        # --- 5. Creazione e salvataggio del file di log ---
+        # --- 5. Create and save the log file ---
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         log_filename = f"{timestamp}_{sanitized_filename}_summary.log"
         log_filepath = os.path.join(LOG_FOLDER, log_filename)
@@ -166,19 +168,19 @@ def processa_file():
             elif '_raw_perc' in key:
                 formatted_stats[key] = f"{value:.2f} %".replace('.', ',')
 
-        # Salva su disco solo se richiesto esplicitamente
+        # Save to disk only if explicitly requested
         if save_log:
             with open(log_filepath, 'w', encoding='utf-8') as f:
                 json.dump(formatted_stats, f, indent=4, ensure_ascii=False)
         
-        # --- 6. Preparazione dei nomi e salvataggio in sessione ---
+        # --- 6. Prepare names and save in session ---
         base_name, extension = os.path.splitext(sanitized_filename)
-        pretty_download_filename = f"{base_name}_risultato{extension}"
+        pretty_download_filename = f"{base_name}_result{extension}"
         
-        # Salva la mappa {nome_bello: nome_unico} nella sessione utente
+        # Save the map {pretty_name: unique_name} in the user session
         session['download_map'] = {pretty_download_filename: unique_output_filename}
         
-        # --- 7. Restituzione del JSON per il frontend ---
+        # --- 7. Return JSON for the frontend ---
         return jsonify({
             'log_content': json.dumps(formatted_stats, indent=4, ensure_ascii=False),
             'download_url': url_for('download_file', filename=pretty_download_filename),
@@ -188,27 +190,27 @@ def processa_file():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'error': f"Si è verificato un errore critico: {str(e)}"}), 500
+        return jsonify({'error': f"A critical error occurred: {str(e)}"}), 500
 
 
 # --- Nuovo Endpoint per il Download ---
 @app.route('/download/<filename>')
 def download_file(filename):
     """
-    Serve il file di output usando una mappa salvata in sessione
-    per trovare il file fisico con nome univoco.
+    Serves the output file using a map saved in the session
+    to find the physical file with a unique name.
     """
     download_map = session.get('download_map', {})
     actual_filename = download_map.get(filename)
     
     if not actual_filename:
-        return "File non trovato o sessione scaduta.", 404
+        return "File not found or session expired.", 404
         
     return send_from_directory(
         app.config['OUTPUT_FOLDER'], 
         actual_filename, 
         as_attachment=True,
-        download_name=filename  # FIX: Specifica il nome del file per il download
+        download_name=filename  # FIX: Specify the filename for the download
     )
 
 

@@ -1,6 +1,6 @@
 {
-  "tolleranza": 1,
-  "giorni_finestra": 6,
+  "tolleranza": 100,
+  "giorni_finestra": 10,
   "max_combinazioni": 6,
   "cartella_input": "input",
   "cartella_output": "output",
@@ -30,5 +30,5 @@
   "sorting_strategy": null,
   "search_direction": null,
   "use_numba": true,
-  "ignore_tolerance": true
+  "ignore_tolerance": false
 }

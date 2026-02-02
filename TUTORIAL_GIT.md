@@ -1,12 +1,12 @@
-# Tutorial Git per il progetto riconcilia_casse
+# Git Tutorial for the riconcilia_casse project
 
-Questa guida rapida illustra i comandi Git essenziali per gestire questo progetto.
+This quick guide covers the essential Git commands for managing this project.
 
-## 1. Configurazione Iniziale (da eseguire una sola volta)
+## 1. Initial Setup (to be done only once)
 
-Se stai iniziando da zero e vuoi caricare il progetto su GitHub per la prima volta.
+If you are starting from scratch and want to upload the project to GitHub for the first time.
 
-### 1.1. Inizializza un repository Git locale
+### 1.1. Initialize a local Git repository
 ```bash
 git init -b main
 ```
