@@ -15,7 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Esponi la porta su cui Gunicorn sarà in ascolto
-EXPOSE 5000
+#EXPOSE 5000
+EXPOSE 10000
 
 # Comando per avviare l'applicazione quando il container parte
-CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:5000", "app:app"]
+#CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:5000", "app:app"]
+CMD ["sh", "-c", "gunicorn", "--workers", "2", "--bind", "0.0.0.0:$PORT app:app"]
