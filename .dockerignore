@@ -1,24 +1,7 @@
-# Ignora file temporanei e cache di Python
-__pycache__
-*.pyc
-*.pyo
-*.pyd
-
-# Ignora ambienti virtuali
-venv
 .venv
-env
-
-# Ignora file di configurazione IDE e Git
+__pycache__
 .git
-.vscode
-.idea
-
-# Ignora cartelle di output e log locali per non sporcare il container
-log/
-output/
-input/
-
-# Ignora database locali o file temporanei specifici
-*.db
-*.sqlite3
+.env
+*.pyc
+output
+log

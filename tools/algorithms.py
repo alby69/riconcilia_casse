@@ -1,65 +1,65 @@
 import itertools
 import pandas as pd
 
-def find_simple_match(dare_row, avere_df, tolleranza):
+def find_simple_match(debit_row, credit_df, tolerance):
     """
-    Algoritmo di riconciliazione semplice (1-a-1).
-    Cerca un singolo versamento (Avere) che corrisponda all'incasso (Dare)
-    entro la tolleranza specificata.
+    Simple 1-to-1 reconciliation algorithm.
+    Finds a single credit transaction that matches a debit transaction
+    within the specified tolerance.
     """
-    dare_importo = dare_row['Dare']
+    debit_amount = debit_row['Debit']
     
-    # Calcola la differenza assoluta e trova il miglior match
-    potential_matches = avere_df.copy()
-    potential_matches['diff'] = abs(potential_matches['Avere'] - dare_importo)
+    # Calculate the absolute difference and find the best match
+    potential_matches = credit_df.copy()
+    potential_matches['diff'] = abs(potential_matches['Credit'] - debit_amount)
     
     best_match = potential_matches.loc[potential_matches['diff'].idxmin()]
     
-    if best_match['diff'] <= tolleranza:
-        # Restituisce un DataFrame per coerenza con l'altro algoritmo
+    if best_match['diff'] <= tolerance:
+        # Return a DataFrame for consistency with the other algorithm
         return pd.DataFrame([best_match])
         
     return None
 
-def find_greedy_subset_sum_match(dare_row, avere_df, tolleranza, max_combinazioni):
+def find_subset_sum_match(debit_row, credit_df, tolerance, max_combinations):
     """
-    Algoritmo "Greedy Subset Sum" (N-M).
-    Cerca una combinazione di versamenti (Avere) la cui somma corrisponda
-    all'incasso (Dare) entro la tolleranza.
+    Greedy Subset Sum algorithm (N-to-1).
+    Searches for a combination of credit transactions whose sum matches
+    a single debit transaction within the specified tolerance.
     """
-    dare_importo = dare_row['Dare']
+    debit_amount = debit_row['Debit']
     
-    # Filtra gli Avere che sono più piccoli o uguali al Dare + tolleranza
-    # per ridurre lo spazio di ricerca.
-    candidate_avere = avere_df[avere_df['Avere'] <= dare_importo + tolleranza].copy()
+    # Filter credits that are smaller than or equal to the debit amount + tolerance
+    # to reduce the search space.
+    candidate_credits = credit_df[credit_df['Credit'] <= debit_amount + tolerance].copy()
 
-    # Itera sul numero di elementi da combinare (da 1 a max_combinazioni)
-    for n in range(1, max_combinazioni + 1):
-        # Se il numero di candidati è inferiore a n, non possiamo creare combinazioni
-        if len(candidate_avere) < n:
+    # Iterate on the number of items to combine (from 1 to max_combinations)
+    for n in range(1, max_combinations + 1):
+        # If the number of candidates is less than n, we cannot create combinations
+        if len(candidate_credits) < n:
             break
             
-        # Genera tutte le combinazioni di 'n' versamenti
-        for combo_indices in itertools.combinations(candidate_avere.index, n):
-            combo_df = candidate_avere.loc[list(combo_indices)]
-            combo_sum = combo_df['Avere'].sum()
+        # Generate all combinations of 'n' credits
+        for combo_indices in itertools.combinations(candidate_credits.index, n):
+            combo_df = candidate_credits.loc[list(combo_indices)]
+            combo_sum = combo_df['Credit'].sum()
             
-            # Controlla se la somma della combinazione è nel range di tolleranza
-            if abs(combo_sum - dare_importo) <= tolleranza:
-                # Trovata la prima combinazione valida, la restituiamo (approccio greedy)
+            # Check if the sum of the combination is within the tolerance range
+            if abs(combo_sum - debit_amount) <= tolerance:
+                # First valid combination found, return it (greedy approach)
                 return combo_df
                 
     return None
 
-# Dizionario per mappare le stringhe di configurazione alle funzioni dell'algoritmo
+# Dictionary to map configuration strings to algorithm functions
 RECONCILIATION_ALGORITHMS = {
     "simple": find_simple_match,
-    "greedy_subset_sum": find_greedy_subset_sum_match
+    "subset_sum": find_subset_sum_match
 }
 
-def get_reconciliation_function(strategy_name: str):
-    """Restituisce la funzione di riconciliazione basata sul nome della strategia."""
+def get_algorithm(strategy_name: str):
+    """Returns the reconciliation function based on the strategy name."""
     func = RECONCILIATION_ALGORITHMS.get(strategy_name)
     if not func:
-        raise ValueError(f"Strategia di riconciliazione non valida: '{strategy_name}'. Valori possibili: {list(RECONCILIATION_ALGORITHMS.keys())}")
+        raise ValueError(f"Invalid reconciliation strategy: '{strategy_name}'. Possible values: {list(RECONCILIATION_ALGORITHMS.keys())}")
     return func

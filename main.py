@@ -1,11 +1,11 @@
 """
-Wrapper Esecutivo per Riconciliazione Contabile.
+Executive Wrapper for Accounting Reconciliation.
 
-Questo script ha il solo scopo di:
-1. Leggere un file di configurazione JSON.
-2. Istanziare la classe RiconciliatoreContabile con i parametri corretti.
-3. Lanciare il processo di riconciliazione tramite il metodo run().
-4. Stampare le statistiche finali in formato JSON se eseguito in modalità 'silent'.
+This script's sole purpose is to:
+1. Read a JSON configuration file.
+2. Instantiate the RiconciliatoreContabile class with the correct parameters.
+3. Launch the reconciliation process via the run() method.
+4. Print the final statistics in JSON format if run in 'silent' mode.
 """
 import argparse
 import json
@@ -13,28 +13,28 @@ import sys
 from core import RiconciliatoreContabile
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Esegue la riconciliazione contabile basata su un file di configurazione.")
-    parser.add_argument('--config', required=True, help="Percorso del file di configurazione JSON.")
-    parser.add_argument('--silent', action='store_true', help="Esegui senza output verboso (usato dal batch).")
+    parser = argparse.ArgumentParser(description="Runs the accounting reconciliation based on a configuration file.")
+    parser.add_argument('--config', required=True, help="Path to the JSON configuration file.")
+    parser.add_argument('--silent', action='store_true', help="Run without verbose output (used by the batch process).")
     
     args = parser.parse_args()
     
-    # Carica la configurazione dal file specificato
+    # Load configuration from the specified file
     try:
         with open(args.config, 'r') as f:
             config = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"❌ ERRORE: Impossibile caricare o parsare il file di configurazione '{args.config}': {e}", file=sys.stderr)
+        print(f"❌ ERROR: Could not load or parse the configuration file '{args.config}': {e}", file=sys.stderr)
         sys.exit(1)
 
     input_file = config.get('file_input')
     output_file = config.get('file_output')
 
     if not input_file or not output_file:
-        print("❌ ERRORE: 'file_input' e 'file_output' devono essere specificati nel file di configurazione.", file=sys.stderr)
+        print("❌ ERROR: 'file_input' and 'file_output' must be specified in the configuration file.", file=sys.stderr)
         sys.exit(1)
 
-    # Istanzia il riconciliatore con i parametri dalla configurazione
+    # Instantiate the reconciler with parameters from the configuration
     riconciliatore = RiconciliatoreContabile(
         tolleranza=config.get('tolleranza', 0.01),
         giorni_finestra=config.get('giorni_finestra', 30),
@@ -49,13 +49,13 @@ if __name__ == "__main__":
         ignore_tolerance=config.get('ignore_tolerance', False)
     )
 
-    # Esegui l'intero processo
+    # Run the entire process
     stats = riconciliatore.run(input_file, output_file, verbose=False) # Forza verbose=False
 
     if args.silent and stats:
-        # --- AGGIUNTA: Includi i parametri usati nel report JSON ---
-        # Definisci i parametri di interesse che vuoi visualizzare nel riepilogo finale.
-        parametri_da_includere = [
+        # --- ADDITION: Include the parameters used in the JSON report ---
+        # Define the parameters of interest to display in the final summary.
+        parameters_to_include = [
             'giorni_finestra', 
             'max_combinazioni', 
             'giorni_finestra_residui', 
@@ -63,7 +63,7 @@ if __name__ == "__main__":
             'sorting_strategy', 
             'search_direction'
         ]
-        # Aggiungi i parametri trovati nel file di configurazione al dizionario delle statistiche.
-        stats['parametri_ottimali'] = {key: config.get(key) for key in parametri_da_includere}
+        # Add the parameters found in the configuration file to the statistics dictionary.
+        stats['optimal_parameters'] = {key: config.get(key) for key in parameters_to_include}
 
-        print(json.dumps(stats)) # Stampa le statistiche in JSON per il processo padre
+        print(json.dumps(stats)) # Print statistics in JSON for the parent process

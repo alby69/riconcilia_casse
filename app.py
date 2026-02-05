@@ -6,6 +6,7 @@ from datetime import datetime
 from flask import Flask, request, render_template, jsonify, send_from_directory, session, url_for
 import uuid
 from core import RiconciliatoreContabile
+from core import AccountingReconciler
 
 # --- Flask App Configuration ---
 app = Flask(__name__)
@@ -113,6 +114,11 @@ def processa_file():
             'max_combinazioni': request.form.get('max_combinazioni', 10, type=int),
             'soglia_residui': request.form.get('soglia_residui', 100.0, type=float),
             'giorni_finestra_residui': request.form.get('giorni_finestra_residui', 30, type=int),
+            'tolerance': request.form.get('tolerance', 0.01, type=float),
+            'time_window_days': request.form.get('time_window_days', 7, type=int),
+            'max_combinations': request.form.get('max_combinations', 10, type=int),
+            'residual_threshold': request.form.get('residual_threshold', 100.0, type=float),
+            'residual_time_window_days': request.form.get('residual_time_window_days', 30, type=int),
             'sorting_strategy': request.form.get('sorting_strategy', 'date', type=str),
             'search_direction': request.form.get('search_direction', 'past_only', type=str),
             'algorithm': request.form.get('algorithm', 'subset_sum', type=str),
@@ -128,25 +134,37 @@ def processa_file():
         full_config = load_config()
         mapping_conf = full_config.get('mapping_colonne', {})
         # Invert the mapping: {'Data': 'DATE'} -> {'DATE': 'Data'} to rename correctly
+        mapping_conf = full_config.get('column_mapping', {})
+        # Invert the mapping: {'Date': 'DATE'} -> {'DATE': 'Date'} to rename correctly
         rename_mapping = {v: k for k, v in mapping_conf.items()}
         df_input.rename(columns=rename_mapping, inplace=True)
 
         df_input['Data'] = pd.to_datetime(df_input['Data'], errors='coerce', dayfirst=True)
         df_input.dropna(subset=['Data'], inplace=True)
+        df_input['Date'] = pd.to_datetime(df_input['Date'], errors='coerce', dayfirst=True)
+        df_input.dropna(subset=['Date'], inplace=True)
 
         # --- NUOVA LOGICA DI PARSING ROBUSTA ---
         # Apply the parser to each cell, then convert the entire column.
         df_input['Dare'] = pd.to_numeric(df_input['Dare'].apply(robust_currency_parser), errors='coerce')
         df_input['Avere'] = pd.to_numeric(df_input['Avere'].apply(robust_currency_parser), errors='coerce')
+        df_input['Debit'] = pd.to_numeric(df_input['Debit'].apply(robust_currency_parser), errors='coerce')
+        df_input['Credit'] = pd.to_numeric(df_input['Credit'].apply(robust_currency_parser), errors='coerce')
 
         df_input[['Dare', 'Avere']] = df_input[['Dare', 'Avere']].fillna(0)
         df_input['Dare'] = (df_input['Dare'] * 100).round().astype(int)
         df_input['Avere'] = (df_input['Avere'] * 100).round().astype(int)
         df_input['indice_orig'] = df_input.index
+        df_input[['Debit', 'Credit']] = df_input[['Debit', 'Credit']].fillna(0)
+        df_input['Debit'] = (df_input['Debit'] * 100).round().astype(int)
+        df_input['Credit'] = (df_input['Credit'] * 100).round().astype(int)
+        df_input['orig_index'] = df_input.index
 
         # --- 3. Execute reconciliation logic with parameters from the UI ---
         riconciliatore = RiconciliatoreContabile(**config_params)
         stats = riconciliatore.run(df_input, output_file=None, verbose=False)
+        reconciler = AccountingReconciler(**config_params)
+        stats = reconciler.run(df_input, output_file=None, verbose=False)
 
         # --- 4. Save the output file with a unique name ---
         unique_id = uuid.uuid4()
@@ -155,6 +173,7 @@ def processa_file():
         output_filepath = os.path.join(app.config['OUTPUT_FOLDER'], unique_output_filename)
         
         riconciliatore._crea_report_excel(output_filepath, df_input)
+        reconciler._create_excel_report(output_filepath, df_input)
 
         # --- 5. Create and save the log file ---
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')

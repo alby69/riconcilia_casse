@@ -1,104 +1,76 @@
 # Accounting Reconciliation Web Service
 
-This project is a Flask-based web application that provides an interactive accounting reconciliation service. Users can upload Excel files, dynamically configure processing parameters through a web interface, and obtain detailed reports.
-
-The architecture has evolved from a batch script to a client-server application to offer greater flexibility, accessibility, and an improved user experience.
+This project provides a powerful and flexible accounting reconciliation service, accessible via a web interface or as a batch processing script. It allows users to upload financial data, apply sophisticated matching algorithms, and generate detailed reports.
 
 ## ✨ Key Features
 
 - **Intuitive Web Interface**: A clean, tab-organized UI for uploading files and customizing processing settings.
-- **Multiple Algorithms**: Supports various reconciliation algorithms, including "Subset Sum" and "Progressive Balance," selectable by the user.
+- **Multiple Algorithms**: Supports various reconciliation algorithms, including "Simple" (1-to-1) and "Subset Sum" (N-to-1), selectable by the user.
 - **Dynamic Configuration**: Allows real-time modification of key parameters like tolerance, time windows, and search strategies directly from the browser.
-- **Secure In-Memory Processing**: Files are processed entirely in memory to ensure speed and security, without permanently saving sensitive data to disk.
+- **Secure In-Memory Processing**: Files are processed in memory to ensure speed and data privacy, without permanently storing sensitive data.
 - **Detailed Excel Reports**: The output is a multi-sheet Excel file that includes:
-  - A **Manual** explaining the algorithm and parameters used.
-  - The **Matches** found, colored according to the reconciliation pass.
-  - **Unreconciled DEBIT and CREDIT** movements.
-  - Complete **Statistics** on the processing outcome.
-  - A **Monthly Balance** analysis with a chart.
-- **Production Ready**: Includes instructions for starting with a production WSGI server like Gunicorn, capable of handling multiple concurrent requests.
-- **Docker Ready**: Containerized application for fast and isolated deployment.
+  - A **Summary** sheet with parameters and high-level results.
+  - A sheet with all **Matches** found.
+  - Sheets for **Unreconciled Debit** and **Unreconciled Credit** transactions.
+  - Detailed processing **Statistics**.
+  - A **Monthly Balance** analysis with a visual chart.
+- **Batch Processing**: A command-line script (`batch.py`) to process multiple files automatically.
+- **Parameter Optimizer**: A script (`optimizer.py`) to find the optimal reconciliation parameters for a given dataset.
+- **Production & Docker Ready**: Containerized with Docker and ready for production deployment using a Gunicorn WSGI server.
 
 ## ⚙️ Installation
 
-1.  **Prerequisites**: Ensure you have Python 3.9 or higher installed.
+1.  **Prerequisites**: Python 3.9+ and Git.
 
-2.  **Clone the Repository (if necessary)**:
+2.  **Clone the Repository**:
     ```bash
-    git clone <URL_DEL_TUO_REPOSITORY>
-    cd riconcilia_casse
+    git clone <YOUR_REPOSITORY_URL>
+    cd accounting-reconciliation
     ```
 
-3.  **Create a Virtual Environment**: It's good practice to isolate project dependencies.
+3.  **Create and Activate a Virtual Environment**:
     ```bash
     python -m venv .venv
+    source .venv/bin/activate  # On Windows, use: .venv\Scripts\activate
     ```
 
-4.  **Activate the Virtual Environment**:
-    - Su macOS/Linux:
-      ```bash
-      source .venv/bin/activate
-      ```
-    - Su Windows:
-      ```bash
-      .venv\Scripts\activate
-      ```
-
-5.  **Install Dependencies**: Install all necessary libraries, including Flask.
+4.  **Install Dependencies**:
     ```bash
     pip install -r requirements.txt
     ```
-    *Note: For production mode, you might need to install Gunicorn separately (`pip install gunicorn`).*
 
 ## 🐳 Usage with Docker
 
-The project supports Docker for quick and isolated deployment. You can choose between **Docker Compose** (recommended) or manual commands.
+The recommended way to run the application is with Docker Compose, which simplifies building the image and managing containers.
 
-### Option A: Docker Compose (Recommended)
+### Using Docker Compose
 
-The easiest method, which automatically handles the build and data persistence (logs and output).
-
-1.  **Start the service**:
+1.  **Build and Start the Service**:
     ```bash
     docker compose up -d --build
     ```
     The application will be accessible at `http://localhost:5000`.
 
-2.  **Management**:
-    - Stop the service: `docker compose down`
-    - View logs: `docker compose logs -f`
+2.  **View Logs**:
+    ```bash
+    docker compose logs -f
+    ```
 
-### Option B: Docker CLI (Manual)
+3.  **Stop the Service**:
+    ```bash
+    docker compose down
+    ```
 
-#### 1. Build the image
-From the project's root folder, run:
-```bash
-docker build -t riconcilia-casse .
-```
+## 🚀 How to Use
 
-### 2. Avviare il Container
-Esegui il container mappando la porta 5000:
-```bash
-docker run -p 5000:5000 riconcilia-casse
-```
-L'applicazione sarà accessibile su `http://localhost:5000`.
+### Web Application
 
-### 3. Persistenza dei Dati (Opzionale)
-Per salvare i log e i file di output sulla tua macchina host (invece che dentro il container), usa i volumi:
-```bash
-docker run -p 5000:5000 -v $(pwd)/output:/app/output -v $(pwd)/log:/app/log riconcilia-casse
-```
+The web app is ideal for interactive, single-file processing.
 
-## 🚀 Utilizzo
+#### 1. Start the Application
 
-### 1. Avviare l'Applicazione Web
-
-Puoi avviare l'applicazione in due modalità:
-
-#### Modalità di Sviluppo (per test locali)
-Utilizza il server integrato di Flask, semplice da avviare ma adatto a un solo utente alla volta.
-
-**Avvio del server:**
+**Development Mode (for local testing):**
+Uses the Flask development server, suitable for a single user.
 ```bash
 python app.py
 ```
@@ -120,6 +92,7 @@ pip install gunicorn  # Già incluso in requirements.txt
 **b. Avvia il server con Gunicorn:**
 ```bash
 python batch_processor.py
+python batch.py
 ```
 
 ### Output Generato
