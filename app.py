@@ -5,8 +5,7 @@ import pandas as pd
 from datetime import datetime
 from flask import Flask, request, render_template, jsonify, send_from_directory, session, url_for
 import uuid
-from core import RiconciliatoreContabile
-from core import AccountingReconciler
+from core import ReconciliationEngine
 
 # --- Flask App Configuration ---
 app = Flask(__name__)
@@ -109,62 +108,77 @@ def processa_file():
         save_log = request.form.get('save_log') == 'true'
 
         config_params = {
-            'tolleranza': request.form.get('tolleranza', 0.01, type=float),
-            'giorni_finestra': request.form.get('giorni_finestra', 7, type=int),
-            'max_combinazioni': request.form.get('max_combinazioni', 10, type=int),
-            'soglia_residui': request.form.get('soglia_residui', 100.0, type=float),
-            'giorni_finestra_residui': request.form.get('giorni_finestra_residui', 30, type=int),
             'tolerance': request.form.get('tolerance', 0.01, type=float),
-            'time_window_days': request.form.get('time_window_days', 7, type=int),
+            'days_window': request.form.get('days_window', 7, type=int),
             'max_combinations': request.form.get('max_combinations', 10, type=int),
             'residual_threshold': request.form.get('residual_threshold', 100.0, type=float),
-            'residual_time_window_days': request.form.get('residual_time_window_days', 30, type=int),
+            'residual_days_window': request.form.get('residual_days_window', 30, type=int),
             'sorting_strategy': request.form.get('sorting_strategy', 'date', type=str),
             'search_direction': request.form.get('search_direction', 'past_only', type=str),
-            'algorithm': request.form.get('algorithm', 'subset_sum', type=str),
+            'algorithm': request.form.get('algorithm', 'auto', type=str),
             'ignore_tolerance': request.form.get('ignore_tolerance') == 'true'
         }
 
         # --- 2. DataFrame Preparation ---
         # Fix for Python 3.9 SpooledTemporaryFile error: read into BytesIO
+        # --- 2. Load and Prepare DataFrame ---
         file.stream.seek(0)
         df_input = pd.read_excel(io.BytesIO(file.stream.read()))
 
-        # Apply column mapping (External -> Internal) before accessing data
-        full_config = load_config()
-        mapping_conf = full_config.get('mapping_colonne', {})
-        # Invert the mapping: {'Data': 'DATE'} -> {'DATE': 'Data'} to rename correctly
-        mapping_conf = full_config.get('column_mapping', {})
-        # Invert the mapping: {'Date': 'DATE'} -> {'DATE': 'Date'} to rename correctly
-        rename_mapping = {v: k for k, v in mapping_conf.items()}
-        df_input.rename(columns=rename_mapping, inplace=True)
+        # CLEANING: Strip whitespace from column names to avoid "DATA " != "DATA" issues
+        if not df_input.empty:
+            df_input.columns = df_input.columns.str.strip()
 
-        df_input['Data'] = pd.to_datetime(df_input['Data'], errors='coerce', dayfirst=True)
-        df_input.dropna(subset=['Data'], inplace=True)
+        # Apply column mapping (External -> Internal) before accessing data
+        # Apply column mapping from config.json
+        full_config = load_config()
+        # Support both new ('column_mapping') and legacy ('mapping_colonne') keys
+        mapping_conf = full_config.get('column_mapping', full_config.get('mapping_colonne', {}))
+        
+        # Map internal keys to English (Date, Debit, Credit) if they are in Italian
+        key_translation = {
+            'Data': 'Date',
+            'Dare': 'Debit',
+            'Avere': 'Credit',
+            'Incassi': 'Debit',
+            'Versamenti': 'Credit'
+        }
+
+        # Invert the mapping: {'Date': 'DATE'} -> {'DATE': 'Date'} to rename correctly
+        # And ensure the target column name is the English one expected by core.py
+        rename_mapping = {}
+        for internal_key, external_col in mapping_conf.items():
+            # If the config uses Italian keys (Data, Dare, Avere), translate them to English
+            target_key = key_translation.get(internal_key, internal_key)
+            rename_mapping[external_col] = target_key
+
+        df_input.rename(columns=rename_mapping, inplace=True)
+        
+        # Validation: Check if required columns exist
+        required_columns = ['Date', 'Debit', 'Credit']
+        missing_columns = [col for col in required_columns if col not in df_input.columns]
+        if missing_columns:
+            found_cols = df_input.columns.tolist()
+            print(f"⚠️  Validation Failed. Missing: {missing_columns}")
+            print(f"   Columns found in file (after mapping): {found_cols}")
+            return jsonify({'error': f"Missing columns after mapping: {', '.join(missing_columns)}. Columns found in file: {found_cols}. Check config.json mapping."}), 400
+
         df_input['Date'] = pd.to_datetime(df_input['Date'], errors='coerce', dayfirst=True)
         df_input.dropna(subset=['Date'], inplace=True)
 
         # --- NUOVA LOGICA DI PARSING ROBUSTA ---
         # Apply the parser to each cell, then convert the entire column.
-        df_input['Dare'] = pd.to_numeric(df_input['Dare'].apply(robust_currency_parser), errors='coerce')
-        df_input['Avere'] = pd.to_numeric(df_input['Avere'].apply(robust_currency_parser), errors='coerce')
         df_input['Debit'] = pd.to_numeric(df_input['Debit'].apply(robust_currency_parser), errors='coerce')
         df_input['Credit'] = pd.to_numeric(df_input['Credit'].apply(robust_currency_parser), errors='coerce')
 
-        df_input[['Dare', 'Avere']] = df_input[['Dare', 'Avere']].fillna(0)
-        df_input['Dare'] = (df_input['Dare'] * 100).round().astype(int)
-        df_input['Avere'] = (df_input['Avere'] * 100).round().astype(int)
-        df_input['indice_orig'] = df_input.index
         df_input[['Debit', 'Credit']] = df_input[['Debit', 'Credit']].fillna(0)
         df_input['Debit'] = (df_input['Debit'] * 100).round().astype(int)
         df_input['Credit'] = (df_input['Credit'] * 100).round().astype(int)
         df_input['orig_index'] = df_input.index
 
         # --- 3. Execute reconciliation logic with parameters from the UI ---
-        riconciliatore = RiconciliatoreContabile(**config_params)
-        stats = riconciliatore.run(df_input, output_file=None, verbose=False)
-        reconciler = AccountingReconciler(**config_params)
-        stats = reconciler.run(df_input, output_file=None, verbose=False)
+        engine = ReconciliationEngine(**config_params)
+        stats = engine.run(df_input, output_file=None, verbose=False)
 
         # --- 4. Save the output file with a unique name ---
         unique_id = uuid.uuid4()
@@ -172,8 +186,7 @@ def processa_file():
         unique_output_filename = f"{unique_id}_{sanitized_filename}"
         output_filepath = os.path.join(app.config['OUTPUT_FOLDER'], unique_output_filename)
         
-        riconciliatore._crea_report_excel(output_filepath, df_input)
-        reconciler._create_excel_report(output_filepath, df_input)
+        engine._create_excel_report(output_filepath, df_input)
 
         # --- 5. Create and save the log file ---
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -203,7 +216,7 @@ def processa_file():
         return jsonify({
             'log_content': json.dumps(formatted_stats, indent=4, ensure_ascii=False),
             'download_url': url_for('download_file', filename=pretty_download_filename),
-            'version': '3.0' # Versione incrementata per il nuovo fix
+            'version': '3.2'
         })
 
     except Exception as e:

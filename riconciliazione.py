@@ -20,7 +20,7 @@ import json
 import sys
 from tqdm import tqdm
 import pandas as pd
-from core import RiconciliatoreContabile
+from core import ReconciliationEngine
 
 def carica_config():
     """Carica la configurazione da config.json o usa i valori di default."""
@@ -86,19 +86,21 @@ def main():
         print(f"\n{'='*20} Elaborazione di: {file_path.name} {'='*20}")
         try:
             # Istanzia il riconciliatore con i parametri dalla configurazione
-            riconciliatore = RiconciliatoreContabile(
-                tolleranza=config['tolleranza'],
-                giorni_finestra=config['giorni_finestra'],
-                max_combinazioni=config['algoritmo']['max_combinazioni'],
-                soglia_residui=config['residui']['soglia_importo'],
-                giorni_finestra_residui=config['residui']['giorni_finestra'],
-                column_mapping=config.get('mapping_colonne')
+            engine = ReconciliationEngine(
+                tolerance=config['tolleranza'],
+                days_window=config['giorni_finestra'],
+                max_combinations=config['algoritmo']['max_combinazioni'],
+                residual_threshold=config['residui']['soglia_importo'],
+                residual_days_window=config['residui']['giorni_finestra'],
+                column_mapping=config.get('mapping_colonne'),
+                algorithm=config.get('algorithm', 'subset_sum'),
+                search_direction=config.get('search_direction', 'past_only')
             )
 
             output_file = cartella_output / f"risultato_{file_path.stem}.xlsx"
             
             # Esegui l'intero processo passando i percorsi dei file
-            riconciliatore.run(str(file_path), str(output_file))
+            engine.run(str(file_path), str(output_file))
 
         except (IOError, ValueError, FileNotFoundError) as e:
             print(f"❌ ERRORE durante l'elaborazione di {file_path.name}: {e}", file=sys.stderr)

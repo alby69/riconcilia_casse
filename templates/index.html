@@ -1,360 +1,291 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="it">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>CashRec Riconciliazione</title>
-    <!-- Bootstrap CSS (Necessario per le Tabs e i Form di index.html) -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Custom CSS (Stile base di index2.html) -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Riconciliazione Casse - Smart</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
-        /* Piccoli aggiustamenti per integrare Bootstrap nel design personalizzato */
-        .nav-tabs .nav-link { color: var(--cashrec-navy-blue); }
-        .nav-tabs .nav-link.active { color: var(--cashrec-navy-blue); font-weight: bold; border-bottom-color: white; }
-        .tab-content { background-color: white; border: 1px solid #dee2e6; border-top: none; border-radius: 0 0 0.375rem 0.375rem; }
+        body { background-color: #f4f6f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .main-card { max-width: 800px; margin: 50px auto; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.08); border-radius: 15px; }
+        
+        /* Header Style - Logo like */
+        .app-header { background: #fff; border-bottom: 1px solid #e9ecef; padding: 15px 0; margin-bottom: 30px; }
+        .brand-logo { font-size: 1.5rem; font-weight: 700; color: #0d6efd; text-decoration: none; display: flex; align-items: center; justify-content: center; gap: 10px; }
+        .brand-logo i { font-size: 1.8rem; }
+        .brand-subtitle { font-size: 0.9rem; color: #6c757d; font-weight: 400; margin-left: 10px; border-left: 1px solid #dee2e6; padding-left: 10px; }
+
+        .card-header { background: transparent; border-bottom: none; padding: 20px 20px 0 20px; }
+        
+        .upload-area { border: 2px dashed #dee2e6; border-radius: 10px; padding: 40px; text-align: center; cursor: pointer; transition: all 0.3s; background: #fff; }
+        .upload-area:hover { border-color: #0d6efd; background-color: #f8f9fa; }
+        .upload-area.dragover { border-color: #198754; background-color: #e8f5e9; }
+        .advanced-section { background-color: #f8f9fa; border-radius: 10px; padding: 20px; margin-top: 20px; display: none; border: 1px solid #e9ecef; }
+        .log-container { background: #212529; color: #00ff9d; padding: 15px; border-radius: 8px; font-family: 'Consolas', monospace; font-size: 0.85rem; max-height: 300px; overflow-y: auto; margin-top: 20px; display: none; }
+        .btn-process { padding: 12px 30px; font-size: 1.1rem; font-weight: 600; border-radius: 30px; }
+        .settings-toggle { color: #6c757d; text-decoration: none; font-size: 0.9rem; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+        .settings-toggle:hover { color: #0d6efd; }
     </style>
 </head>
 <body>
 
-    <!-- Header (da index2.html) -->
-    <header class="cashrec-banner">
-        <img src="{{ url_for('static', filename='img/cashrec-banner-it.svg') }}" alt="CashRec Banner">
-    </header>
-
-    <div class="cashrec-container">
-        <!-- Logo (da index2.html) -->
-        <div class="cashrec-logo">
-            <img src="{{ url_for('static', filename='img/cashrec-logo-concept-1.svg') }}" alt="CashRec Logo">
-        </div>
-
-        <h1>Riconciliazione Cassa</h1>
-
-        <!-- Struttura a Schede (da index.html) integrata nel container -->
-        <div class="mt-4">
-            <ul class="nav nav-tabs" id="main-tabs" role="tablist">
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link active" id="upload-tab" data-bs-toggle="tab" data-bs-target="#upload-tab-pane" type="button" role="tab" aria-controls="upload-tab-pane" aria-selected="true">1. Elabora File</button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings-tab-pane" type="button" role="tab" aria-controls="settings-tab-pane" aria-selected="false">2. Impostazioni</button>
-                </li>
-            </ul>
-
-            <div class="tab-content p-4 shadow-sm" id="myTabContent">
-                <!-- Scheda 1: Elaborazione -->
-                <div class="tab-pane fade show active" id="upload-tab-pane" role="tabpanel" aria-labelledby="upload-tab" tabindex="0">
-                    <div class="card border-0">
-                        <div class="card-body p-0">
-                            <p class="mb-3">Seleziona un file Excel (.xlsx, .xls) con le colonne 'Data', 'Dare' e 'Avere'.</p>
-                            <form id="upload-form" enctype="multipart/form-data">
-                                <div class="mb-3">
-                                    <input class="form-control" type="file" id="file_input" name="file_input" accept=".xlsx,.xls" required>
-                                </div>
-                                <button type="submit" id="submit-btn" class="btn btn-primary w-100">
-                                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" id="spinner" style="display:none;"></span>
-                                    Elabora File
-                                </button>
-                            </form>
-                        </div>
-                    </div>
-
-                    <div id="results-area" style="display:none; margin-top: 30px;">
-                        <h4 class="mb-3">Risultati Elaborazione</h4>
-                        <div class="alert" id="results-alert" role="alert"></div>
-                        <pre class="bg-light p-3 border rounded"><code id="results-log"></code></pre>
-                        <div class="text-center mt-3">
-                            <a href="#" id="download-link" class="btn btn-success btn-lg" style="display: none;">Scarica Report Excel</a>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Scheda 2: Impostazioni -->
-                <div class="tab-pane fade" id="settings-tab-pane" role="tabpanel" aria-labelledby="settings-tab" tabindex="0">
-                    <div class="card border-0">
-                        <div class="card-body p-0">
-                            <form id="settings-form">
-                                <div class="row">
-                                    <div class="col-md-6 mb-3">
-                                        <label for="tolleranza" class="form-label fw-bold">Tolleranza (€)</label>
-                                        <input type="number" class="form-control" id="tolleranza" name="tolleranza" step="0.01" min="0">
-                                        <div class="form-text">Valore decimale, es. 0.01 per 1 centesimo.</div>
-                                    </div>
-                                    <div class="col-md-6 mb-3">
-                                        <label for="algorithm" class="form-label fw-bold">Algoritmo Principale</label>
-                                        <select class="form-select" id="algorithm" name="algorithm">
-                                            <option value="subset_sum">Subset Sum (Standard)</option>
-                                            <option value="progressive_balance">Saldo Progressivo</option>
-                                            <option value="all">Tutti (Sequenza Ottimizzata)</option>
-                                        </select>
-                                    </div>
-                                </div>
-
-                                <!-- Opzioni Condivise -->
-                                <div id="shared-options-container">
-                                    <hr>
-                                    <h6 class="fw-bold">Parametri Comuni</h6>
-                                    <div class="row">
-                                        <div class="col-md-6 mb-3">
-                                            <label for="giorni_finestra" class="form-label">Finestra Temporale (giorni)</label>
-                                            <input type="number" class="form-control" id="giorni_finestra" name="giorni_finestra" step="1" min="0">
-                                            <div class="form-text">Subset Sum: intervallo ricerca. Saldo Prog.: timeout reset.</div>
-                                        </div>
-                                        <div class="col-md-6 mb-3">
-                                            <label for="sorting_strategy" class="form-label">Strategia Ordinamento Iniziale</label>
-                                            <select class="form-select" id="sorting_strategy" name="sorting_strategy">
-                                                <option value="date">Data</option>
-                                                <option value="amount">Importo</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Opzioni Subset Sum -->
-                                <div id="subset-sum-options-container">
-                                    <hr>
-                                    <h6 class="fw-bold">Parametri Subset Sum</h6>
-                                    <div class="row">
-                                        <div class="col-md-6 mb-3">
-                                            <label for="max_combinazioni" class="form-label">Max Combinazioni per Match</label>
-                                            <input type="number" class="form-control" id="max_combinazioni" name="max_combinazioni" step="1" min="1">
-                                        </div>
-                                        <div class="col-md-6 mb-3">
-                                            <label for="search_direction" class="form-label">Direzione Ricerca Temporale</label>
-                                            <select class="form-select" id="search_direction" name="search_direction">
-                                                <option value="past_only">Solo Passato</option>
-                                                <option value="future_only">Solo Futuro</option>
-                                                <option value="both">Entrambe le direzioni</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                    
-                                    <h6 class="mt-2 fw-bold">Analisi Residui</h6>
-                                    <div class="row">
-                                        <div class="col-md-6 mb-3">
-                                            <label for="soglia_residui" class="form-label">Soglia Avvio Analisi (€)</label>
-                                            <input type="number" class="form-control" id="soglia_residui" name="soglia_residui" step="1" min="0">
-                                        </div>
-                                        <div class="col-md-6 mb-3">
-                                            <label for="giorni_finestra_residui" class="form-label">Finestra Temporale Residui (giorni)</label>
-                                            <input type="number" class="form-control" id="giorni_finestra_residui" name="giorni_finestra_residui" step="1" min="0">
-                                        </div>
-                                    </div>
-                                    <div class="mb-3 form-check">
-                                        <input type="checkbox" class="form-check-input" id="disable_numba" name="disable_numba">
-                                        <label class="form-check-label" for="disable_numba">Disabilita Ottimizzazione Numba (Usa Python Puro)</label>
-                                    </div>
-                                </div>
-
-                                <!-- Opzioni Saldo Progressivo -->
-                                <div id="progressive-options-container">
-                                    <hr>
-                                    <h6 class="fw-bold">Parametri Saldo Progressivo</h6>
-                                    <div class="mb-3 form-check">
-                                        <input type="checkbox" class="form-check-input" id="ignore_tolerance" name="ignore_tolerance">
-                                        <label class="form-check-label" for="ignore_tolerance">Forza chiusura blocchi (Saldo Progressivo) se superano la finestra temporale</label>
-                                    </div>
-                                </div>
-
-                                <div class="d-flex justify-content-end mt-3 gap-2">
-                                    <button type="button" id="reset-settings-btn" class="btn btn-outline-secondary">Reset Impostazioni</button>
-                                    <button type="button" id="save-settings-btn" class="btn btn-success">Salva Impostazioni</button>
-                                </div>
-                                 <div id="save-feedback" class="mt-3"></div>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Footer (da index2.html) -->
-        <footer class="cashrec-footer">
-            <small>CashRec Reconciliation Service v3.0</small>
-        </footer>
+<!-- Header / Logo Section -->
+<div class="app-header shadow-sm">
+    <div class="container text-center">
+        <a href="/" class="brand-logo">
+            <i class="fas fa-chart-line"></i> Riconciliazione Casse <span class="brand-subtitle">Smart Accounting Tool</span>
+        </a>
     </div>
+</div>
 
-    <!-- Scripts -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const settingsForm = document.getElementById('settings-form');
-            const uploadForm = document.getElementById('upload-form');
-            const saveSettingsBtn = document.getElementById('save-settings-btn');
-            const resetSettingsBtn = document.getElementById('reset-settings-btn');
-            const submitBtn = document.getElementById('submit-btn');
-            const spinner = document.getElementById('spinner');
-            const resultsArea = document.getElementById('results-area');
-            const resultsAlert = document.getElementById('results-alert');
-            const resultsLog = document.getElementById('results-log');
-            const downloadLink = document.getElementById('download-link');
-            const algorithmSelect = document.getElementById('algorithm');
+<div class="container">
+    <div class="card main-card">
+        <div class="card-body p-4">
             
-            // Contenitori delle opzioni
-            const sharedOptionsContainer = document.getElementById('shared-options-container');
-            const subsetSumOptionsContainer = document.getElementById('subset-sum-options-container');
-            const progressiveOptionsContainer = document.getElementById('progressive-options-container');
+            <form id="uploadForm" enctype="multipart/form-data">
+                <!-- Upload Area -->
+                <div class="upload-area mb-4" id="dropZone">
+                    <i class="fas fa-cloud-upload-alt fa-3x text-primary mb-3"></i>
+                    <h5>Trascina qui il tuo file Excel</h5>
+                    <p class="text-muted small">oppure clicca per selezionare</p>
+                    <input type="file" name="file_input" id="fileInput" class="d-none" accept=".xlsx, .xls">
+                    <div id="fileName" class="mt-2 fw-bold text-success"></div>
+                    
+                    <!-- Column Instructions -->
+                    <div class="mt-3 badge bg-light text-dark border p-2 fw-normal">
+                        <i class="fas fa-info-circle me-1 text-info"></i> Il file deve contenere le colonne: <strong>Data</strong>, <strong>Dare</strong>, <strong>Avere</strong>
+                    </div>
+                </div>
 
-            // Elementi specifici da controllare
-            const sortingStrategySelect = document.getElementById('sorting_strategy');
+                <!-- Advanced Settings Toggle -->
+                <div class="text-center mb-3">
+                    <span class="settings-toggle" onclick="toggleSettings()">
+                        <i class="fas fa-cog"></i> Impostazioni Avanzate <i class="fas fa-chevron-down ms-1" id="toggleIcon"></i>
+                    </span>
+                </div>
 
-            // Gestione visibilità opzioni algoritmo
-            function toggleAlgorithmOptions() {
-                const val = algorithmSelect.value;
+                <!-- Advanced Settings Section -->
+                <div class="advanced-section" id="advancedSettings">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Algoritmo</label>
+                            <select class="form-select form-select-sm" name="algorithm">
+                                <option value="auto">AUTO (Consigliato)</option>
+                                <option value="subset_sum">Subset Sum (Combinatorio)</option>
+                                <option value="progressive_balance">Saldo Progressivo (Sequenziale)</option>
+                                <option value="all">Esegui Tutti</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Tolleranza (€)</label>
+                            <input type="number" class="form-control form-select-sm" name="tolerance" step="0.01" value="0.01">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Finestra Temporale (giorni)</label>
+                            <input type="number" class="form-control form-select-sm" name="days_window" value="10">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Max Combinazioni</label>
+                            <input type="number" class="form-control form-select-sm" name="max_combinations" value="6">
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="ignoreTolerance" name="ignore_tolerance" value="true">
+                                <label class="form-check-label small fw-bold text-danger" for="ignoreTolerance">Forza chiusura finestre (Saldo Progressivo)</label>
+                                <div class="form-text x-small">Se attivo, chiude il blocco alla scadenza dei giorni anche se non bilancia (utile se ci sono sbilanci strutturali).</div>
+                            </div>
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="saveLog" name="save_log" value="true">
+                                <label class="form-check-label small" for="saveLog">Salva log su disco</label>
+                            </div>
+                        </div>
+                        <div class="col-12 text-end mt-3 border-top pt-2">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="saveConfig()">
+                                <i class="fas fa-save me-1"></i> Salva Impostazioni come Default
+                            </button>
+                        </div>
+                    </div>
+                </div>
 
-                // Nascondi tutto per poi mostrare solo il necessario
-                sharedOptionsContainer.style.display = 'none';
-                subsetSumOptionsContainer.style.display = 'none';
-                progressiveOptionsContainer.style.display = 'none';
+                <!-- Action Button -->
+                <div class="d-grid gap-2 mt-4">
+                    <button type="submit" class="btn btn-primary btn-process shadow-sm" id="btnSubmit">
+                        <i class="fas fa-magic me-2"></i>Elabora File
+                    </button>
+                </div>
+            </form>
 
-                // Nascondi tutte le intestazioni di gruppo inizialmente
-                sharedOptionsContainer.querySelector('h6').style.display = 'none';
-                subsetSumOptionsContainer.querySelector('h6').style.display = 'none';
-                progressiveOptionsContainer.querySelector('h6').style.display = 'none';
+            <!-- Progress & Results -->
+            <div id="progressContainer" class="mt-4 d-none text-center">
+                <div class="spinner-border text-primary mb-2" role="status"></div>
+                <p class="text-muted blink">Elaborazione in corso...</p>
+            </div>
 
-                // Abilita sorting_strategy di default, poi disabilita se necessario
-                sortingStrategySelect.disabled = false;
+            <div id="resultContainer" class="mt-4 d-none text-center">
+                <div class="alert alert-success shadow-sm">
+                    <h4 class="alert-heading"><i class="fas fa-check-circle me-2"></i>Fatto!</h4>
+                    <p>Il file è stato elaborato con successo.</p>
+                    <hr>
+                    <a id="downloadLink" href="#" class="btn btn-success fw-bold">
+                        <i class="fas fa-download me-2"></i>Scarica Risultato Excel
+                    </a>
+                </div>
+                <button class="btn btn-outline-secondary btn-sm mt-2" onclick="toggleLog()">Mostra/Nascondi Log Tecnico</button>
+            </div>
 
-                if (val === 'progressive_balance') {
-                    sharedOptionsContainer.style.display = 'block';
-                    progressiveOptionsContainer.style.display = 'block';
-                    sortingStrategySelect.disabled = true; // Disabilita per Saldo Progressivo
-                } else if (val === 'subset_sum') {
-                    sharedOptionsContainer.style.display = 'block';
-                    subsetSumOptionsContainer.style.display = 'block';
-                } else if (val === 'all') { // Algoritmo "Tutti"
-                    sharedOptionsContainer.style.display = 'block';
-                    subsetSumOptionsContainer.style.display = 'block';
-                    progressiveOptionsContainer.style.display = 'block';
+            <div class="log-container shadow-inner" id="logOutput"></div>
+        </div>
+    </div>
+    <div class="text-center text-muted small mb-4">v3.2 - Powered by Python & Pandas</div>
+</div>
 
-                    // Mostra le intestazioni di gruppo solo per l'opzione "Tutti"
-                    sharedOptionsContainer.querySelector('h6').style.display = 'block';
-                    subsetSumOptionsContainer.querySelector('h6').style.display = 'block';
-                    progressiveOptionsContainer.querySelector('h6').style.display = 'block';
-                }
+<script>
+    // --- UI Logic ---
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileNameDisplay = document.getElementById('fileName');
 
-                // Se sorting_strategy è disabilitato, assicurati che il valore sia 'date'
-                // per coerenza con la logica del backend.
-                if (sortingStrategySelect.disabled) {
-                    sortingStrategySelect.value = 'date';
-                }
+    dropZone.addEventListener('click', () => fileInput.click());
 
+    fileInput.addEventListener('change', (e) => {
+        if (fileInput.files.length > 0) {
+            fileNameDisplay.textContent = fileInput.files[0].name;
+            dropZone.style.borderColor = "#198754";
+            dropZone.style.backgroundColor = "#f0fff4";
+        }
+    });
+
+    // Drag & Drop effects
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, preventDefaults, false);
+    });
+    function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
+    
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => dropZone.classList.add('dragover'), false);
+    });
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => dropZone.classList.remove('dragover'), false);
+    });
+    dropZone.addEventListener('drop', (e) => {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        fileInput.files = files;
+        if (files.length > 0) {
+            fileNameDisplay.textContent = files[0].name;
+            dropZone.style.borderColor = "#198754";
+            dropZone.style.backgroundColor = "#f0fff4";
+        }
+    });
+
+    // Toggle Settings
+    function toggleSettings() {
+        const section = document.getElementById('advancedSettings');
+        const icon = document.getElementById('toggleIcon');
+        if (section.style.display === 'none' || section.style.display === '') {
+            section.style.display = 'block';
+            icon.classList.remove('fa-chevron-down');
+            icon.classList.add('fa-chevron-up');
+            // Load config only when opened first time
+            if (!section.dataset.loaded) {
+                loadConfig();
+                section.dataset.loaded = "true";
             }
-            algorithmSelect.addEventListener('change', toggleAlgorithmOptions);
+        } else {
+            section.style.display = 'none';
+            icon.classList.remove('fa-chevron-up');
+            icon.classList.add('fa-chevron-down');
+        }
+    }
 
-            // Funzione per caricare/resettare la configurazione dal backend
-            function loadConfig() {
-                fetch('/api/config')
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.error) return alert(`Errore config: ${data.error}`);
-                        settingsForm.tolleranza.value = data.tolleranza;
-                        settingsForm.giorni_finestra.value = data.giorni_finestra;
-                        settingsForm.max_combinazioni.value = data.max_combinazioni;
-                        settingsForm.sorting_strategy.value = data.sorting_strategy;
-                        settingsForm.search_direction.value = data.search_direction;
-                        settingsForm.algorithm.value = data.algorithm;
-                        settingsForm.disable_numba.checked = (data.use_numba === false);
-                        settingsForm.ignore_tolerance.checked = (data.ignore_tolerance === true);
-                        if (data.residui) {
-                            settingsForm.soglia_residui.value = data.residui.soglia_importo;
-                            settingsForm.giorni_finestra_residui.value = data.residui.giorni_finestra;
-                        }
-                        toggleAlgorithmOptions();
-                    })
-                    .catch(console.error);
+    function toggleLog() {
+        const log = document.getElementById('logOutput');
+        log.style.display = (log.style.display === 'none' || log.style.display === '') ? 'block' : 'none';
+    }
+
+    // --- API Logic ---
+    function loadConfig() {
+        fetch('/api/config')
+            .then(response => response.json())
+            .then(data => {
+                // Populate form fields with config data
+                if(data.algorithm) document.querySelector('[name="algorithm"]').value = data.algorithm;
+                if(data.tolleranza) document.querySelector('[name="tolerance"]').value = data.tolleranza;
+                if(data.giorni_finestra) document.querySelector('[name="days_window"]').value = data.giorni_finestra;
+                if(data.algoritmo && data.algoritmo.max_combinazioni) 
+                    document.querySelector('[name="max_combinations"]').value = data.algoritmo.max_combinazioni;
+                if(data.ignore_tolerance) 
+                    document.querySelector('[name="ignore_tolerance"]').checked = data.ignore_tolerance;
+            })
+            .catch(err => console.error("Errore caricamento config:", err));
+    }
+
+    function saveConfig() {
+        const configData = {
+            algorithm: document.querySelector('[name="algorithm"]').value,
+            tolleranza: parseFloat(document.querySelector('[name="tolerance"]').value),
+            giorni_finestra: parseInt(document.querySelector('[name="days_window"]').value),
+            max_combinazioni: parseInt(document.querySelector('[name="max_combinations"]').value),
+            ignore_tolerance: document.querySelector('[name="ignore_tolerance"]').checked
+        };
+
+        fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(configData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            alert("Impostazioni salvate con successo!");
+        })
+        .catch(err => alert("Errore durante il salvataggio: " + err));
+    }
+
+    document.getElementById('uploadForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        if (!fileInput.files.length) {
+            alert("Per favore seleziona un file prima di procedere.");
+            return;
+        }
+
+        const formData = new FormData(this);
+        const btn = document.getElementById('btnSubmit');
+        const progress = document.getElementById('progressContainer');
+        const result = document.getElementById('resultContainer');
+        const log = document.getElementById('logOutput');
+
+        // Reset UI
+        btn.disabled = true;
+        progress.classList.remove('d-none');
+        result.classList.add('d-none');
+        log.style.display = 'none';
+        log.textContent = '';
+
+        fetch('/processa', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            progress.classList.add('d-none');
+            btn.disabled = false;
+
+            if (data.error) {
+                alert("Errore: " + data.error);
+            } else {
+                result.classList.remove('d-none');
+                document.getElementById('downloadLink').href = data.download_url;
+                log.textContent = JSON.stringify(JSON.parse(data.log_content), null, 4);
             }
-
-            // Carica la configurazione iniziale al caricamento della pagina
-            loadConfig();
-
-            // Event listener per il pulsante di reset
-            resetSettingsBtn.addEventListener('click', function() {
-                if (confirm("Sei sicuro di voler ripristinare le impostazioni? Le modifiche non salvate andranno perse.")) {
-                    loadConfig();
-                    const fb = document.getElementById('save-feedback');
-                    fb.innerHTML = '<div class="alert alert-info" role="alert">Impostazioni ripristinate ai valori salvati.</div>';
-                    setTimeout(() => fb.innerHTML = '', 3000);
-                }
-            });
-            
-            // Salvataggio Impostazioni
-            saveSettingsBtn.addEventListener('click', function() {
-                const formData = new FormData(settingsForm);
-                const configData = {
-                    tolleranza: parseFloat(formData.get('tolleranza')),
-                    giorni_finestra: parseInt(formData.get('giorni_finestra')),
-                    max_combinazioni: parseInt(formData.get('max_combinazioni')),
-                    sorting_strategy: formData.get('sorting_strategy'),
-                    search_direction: formData.get('search_direction'),
-                    algorithm: formData.get('algorithm'),
-                    use_numba: !document.getElementById('disable_numba').checked,
-                    ignore_tolerance: document.getElementById('ignore_tolerance').checked,
-                    residui: {
-                        attiva: true,
-                        soglia_importo: parseFloat(formData.get('soglia_residui')),
-                        giorni_finestra: parseInt(formData.get('giorni_finestra_residui'))
-                    }
-                };
-
-                fetch('/api/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(configData)
-                })
-                .then(r => r.json())
-                .then(d => {
-                    const fb = document.getElementById('save-feedback');
-                    fb.innerHTML = d.status === 'success' ? 
-                        '<div class="alert alert-success">Impostazioni salvate!</div>' : 
-                        `<div class="alert alert-danger">Errore: ${d.message}</div>`;
-                    setTimeout(() => fb.innerHTML = '', 3000);
-                })
-                .catch(console.error);
-            });
-
-            // Invio Form Elaborazione
-            uploadForm.addEventListener('submit', function(event) {
-                event.preventDefault();
-                spinner.style.display = 'inline-block';
-                submitBtn.disabled = true;
-                resultsArea.style.display = 'none';
-
-                const formData = new FormData();
-                formData.append('file_input', document.getElementById('file_input').files[0]);
-                
-                // Aggiunge i parametri dal form impostazioni
-                new FormData(settingsForm).forEach((value, key) => formData.append(key, value));
-                formData.set('use_numba', !document.getElementById('disable_numba').checked);
-                formData.set('ignore_tolerance', document.getElementById('ignore_tolerance').checked);
-
-                fetch('/processa', { method: 'POST', body: formData })
-                .then(r => r.json())
-                .then(data => {
-                    resultsArea.style.display = 'block';
-                    if (data.error) {
-                        resultsAlert.className = 'alert alert-danger';
-                        resultsAlert.textContent = `Errore: ${data.error}`;
-                        downloadLink.style.display = 'none';
-                    } else {
-                        resultsAlert.className = 'alert alert-success';
-                        resultsAlert.textContent = 'Elaborazione completata con successo!';
-                        resultsLog.textContent = data.log_content;
-                        downloadLink.href = data.download_url;
-                        downloadLink.style.display = 'inline-block';
-                    }
-                })
-                .catch(err => {
-                    resultsArea.style.display = 'block';
-                    resultsAlert.className = 'alert alert-danger';
-                    resultsAlert.textContent = `Errore server: ${err}`;
-                })
-                .finally(() => {
-                    spinner.style.display = 'none';
-                    submitBtn.disabled = false;
-                });
-            });
+        })
+        .catch(error => {
+            progress.classList.add('d-none');
+            btn.disabled = false;
+            alert("Errore di comunicazione con il server: " + error);
         });
-    </script>
+    });
+</script>
 </body>
 </html>

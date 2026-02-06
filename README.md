@@ -17,6 +17,7 @@ This project provides a powerful and flexible accounting reconciliation service,
 - **Batch Processing**: A command-line script (`batch.py`) to process multiple files automatically.
 - **Parameter Optimizer**: A script (`optimizer.py`) to find the optimal reconciliation parameters for a given dataset.
 - **Production & Docker Ready**: Containerized with Docker and ready for production deployment using a Gunicorn WSGI server.
+- **Modular Architecture**: Core logic separated from reporting and UI for better maintainability.
 
 ## ⚙️ Installation
 
@@ -300,6 +301,34 @@ Per una maggiore flessibilità, è possibile gestire tutti i parametri tramite u
 ## 📞 Supporto
 
 Per domande o problemi, contatta: [tua-email@esempio.com]
+
+---
+
+## 📂 Project Structure & File Explanation
+
+Here is an overview of the key files in the project and how they interact:
+
+### Core Logic
+- **`core.py`**: The heart of the application. Contains the `ReconciliationEngine` class which implements the reconciliation algorithms (Subset Sum, Progressive Balance) and manages the data flow.
+- **`reporting.py`**: Handles the generation of the multi-sheet Excel report. It takes the results from the engine and formats them into a user-friendly Excel file with charts and statistics.
+- **`config.json`**: The central configuration file. Defines parameters like tolerance, column mapping, and algorithm choice.
+
+### Interfaces
+- **`app.py`**: The Flask web application. Manages the web interface, file uploads, and API endpoints. It instantiates `ReconciliationEngine` to process uploaded files.
+- **`riconciliazione.py`**: The batch processing script. It reads all files in the `input/` folder and processes them sequentially using the settings in `config.json`. Ideal for bulk processing.
+- **`main.py`**: A command-line wrapper for single-file execution. Useful for integration with other tools or specific one-off runs.
+- **`optimizer.py`**: An advanced script using `Optuna` to automatically find the best parameters (tolerance, window, etc.) for a specific dataset to maximize the reconciliation rate.
+
+### Infrastructure & Docs
+- **`docker-compose.yml`**: Defines the Docker service configuration, including volume mounts for live code updates.
+- **`templates/index.html`**: The frontend HTML/JS for the web interface.
+- **`doc/`**: Folder containing documentation and tutorials (e.g., Git guide).
+
+### How they connect
+1.  **User Input**: The user interacts via Web (`app.py`) or Batch Script (`riconciliazione.py`).
+2.  **Configuration**: Both interfaces load settings from `config.json`.
+3.  **Processing**: The input data is passed to `core.py` (`ReconciliationEngine`).
+4.  **Reporting**: Once processed, `core.py` delegates the creation of the Excel file to `reporting.py`.
 
 ---
 

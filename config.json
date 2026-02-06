@@ -14,11 +14,9 @@
     "incassi": "INCASSI"
   },
   "mapping_colonne": {
-    "Data": "DATA",
-    "Dare": "INCASSI",
-    "Avere": "VERSAMENTI",
-    "Incassi": "INCASSI",
-    "Versamenti": "VERSAMENTI"
+    "Data": "Data",
+    "Dare": "Dare",
+    "Avere": "Avere"
   },
   "algorithm": "progressive_balance",
   "residui": {
@@ -28,7 +26,7 @@
   },
   "commento": "File di configurazione per il sistema di riconciliazione. Permette di personalizzare il comportamento degli script senza modificare il codice sorgente.",
   "sorting_strategy": null,
-  "search_direction": null,
+  "search_direction": "past_only",
   "use_numba": true,
-  "ignore_tolerance": false
+  "ignore_tolerance": true
 }

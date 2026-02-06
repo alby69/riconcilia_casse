@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   web:
     build: .
@@ -10,4 +8,8 @@ services:
       - ./output:/app/output
       - ./log:/app/log
       - ./input:/app/input
+      - ./app.py:/app/app.py
+      - ./core.py:/app/core.py
+      - ./config.json:/app/config.json
+      - ./templates:/app/templates
     restart: unless-stopped

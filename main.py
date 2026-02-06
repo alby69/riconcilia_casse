@@ -10,7 +10,7 @@ This script's sole purpose is to:
 import argparse
 import json
 import sys
-from core import RiconciliatoreContabile
+from core import ReconciliationEngine
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Runs the accounting reconciliation based on a configuration file.")
@@ -35,12 +35,12 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Instantiate the reconciler with parameters from the configuration
-    riconciliatore = RiconciliatoreContabile(
-        tolleranza=config.get('tolleranza', 0.01),
-        giorni_finestra=config.get('giorni_finestra', 30),
-        max_combinazioni=config.get('max_combinazioni', 6),
-        soglia_residui=config.get('soglia_residui', 100),
-        giorni_finestra_residui=config.get('giorni_finestra_residui', 60),
+    engine = ReconciliationEngine(
+        tolerance=config.get('tolerance', 0.01),
+        days_window=config.get('days_window', 30),
+        max_combinations=config.get('max_combinations', 6),
+        residual_threshold=config.get('residual_threshold', 100),
+        residual_days_window=config.get('residual_days_window', 60),
         sorting_strategy=config.get('sorting_strategy', 'date'),
         search_direction=config.get('search_direction', 'both'),
         column_mapping=config.get('column_mapping', None),
@@ -50,16 +50,16 @@ if __name__ == "__main__":
     )
 
     # Run the entire process
-    stats = riconciliatore.run(input_file, output_file, verbose=False) # Forza verbose=False
+    stats = engine.run(input_file, output_file, verbose=False) # Forza verbose=False
 
     if args.silent and stats:
         # --- ADDITION: Include the parameters used in the JSON report ---
         # Define the parameters of interest to display in the final summary.
         parameters_to_include = [
-            'giorni_finestra', 
-            'max_combinazioni', 
-            'giorni_finestra_residui', 
-            'soglia_residui', 
+            'days_window', 
+            'max_combinations', 
+            'residual_days_window', 
+            'residual_threshold', 
             'sorting_strategy', 
             'search_direction'
         ]
