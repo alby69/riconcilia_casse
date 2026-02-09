@@ -3,65 +3,111 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Riconciliazione Casse - Smart</title>
+    <title>CashRec - Smart Reconciliation</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
-        body { background-color: #f4f6f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        .main-card { max-width: 800px; margin: 50px auto; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.08); border-radius: 15px; }
+        :root {
+            --primary-color: #1a365d; /* Deep Blue matching logo */
+            --secondary-color: #2a4365;
+            --accent-color: #319795; /* Teal */
+            --bg-color: #f7fafc;
+            --text-color: #2d3748;
+            --card-bg: #ffffff;
+            --border-color: #cbd5e0;
+            --input-bg: #ffffff;
+            --btn-text: #ffffff;
+        }
+        [data-theme="dark"] {
+            --primary-color: #90cdf4;
+            --secondary-color: #63b3ed;
+            --bg-color: #1a202c;
+            --text-color: #f7fafc;
+            --card-bg: #2d3748;
+            --border-color: #4a5568;
+            --input-bg: #4a5568;
+            --btn-text: #1a202c;
+        }
+        body { background-color: var(--bg-color); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: var(--text-color); transition: background-color 0.3s, color 0.3s; }
+        .navbar { background-color: var(--card-bg); box-shadow: 0 2px 15px rgba(0,0,0,0.05); padding-top: 1rem; padding-bottom: 1rem; transition: background-color 0.3s; }
+        .navbar-brand img { height: 45px; }
+        .navbar-brand span { font-weight: 800; color: var(--primary-color); font-size: 1.4rem; letter-spacing: -0.5px; }
         
-        /* Header Style - Logo like */
-        .app-header { background: #fff; border-bottom: 1px solid #e9ecef; padding: 15px 0; margin-bottom: 30px; }
-        .brand-logo { font-size: 1.5rem; font-weight: 700; color: #0d6efd; text-decoration: none; display: flex; align-items: center; justify-content: center; gap: 10px; }
-        .brand-logo i { font-size: 1.8rem; }
-        .brand-subtitle { font-size: 0.9rem; color: #6c757d; font-weight: 400; margin-left: 10px; border-left: 1px solid #dee2e6; padding-left: 10px; }
-
-        .card-header { background: transparent; border-bottom: none; padding: 20px 20px 0 20px; }
+        .hero-banner {
+            max-width: 100%;
+            width: 600px;
+            margin: 40px auto 20px auto;
+            display: block;
+            filter: drop-shadow(0 10px 15px rgba(0,0,0,0.05));
+        }
         
-        .upload-area { border: 2px dashed #dee2e6; border-radius: 10px; padding: 40px; text-align: center; cursor: pointer; transition: all 0.3s; background: #fff; }
-        .upload-area:hover { border-color: #0d6efd; background-color: #f8f9fa; }
-        .upload-area.dragover { border-color: #198754; background-color: #e8f5e9; }
-        .advanced-section { background-color: #f8f9fa; border-radius: 10px; padding: 20px; margin-top: 20px; display: none; border: 1px solid #e9ecef; }
-        .log-container { background: #212529; color: #00ff9d; padding: 15px; border-radius: 8px; font-family: 'Consolas', monospace; font-size: 0.85rem; max-height: 300px; overflow-y: auto; margin-top: 20px; display: none; }
-        .btn-process { padding: 12px 30px; font-size: 1.1rem; font-weight: 600; border-radius: 30px; }
-        .settings-toggle { color: #6c757d; text-decoration: none; font-size: 0.9rem; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
-        .settings-toggle:hover { color: #0d6efd; }
+        .main-card { max-width: 800px; margin: 0 auto 60px auto; border: none; box-shadow: 0 20px 40px rgba(0,0,0,0.08); border-radius: 20px; overflow: hidden; background-color: var(--card-bg); transition: background-color 0.3s; }
+        .card-body { padding: 3rem !important; }
+        
+        .upload-area { border: 2px dashed var(--border-color); border-radius: 15px; padding: 50px 20px; text-align: center; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); background: var(--card-bg); }
+        .upload-area:hover { border-color: var(--primary-color); transform: translateY(-3px); box-shadow: 0 10px 20px rgba(0,0,0,0.05); }
+        [data-theme="light"] .upload-area:hover { background-color: #ebf8ff; }
+        [data-theme="dark"] .upload-area:hover { background-color: #2c313d; }
+        .upload-area.dragover { border-color: var(--accent-color); background-color: #e6fffa; }
+        [data-theme="dark"] .upload-area.dragover { background-color: #234e52; }
+        .upload-area i { color: var(--primary-color); transition: color 0.3s; }
+        
+        .advanced-section { background-color: var(--bg-color); border-radius: 12px; padding: 25px; margin-top: 30px; display: none; border: 1px solid var(--border-color); }
+        .log-container { background: #1a202c; color: #48bb78; padding: 20px; border-radius: 10px; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.85rem; max-height: 300px; overflow-y: auto; margin-top: 30px; display: none; border: 1px solid #2d3748; }
+        
+        .btn-process { background-color: var(--primary-color); color: var(--btn-text); border: none; padding: 15px 40px; font-size: 1.1rem; font-weight: 700; border-radius: 50px; letter-spacing: 0.5px; transition: all 0.3s; box-shadow: 0 4px 15px rgba(0,0,0, 0.2); }
+        .btn-process:hover { background-color: var(--secondary-color); color: var(--btn-text); transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0, 0.3); }
+        .btn-process:disabled { background-color: #cbd5e0; transform: none; box-shadow: none; }
+        
+        .settings-toggle { color: var(--text-color); opacity: 0.7; text-decoration: none; font-size: 0.95rem; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: all 0.2s; }
+        .settings-toggle:hover { color: var(--primary-color); }
+        
+        .form-control, .form-select { background-color: var(--input-bg); color: var(--text-color); border-color: var(--border-color); }
+        .form-control:focus, .form-select:focus { background-color: var(--input-bg); color: var(--text-color); border-color: var(--primary-color); box-shadow: 0 0 0 0.25rem rgba(49, 151, 149, 0.25); }
+        .text-muted { color: #a0aec0 !important; }
     </style>
 </head>
-<body>
+<body data-theme="light">
 
-<!-- Header / Logo Section -->
-<div class="app-header shadow-sm">
-    <div class="container text-center">
-        <a href="/" class="brand-logo">
-            <i class="fas fa-chart-line"></i> Riconciliazione Casse <span class="brand-subtitle">Smart Accounting Tool</span>
+<!-- New Navbar -->
+<nav class="navbar">
+    <div class="container position-relative justify-content-center">
+        <a class="navbar-brand d-flex align-items-center mx-auto" href="/">
+            <img src="{{ url_for('static', filename='img/cashrec-logo-concept-1.svg') }}" alt="CashRec Logo" class="me-2">
+            <span>CashRec</span>
         </a>
+        <button class="btn btn-link position-absolute end-0 text-decoration-none" id="themeToggle" style="color: var(--text-color);">
+            <i class="fas fa-moon"></i>
+        </button>
     </div>
-</div>
+</nav>
 
 <div class="container">
+    <!-- Banner -->
+    <img src="{{ url_for('static', filename='img/cashrec-banner-en.svg') }}" alt="CashRec Banner" class="hero-banner">
+
     <div class="card main-card">
         <div class="card-body p-4">
             
             <form id="uploadForm" enctype="multipart/form-data">
                 <!-- Upload Area -->
                 <div class="upload-area mb-4" id="dropZone">
-                    <i class="fas fa-cloud-upload-alt fa-3x text-primary mb-3"></i>
-                    <h5>Trascina qui il tuo file Excel</h5>
-                    <p class="text-muted small">oppure clicca per selezionare</p>
+                    <i class="fas fa-cloud-upload-alt fa-3x mb-3"></i>
+                    <h5>Drag and drop your Excel file here</h5>
+                    <p class="text-muted small">or click to select</p>
                     <input type="file" name="file_input" id="fileInput" class="d-none" accept=".xlsx, .xls">
                     <div id="fileName" class="mt-2 fw-bold text-success"></div>
                     
                     <!-- Column Instructions -->
                     <div class="mt-3 badge bg-light text-dark border p-2 fw-normal">
-                        <i class="fas fa-info-circle me-1 text-info"></i> Il file deve contenere le colonne: <strong>Data</strong>, <strong>Dare</strong>, <strong>Avere</strong>
+                        <i class="fas fa-info-circle me-1 text-info"></i> File must contain columns: <strong>Data</strong>, <strong>Dare</strong>, <strong>Avere</strong>
                     </div>
                 </div>
 
                 <!-- Advanced Settings Toggle -->
                 <div class="text-center mb-3">
                     <span class="settings-toggle" onclick="toggleSettings()">
-                        <i class="fas fa-cog"></i> Impostazioni Avanzate <i class="fas fa-chevron-down ms-1" id="toggleIcon"></i>
+                        <i class="fas fa-cog"></i> Advanced Settings <i class="fas fa-chevron-down ms-1" id="toggleIcon"></i>
                     </span>
                 </div>
 
@@ -69,49 +115,49 @@
                 <div class="advanced-section" id="advancedSettings">
                     <div class="row g-3">
                         <div class="col-md-6">
-                            <label class="form-label small fw-bold">Algoritmo</label>
+                            <label class="form-label small fw-bold">Algorithm</label>
                             <select class="form-select form-select-sm" name="algorithm">
-                                <option value="auto">AUTO (Consigliato)</option>
-                                <option value="subset_sum">Subset Sum (Combinatorio)</option>
-                                <option value="progressive_balance">Saldo Progressivo (Sequenziale)</option>
-                                <option value="all">Esegui Tutti</option>
+                                <option value="auto">AUTO (Recommended)</option>
+                                <option value="subset_sum">Subset Sum (Combinatorial)</option>
+                                <option value="progressive_balance">Progressive Balance (Sequential)</option>
+                                <option value="all">Run All</option>
                             </select>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label small fw-bold">Tolleranza (€)</label>
+                            <label class="form-label small fw-bold">Tolerance (€)</label>
                             <input type="number" class="form-control form-select-sm" name="tolerance" step="0.01" value="0.01">
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label small fw-bold">Finestra Temporale (giorni)</label>
+                            <label class="form-label small fw-bold">Time Window (days)</label>
                             <input type="number" class="form-control form-select-sm" name="days_window" value="10">
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label small fw-bold">Max Combinazioni</label>
+                            <label class="form-label small fw-bold">Max Combinations</label>
                             <input type="number" class="form-control form-select-sm" name="max_combinations" value="6">
                         </div>
                         <div class="col-12">
                             <div class="form-check form-switch mb-2">
                                 <input class="form-check-input" type="checkbox" id="ignoreTolerance" name="ignore_tolerance" value="true">
-                                <label class="form-check-label small fw-bold text-danger" for="ignoreTolerance">Forza chiusura finestre (Saldo Progressivo)</label>
-                                <div class="form-text x-small">Se attivo, chiude il blocco alla scadenza dei giorni anche se non bilancia (utile se ci sono sbilanci strutturali).</div>
+                                <label class="form-check-label small fw-bold text-danger" for="ignoreTolerance">Force window closure (Progressive Balance)</label>
+                                <div class="form-text x-small">If active, closes the block upon expiration even if unbalanced (useful for structural imbalances).</div>
                             </div>
                             <div class="form-check form-switch">
                                 <input class="form-check-input" type="checkbox" id="saveLog" name="save_log" value="true">
-                                <label class="form-check-label small" for="saveLog">Salva log su disco</label>
+                                <label class="form-check-label small" for="saveLog">Save log to disk</label>
                             </div>
                         </div>
                         <div class="col-12 text-end mt-3 border-top pt-2">
                             <button type="button" class="btn btn-outline-secondary btn-sm" onclick="saveConfig()">
-                                <i class="fas fa-save me-1"></i> Salva Impostazioni come Default
+                                <i class="fas fa-save me-1"></i> Save Settings as Default
                             </button>
                         </div>
                     </div>
                 </div>
 
                 <!-- Action Button -->
-                <div class="d-grid gap-2 mt-4">
-                    <button type="submit" class="btn btn-primary btn-process shadow-sm" id="btnSubmit">
-                        <i class="fas fa-magic me-2"></i>Elabora File
+                <div class="text-center mt-4">
+                    <button type="submit" class="btn btn-process px-5" id="btnSubmit">
+                        <i class="fas fa-magic me-2"></i>Process File
                     </button>
                 </div>
             </form>
@@ -119,28 +165,56 @@
             <!-- Progress & Results -->
             <div id="progressContainer" class="mt-4 d-none text-center">
                 <div class="spinner-border text-primary mb-2" role="status"></div>
-                <p class="text-muted blink">Elaborazione in corso...</p>
+                <p class="text-muted blink">Processing...</p>
             </div>
 
             <div id="resultContainer" class="mt-4 d-none text-center">
                 <div class="alert alert-success shadow-sm">
-                    <h4 class="alert-heading"><i class="fas fa-check-circle me-2"></i>Fatto!</h4>
-                    <p>Il file è stato elaborato con successo.</p>
+                    <h4 class="alert-heading"><i class="fas fa-check-circle me-2"></i>Done!</h4>
+                    <p>The file has been processed successfully.</p>
                     <hr>
                     <a id="downloadLink" href="#" class="btn btn-success fw-bold">
-                        <i class="fas fa-download me-2"></i>Scarica Risultato Excel
+                        <i class="fas fa-download me-2"></i>Download Excel Result
                     </a>
                 </div>
-                <button class="btn btn-outline-secondary btn-sm mt-2" onclick="toggleLog()">Mostra/Nascondi Log Tecnico</button>
+                <button class="btn btn-outline-secondary btn-sm mt-2" onclick="toggleLog()">Show/Hide Technical Log</button>
             </div>
 
             <div class="log-container shadow-inner" id="logOutput"></div>
         </div>
     </div>
-    <div class="text-center text-muted small mb-4">v3.2 - Powered by Python & Pandas</div>
+    <div class="text-center text-muted small mb-4">v3.3 - Powered by Python & Pandas</div>
 </div>
 
 <script>
+    // --- Theme Logic ---
+    const themeToggle = document.getElementById('themeToggle');
+    const body = document.body;
+    const icon = themeToggle.querySelector('i');
+
+    // Load saved theme
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    body.setAttribute('data-theme', savedTheme);
+    updateIcon(savedTheme);
+
+    themeToggle.addEventListener('click', () => {
+        const currentTheme = body.getAttribute('data-theme');
+        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+        body.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+        updateIcon(newTheme);
+    });
+
+    function updateIcon(theme) {
+        if (theme === 'dark') {
+            icon.classList.remove('fa-moon');
+            icon.classList.add('fa-sun');
+        } else {
+            icon.classList.remove('fa-sun');
+            icon.classList.add('fa-moon');
+        }
+    }
+
     // --- UI Logic ---
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
@@ -239,14 +313,14 @@
         .then(data => {
             alert("Impostazioni salvate con successo!");
         })
-        .catch(err => alert("Errore durante il salvataggio: " + err));
+        .catch(err => alert("Error saving settings: " + err));
     }
 
     document.getElementById('uploadForm').addEventListener('submit', function(e) {
         e.preventDefault();
         
         if (!fileInput.files.length) {
-            alert("Per favore seleziona un file prima di procedere.");
+            alert("Please select a file before proceeding.");
             return;
         }
 
@@ -273,7 +347,7 @@
             btn.disabled = false;
 
             if (data.error) {
-                alert("Errore: " + data.error);
+                alert("Error: " + data.error);
             } else {
                 result.classList.remove('d-none');
                 document.getElementById('downloadLink').href = data.download_url;
@@ -283,7 +357,7 @@
         .catch(error => {
             progress.classList.add('d-none');
             btn.disabled = false;
-            alert("Errore di comunicazione con il server: " + error);
+            alert("Server communication error: " + error);
         });
     });
 </script>
