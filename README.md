@@ -310,7 +310,7 @@ Here is an overview of the key files in the project and how they interact:
 
 ### Core Logic
 - **`core.py`**: The heart of the application. Contains the `ReconciliationEngine` class which implements the reconciliation algorithms (Subset Sum, Progressive Balance) and manages the data flow.
-- **`reporting.py`**: Handles the generation of the multi-sheet Excel report. It takes the results from the engine and formats them into a user-friendly Excel file with charts and statistics.
+- **`reporting.py`**: Handles the generation of the multi-sheet Excel report. It extracts data from the engine and formats it into a user-friendly Excel file with charts and statistics, adhering to the Single Responsibility Principle.
 - **`config.json`**: The central configuration file. Defines parameters like tolerance, column mapping, and algorithm choice.
 
 ### Interfaces

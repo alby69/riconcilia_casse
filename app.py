@@ -186,7 +186,7 @@ def processa_file():
         unique_output_filename = f"{unique_id}_{sanitized_filename}"
         output_filepath = os.path.join(app.config['OUTPUT_FOLDER'], unique_output_filename)
         
-        engine._create_excel_report(output_filepath, df_input)
+        engine.create_excel_report(output_filepath, df_input)
 
         # --- 5. Create and save the log file ---
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
