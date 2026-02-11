@@ -1,17 +1,22 @@
-"""
-Accounting Reconciliation System
+"""Batch processing script for accounting reconciliation.
 
-Main script for batch processing of one or more accounting files.
+This script automates the reconciliation of multiple files. It is designed
+to be run from the command line to process an entire directory of accounting
+files based on a central configuration.
 
-Logic:
-1. Load configuration from `config.json`.
-2. Find files to process in the input folder.
-3. For each file:
-    a. Load data (Excel or CSV).
-    b. Apply column mapping defined in `config.json`.
-    c. Run the reconciliation algorithm via the `core` module.
-    d. Save the results to a detailed Excel file in the output folder.
-4. Print a final summary.
+The script's workflow is:
+1.  **Load Configuration**: Reads settings from the main `config.json` file,
+    including the input/output folder paths and file patterns (e.g., `*.xlsx`).
+2.  **File Discovery**: Scans the input directory for all files matching the
+    configured patterns.
+3.  **Batch Iteration**: Loops through each discovered file, showing overall
+    progress with a `tqdm` progress bar.
+4.  **Processing**: For each file, it initializes the `ReconciliationEngine`
+    based on the settings in `config.json` and runs the full reconciliation
+    process.
+5.  **Output Generation**: Saves the detailed Excel report for each processed
+    file to the output directory, with a name derived from the original
+    input file (e.g., `result_my-data.xlsx`).
 """
 
 from pathlib import Path

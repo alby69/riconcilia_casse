@@ -1,11 +1,22 @@
-"""
-Executive Wrapper for Accounting Reconciliation.
+"""Command-line wrapper for single-file accounting reconciliation.
 
-This script's sole purpose is to:
-1. Read a JSON configuration file.
-2. Instantiate the RiconciliatoreContabile class with the correct parameters.
-3. Launch the reconciliation process via the run() method.
-4. Print the final statistics in JSON format if run in 'silent' mode.
+This script provides a command-line interface to the ReconciliationEngine,
+designed to process a single input file as specified in a dedicated
+configuration file.
+
+It is intended to be used as a worker process that can be called from other
+scripts (e.g., a batch orchestrator or an optimizer).
+
+The script's workflow is:
+1.  Parse command-line arguments: `--config` (required) and `--silent`.
+2.  Load the specified JSON configuration file. This file must contain the
+    explicit paths for `file_input` and `file_output`.
+3.  Instantiate the `ReconciliationEngine` from `core.py` with the parameters
+    from the configuration file.
+4.  Run the reconciliation process.
+5.  If run in `--silent` mode, it suppresses all logs and prints a JSON object
+    to standard output containing the final reconciliation statistics. This
+    allows the calling process to easily capture the results.
 """
 import argparse
 import json

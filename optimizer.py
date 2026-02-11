@@ -76,7 +76,38 @@ def generate_dynamic_ranges(base_config, optimizer_config, range_percentage=0.30
     return dynamic_ranges
 
 def run_auto_optimization(config, config_path, file_input, is_first_run, sequential=False):
-    """Runs automatic optimization based on predefined ranges."""
+    """Orchestrates the automatic optimization process in one of two modes.
+
+    This function serves as the entry point for non-interactive optimization.
+    It automatically determines the search space and number of trials based on
+    whether it's the first time optimizing for a file.
+
+    The two modes are:
+    1.  **WIDE EXPLORATION (`is_first_run` = True)**:
+        Uses broad parameter ranges defined in `config_optimizer.json`. This
+        mode is designed to perform a comprehensive search of the entire
+        solution space and requires a higher number of trials.
+
+    2.  **FOCUSED REFINEMENT (`is_first_run` = False)**:
+        Assumes a good baseline configuration already exists. It generates
+        narrower, dynamic search ranges centered around the current best
+        parameters. This mode is designed to fine-tune the existing
+        configuration and uses fewer trials.
+
+    After determining the mode, it calls `run_simulation` to perform the
+    actual optimization and then `update_config_file` to persist the best
+    parameters found.
+
+    Args:
+        config (dict): The base configuration dictionary.
+        config_path (pathlib.Path): The path to the configuration file that
+            will be updated with the results.
+        file_input (str): The path to the data file for the simulation.
+        is_first_run (bool): Flag indicating if this is the first optimization
+            run, which determines the exploration strategy.
+        sequential (bool): If True, forces Optuna trials to run sequentially.
+            Passed down to `run_simulation`.
+    """
     print("🔬 Starting optimization in automatic mode...")
 
     # Load both optimizer settings and parameters
@@ -100,7 +131,45 @@ def run_auto_optimization(config, config_path, file_input, is_first_run, sequent
     update_config_file(config_path, best_params)
 
 def run_simulation(base_config, optimizer_config_ranges, file_input, n_trials, show_progress=True, sequential=False):
-    """Runs the optimization using Optuna to find the best parameters."""
+    """Runs the core optimization process using Optuna to find the best parameters.
+
+    This function sets up and executes an Optuna "study" to find the combination
+    of reconciliation parameters that maximizes the final reconciled percentage.
+    It is the central part of the optimizer.
+
+    The process involves:
+    1.  **Defining an `objective` function**: This nested function is called by
+        Optuna for each trial. It suggests a new set of parameters, runs the
+        reconciliation engine with them, and returns a score (the sum of the
+        reconciled debit and credit volume percentages).
+    2.  **Creating a `study`**: An Optuna study is created to maximize the
+        score returned by the `objective` function.
+    3.  **Efficient Data Loading**: To avoid costly file I/O in every trial,
+        the input file is loaded into a pandas DataFrame once before the
+        optimization loop begins.
+    4.  **Parallel Execution**: By default, it runs trials in parallel across
+        all available CPU cores (`n_jobs=-1`) for significant speedup.
+    5.  **Optimization**: The `study.optimize` method is called to run the
+        specified number of trials.
+
+    Args:
+        base_config (dict): A dictionary with the base configuration values,
+            which will be overridden by the parameters suggested by Optuna.
+        optimizer_config_ranges (dict): A dictionary defining the search space
+            (min, max, step, or categories) for each parameter to be optimized.
+        file_input (str): The path to the data file to be used for all
+            simulation trials.
+        n_trials (int): The total number of trials (i.e., different parameter
+            combinations) to test.
+        show_progress (bool): If True, displays a `tqdm` progress bar for the
+            optimization trials. Defaults to True.
+        sequential (bool): If True, forces the trials to run sequentially in a
+            single process (`n_jobs=1`). Defaults to False.
+
+    Returns:
+        dict: A dictionary containing the best-performing parameter combination
+              found by the study.
+    """
 
     def objective(trial, input_data):
         """Objective function that Optuna will try to maximize."""

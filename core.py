@@ -50,22 +50,54 @@ class ReconciliationEngine:
     """Contains the business logic for reconciliation."""
 
     def __init__(self, tolerance=0.01, days_window=7, max_combinations=10, residual_threshold=100.0, residual_days_window=30, sorting_strategy="date", search_direction="past_only", column_mapping=None, algorithm="subset_sum", use_numba=True, ignore_tolerance=False, enable_best_fit=True):
-        """
-        Initializes the reconciler with configuration parameters.
+        """Initializes the ReconciliationEngine with its configuration.
+
+        This constructor sets up the core parameters that govern the reconciliation
+        algorithms. Amounts are converted from floating-point (Euros) to integers
+        (cents) internally to prevent floating-point inaccuracies.
 
         Args:
-            tolerance (float): Maximum accepted difference between amounts (default 0.01).
-            days_window (int): Search time window in days (default 7).
-            max_combinations (int): Maximum number of combinable movements (default 10).
-            residual_threshold (float): Minimum amount to consider a movement in the residuals phase (default 100.0).
-            residual_days_window (int): Extended time window for the residuals phase (default 30).
-            sorting_strategy (str): Sorting strategy ('date' or 'amount').
-            search_direction (str): Search direction ('past_only', 'future_only', 'both').
-            column_mapping (dict): Column name mapping (e.g., {'Data': 'MyDate', ...}).
-            algorithm (str): Algorithm to use ('subset_sum', 'progressive_balance', 'all').
-            use_numba (bool): If True, uses Numba acceleration if available.
-            ignore_tolerance (bool): If True, forces closing blocks in progressive balance even if they don't match.
-            enable_best_fit (bool): If True, enables partial matching logic (splitting).
+            tolerance (float): The maximum acceptable difference between the sum of
+                a set of transactions and a target amount to be considered a match.
+                Default is 0.01.
+            days_window (int): The primary time window (in days) to search for
+                matching transactions. The search can be forward, backward, or
+                in both directions from the transaction date. Default is 7.
+            max_combinations (int): The maximum number of individual transactions
+                that can be combined to form a match. Higher numbers increase
+                computation time. Default is 10.
+            residual_threshold (float): During the residual analysis pass, only
+                unmatched transactions with an amount greater than this threshold
+                will be considered. Default is 100.0.
+            residual_days_window (int): An extended time window (in days) used
+                during the final residual reconciliation pass to catch more
+                difficult matches. Default is 30.
+            sorting_strategy (str): The strategy for sorting transactions before
+                processing. Can be 'date' (chronological) or 'amount'
+                (descending). Default is 'date'.
+            search_direction (str): The temporal direction for the search.
+                Can be 'past_only', 'future_only', or 'both'. This determines
+                the date range relative to the transaction being matched.
+                Default is 'past_only'.
+            column_mapping (dict, optional): A dictionary to map custom column
+                names from the input file to the internal standard names
+                ('Date', 'Debit', 'Credit'). Defaults to a standard mapping.
+            algorithm (str): The reconciliation algorithm to use. Can be
+                'subset_sum' (a complex combination-finding algorithm),
+                'progressive_balance' (a faster, sequential algorithm),
+                or 'auto' to let the engine choose the best one. Default is 'subset_sum'.
+            use_numba (bool): If True, the engine will leverage the Numba JIT
+                compiler for performance-critical calculations, if Numba is
+                installed. Default is True.
+            ignore_tolerance (bool): Specific to the 'progressive_balance'
+                algorithm. If True, forces a block of transactions to be closed
+                as a match even if the final balance is not within tolerance,
+                once the time window is exceeded. Default is False.
+            enable_best_fit (bool): If True, enables a "best fit" or "splitting"
+                heuristic. If an exact match for a large transaction cannot be
+                found, the algorithm will try to find a combination of smaller
+                transactions that partially "fills" it, leaving the rest as a
+                residual. Default is True.
         """
         # FIX: Converts values from euros (float) to cents (int) for internal consistency
         self.tolerance = int(tolerance * 100)
@@ -101,17 +133,39 @@ class ReconciliationEngine:
         self.max_id_counter = 0
 
     def load_file(self, file_path):
-        """
-        Loads an Excel, CSV, or Feather file into a standardized Pandas DataFrame.
+        """Loads and standardizes data from an Excel, CSV, or Feather file.
 
-        Handles reading, renaming columns according to the configured mapping,
-        date conversion, and amount cleaning.
+        This method is responsible for reading a source file and transforming it
+        into a clean, standardized DataFrame ready for reconciliation. It performs
+        several key operations:
+        
+        1.  **File Reading**: Supports '.xlsx', '.csv', and '.feather' formats.
+        2.  **Column Mapping**: Renames columns from the source file to the
+            engine's internal standard ('Date', 'Debit', 'Credit') based on the
+            `column_mapping` provided during initialization.
+        3.  **Date Parsing**: Converts the 'Date' column to datetime objects,
+            handling common European formats (day-first). It flags rows with
+            future dates.
+        4.  **Amount Cleaning**: Uses a robust parser to handle various currency
+            formats (e.g., "1.234,56" or "1234.56 €"). It strips symbols and
+            correctly interprets decimal and thousands separators.
+        5.  **Integer Conversion**: Converts 'Debit' and 'Credit' amounts into
+            integer cents to eliminate floating-point arithmetic errors during
+            reconciliation.
+        6.  **Index Preservation**: Stores the original row number in the
+            'orig_index' column for traceability in the final report.
 
         Args:
-            file_path (str): Path of the file to load.
+            file_path (str): The absolute or relative path to the input file.
 
         Returns:
-            pd.DataFrame: DataFrame with standardized columns ('Date', 'Debit', 'Credit', 'orig_index').
+            pd.DataFrame: A DataFrame with standardized columns ('Date', 'Debit',
+            'Credit', 'orig_index'), ready for processing.
+
+        Raises:
+            ValueError: If the columns specified in the `column_mapping` are
+                not found in the input file.
+            FileNotFoundError: If the specified `file_path` does not exist.
         """
         # Common parameters for reading CSV/Excel with European format
         common_read_params = {
@@ -538,19 +592,42 @@ class ReconciliationEngine:
         )
 
     def _reconcile_subset_sum(self, verbose=True):
-        """
-        Performs reconciliation based on combination search (Subset Sum).
+        """Performs reconciliation using a multi-pass subset sum strategy.
 
-        Orchestrates three successive passes:
-        1. Many DEBIT -> 1 CREDIT (with optional Best Fit).
-        2. 1 DEBIT -> Many CREDIT (Split payments).
-        3. Residual recovery with an extended time window.
+        This method orchestrates a series of reconciliation passes, each designed
+        to identify a specific type of relationship between debit and credit
+        transactions. It is based on solving the "subset sum" problem, where
+        the goal is to find a subset of transactions that perfectly or nearly
+        sum up to a target amount.
+
+        The passes are executed in a specific order to maximize matches:
+
+        1.  **Pass 1: Receipt Aggregation (Many DEBIT -> 1 CREDIT)**:
+            This is the most common scenario, simulating the aggregation of
+            multiple small receipts (Debits) into a single large bank deposit
+            (Credit). It uses a "best fit" heuristic (`enable_best_fit`) to
+            handle cases where a deposit is only partially covered by a set of
+            receipts, splitting the deposit into a matched part and a residual.
+
+        2.  **Pass 2: Split Deposits (1 DEBIT -> Many CREDIT)**:
+            This pass handles the inverse scenario, where a single large receipt
+            (Debit) might be split across multiple smaller deposits (Credits).
+            This is less common but important for comprehensive reconciliation.
+
+        3.  **Pass 3: Residual Recovery**:
+            After the main passes, this final pass attempts to reconcile any
+            remaining high-value transactions using an extended time window
+            (`residual_days_window`). It targets matches that fall outside the
+            standard `days_window`.
 
         Args:
-            verbose (bool): If True, prints progress.
+            verbose (bool): If True, prints detailed progress for each pass to
+                the console. Defaults to True.
 
         Returns:
-            list: List of dictionaries representing the found matches.
+            list: A list of dictionaries, where each dictionary represents a
+                  successful match and contains detailed information about the
+                  matched debit and credit transactions.
         """
         
         matches = []
@@ -634,17 +711,43 @@ class ReconciliationEngine:
         return df_matches
 
     def _reconcile_progressive_balance(self, verbose=True):
-        """
-        Reconciliation algorithm based on sequential progressive balance (Two Pointers).
+        """Performs reconciliation using a sequential progressive balance algorithm.
 
-        Simulates an operator who scrolls through chronologically ordered lists and closes
-        a block when the progressive sum of DEBIT and CREDIT matches.
+        This method implements a "Two Pointers" approach that mimics how a human
+        might manually reconcile a statement. It operates on chronologically
+        sorted lists of debit and credit transactions, accumulating them into
+        a "block" and attempting to find a point of balance.
+
+        The core logic is as follows:
+        1.  **Sorting**: Both debit and credit transactions are strictly sorted
+            by date, regardless of the global `sorting_strategy`.
+        2.  **Two Pointers**: Two pointers, `i` (for debits) and `j` (for credits),
+            advance through their respective lists.
+        3.  **Accumulation**: The algorithm greedily adds the transaction with the
+            earlier date to a running total (either `cum_debit` or `cum_credit`).
+        4.  **Block Matching**: If `cum_debit` and `cum_credit` match within the
+            specified `tolerance`, all transactions accumulated since the last
+            match (the "block") are bundled into a single match. The totals are
+            then reset for the next block.
+        5.  **Timeout Handling**: If the time difference between the first and
+            last transaction in the current block exceeds `days_window`, the
+            block is considered "timed out."
+            - If `ignore_tolerance` is True, the block is force-closed as a
+              match, even with an imbalance.
+            - Otherwise, the block is discarded, and the pointers reset to
+              prevent the error from propagating.
+
+        This algorithm is generally much faster than `subset_sum` but is best
+        suited for datasets that are already mostly balanced and chronologically
+        ordered.
 
         Args:
-            verbose (bool): If True, prints progress.
+            verbose (bool): If True, prints detailed progress to the console.
+                Defaults to True.
 
         Returns:
-            list: List of dictionaries representing the found matches (blocks).
+            list: A list of dictionaries, where each dictionary represents a
+                  matched block of transactions.
         """
         from datetime import timedelta # Make sure it's imported
         if verbose:
@@ -1091,21 +1194,46 @@ class ReconciliationEngine:
         return best_params
 
     def run(self, input_file, output_file=None, verbose=True):
-        """
-        Executes the entire reconciliation process.
+        """Executes the entire end-to-end reconciliation process.
 
-        1. Loads (or receives) the data.
-        2. Separates movements into DEBIT and CREDIT.
-        3. Executes the configured reconciliation algorithms.
-        4. Generates statistics and reports.
+        This is the main public method that orchestrates the workflow, from data
+        loading to report generation. It can handle a file path or a pre-loaded
+        DataFrame, making it flexible for use in different contexts like batch
+        processing or parameter optimization.
+
+        The process includes the following steps:
+        1.  **Data Loading**: If `input_file` is a path, it loads the file using
+            `load_file`. If it's a DataFrame, it uses it directly.
+        2.  **Preprocessing**: Original totals are calculated for later verification,
+            and transactions are split into separate Debit and Credit DataFrames.
+        3.  **Algorithm Selection**: If `algorithm` is set to 'auto', it runs a
+            quick evaluation (`_evaluate_best_configuration`) to determine the
+            most effective algorithm ('subset_sum' or 'progressive_balance') for
+            the given dataset and applies it.
+        4.  **Reconciliation**: Executes the chosen algorithm(s). This may involve
+            multiple passes with different strategies (e.g., many-to-one,
+            one-to-many, residual analysis).
+        5.  **Finalization**: Marks all reconciled transactions as 'used', creates
+            a clean DataFrame of all matches, and verifies that the sum of
+            reconciled amounts and residuals equals the original totals.
+        6.  **Statistics Calculation**: Computes final summary statistics on the
+            outcome (e.g., percentage of reconciled amounts, remaining balances).
+        7.  **Report Generation**: If `output_file` is provided, it calls the
+            `ExcelReporter` to generate a detailed multi-sheet Excel report.
 
         Args:
-            input_file (str or pd.DataFrame): Path of the input file or an already loaded DataFrame.
-            output_file (str, optional): Path where to save the Excel report. If None, does not save.
-            verbose (bool): If True, prints detailed logs to the console.
+            input_file (str or pd.DataFrame): The path to the input data file
+                or a pre-loaded pandas DataFrame containing the transactions.
+            output_file (str, optional): The path where the final Excel report
+                will be saved. If None, no report is generated. Defaults to None.
+            verbose (bool): If True, detailed progress and logging information
+                will be printed to the console during execution. Defaults to True.
 
         Returns:
-            dict: Dictionary containing the final reconciliation statistics.
+            dict: A dictionary containing key statistics about the reconciliation
+                  results, such as the number and value of reconciled items,
+                  percentages, and final imbalances. Returns None if a critical
+                  error occurs.
         """
         if not NUMBA_AVAILABLE and verbose:
             # Print a warning if Numba is not available
@@ -1215,18 +1343,33 @@ class ReconciliationEngine:
 # nopython=True ensures there is no fallback to the Python interpreter, guaranteeing maximum speed.
 @jit(nopython=True) # Questo decoratore sarà quello reale di Numba o quello fittizio
 def _numba_find_combination(target, candidates_np, max_combinations, tolerance):
-    """
-    Finds a combination of candidates whose sum approaches the target.
-    This version is optimized for Numba and operates on NumPy arrays.
+    """Finds an exact combination of candidates that sum to a target amount.
+
+    This is a high-performance implementation of the subset sum problem,
+    heavily optimized for speed using Numba's JIT compiler in `nopython` mode.
+    To ensure Numba compatibility, it uses a manually managed stack for iterative,
+    depth-first searching, avoiding native Python recursion.
+
+    The function employs pruning techniques to cut down the search space:
+    - It stops exploring a path if the current sum exceeds the target plus tolerance.
+    - It uses an optimistic estimate of the maximum possible sum for a given
+      branch to terminate non-viable branches early.
 
     Args:
-        target (int): The amount to reach.
-        candidates_np (np.array): 2D array where each row is [amount, original_index].
-        max_combinations (int): Maximum number of elements in the combination.
-        tolerance (int): Acceptable error margin for the sum.
+        target (int): The target sum (in cents).
+        candidates_np (np.array): A 2D NumPy array where each row represents a
+            candidate transaction, containing `[amount_in_cents, original_index]`.
+            This array must be sorted by amount in descending order for the
+            pruning to be effective.
+        max_combinations (int): The maximum number of items allowed in a valid
+            combination.
+        tolerance (int): The acceptable margin of error (in cents) for the sum
+            to be considered a match.
 
     Returns:
-        np.array: An array of the original indices of the found combination, or an empty array.
+        np.array: A 1D NumPy array containing the `original_index` values of
+            the transactions that form the first valid combination found.
+            Returns an empty array if no combination is found.
     """
     # Stack: (candidate_index, current_sum, level)
     # Initialize with first-level candidates
@@ -1279,9 +1422,36 @@ def _numba_find_combination(target, candidates_np, max_combinations, tolerance):
 
 @jit(nopython=True)
 def _numba_find_best_fit_combination(target, candidates_np, max_combinations, tolerance):
-    """
-    Finds the combination of candidates that maximizes the sum <= target (Best Fit / Knapsack).
-    It does not look for the exact sum, but the one that comes closest without exceeding the target.
+    """Finds the best-fitting combination of candidates that maximizes the sum
+    without exceeding the target amount (0/1 Knapsack problem).
+
+    This Numba-optimized function implements the "best fit" or "splitting"
+    heuristic. Instead of searching for a combination that equals the target,
+    it solves a variation of the 0/1 Knapsack problem: it finds the subset of
+    candidates whose sum is as large as possible but not greater than the target.
+
+    This is crucial for scenarios where a large transaction (e.g., a deposit)
+    is only partially covered by a set of smaller transactions (e.g., receipts).
+
+    Like `_numba_find_combination`, it uses a stack-based iterative approach
+    for Numba `nopython` compatibility and employs pruning to efficiently
+    search the solution space.
+
+    Args:
+        target (int): The target sum (in cents) that should not be exceeded.
+        candidates_np (np.array): A 2D NumPy array of candidate transactions,
+            formatted as `[amount_in_cents, original_index]`. Must be sorted
+            by amount in descending order.
+        max_combinations (int): The maximum number of items allowed in the
+            best-fit combination.
+        tolerance (int): An acceptable error margin. Although the primary goal
+            is not to exceed the target, this is used in boundary conditions.
+
+    Returns:
+        np.array: A 1D NumPy array with the `original_index` values of the
+            transactions in the best combination found. Returns an empty array
+            if no suitable combination (e.g., one that fills a minimal
+            percentage of the target) is found.
     """
     # Stack: (candidate_index, current_sum, level)
     stack = []
