@@ -124,6 +124,21 @@
                             </select>
                         </div>
                         <div class="col-md-6">
+                            <label class="form-label small fw-bold">Sorting Strategy</label>
+                            <select class="form-select form-select-sm" name="sorting_strategy">
+                                <option value="date">Date</option>
+                                <option value="amount">Amount</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Search Direction</label>
+                            <select class="form-select form-select-sm" name="search_direction">
+                                <option value="past_only">Past Only</option>
+                                <option value="future_only">Future Only</option>
+                                <option value="both">Both</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
                             <label class="form-label small fw-bold">Tolerance (€)</label>
                             <input type="number" class="form-control form-select-sm" name="tolerance" step="0.01" value="0.01">
                         </div>
@@ -135,7 +150,20 @@
                             <label class="form-label small fw-bold">Max Combinations</label>
                             <input type="number" class="form-control form-select-sm" name="max_combinations" value="6">
                         </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Residual Threshold (€)</label>
+                            <input type="number" class="form-control form-select-sm" name="residual_threshold" step="1" value="100">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Residual Days Window</label>
+                            <input type="number" class="form-control form-select-sm" name="residual_days_window" value="30">
+                        </div>
+
                         <div class="col-12">
+                             <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="enableBestFit" name="enable_best_fit" value="true" checked>
+                                <label class="form-check-label small" for="enableBestFit">Enable "Best Fit" (Splitting)</label>
+                            </div>
                             <div class="form-check form-switch mb-2">
                                 <input class="form-check-input" type="checkbox" id="ignoreTolerance" name="ignore_tolerance" value="true">
                                 <label class="form-check-label small fw-bold text-danger" for="ignoreTolerance">Force window closure (Progressive Balance)</label>
@@ -285,12 +313,29 @@
             .then(data => {
                 // Populate form fields with config data
                 if(data.algorithm) document.querySelector('[name="algorithm"]').value = data.algorithm;
-                if(data.tolleranza) document.querySelector('[name="tolerance"]').value = data.tolleranza;
-                if(data.giorni_finestra) document.querySelector('[name="days_window"]').value = data.giorni_finestra;
-                if(data.algoritmo && data.algoritmo.max_combinazioni) 
+                if(data.sorting_strategy) document.querySelector('[name="sorting_strategy"]').value = data.sorting_strategy;
+                if(data.search_direction) document.querySelector('[name="search_direction"]').value = data.search_direction;
+                
+                // Use new keys if available, otherwise fall back to old keys for compatibility
+                if(data.tolerance) document.querySelector('[name="tolerance"]').value = data.tolerance;
+                else if(data.tolleranza) document.querySelector('[name="tolerance"]').value = data.tolleranza;
+
+                if(data.days_window) document.querySelector('[name="days_window"]').value = data.days_window;
+                else if(data.giorni_finestra) document.querySelector('[name="days_window"]').value = data.giorni_finestra;
+                
+                if(data.max_combinations) document.querySelector('[name="max_combinations"]').value = data.max_combinations;
+                 else if(data.algoritmo && data.algoritmo.max_combinazioni) 
                     document.querySelector('[name="max_combinations"]').value = data.algoritmo.max_combinazioni;
-                if(data.ignore_tolerance) 
+
+                if(data.residual_threshold) document.querySelector('[name="residual_threshold"]').value = data.residual_threshold;
+                if(data.residual_days_window) document.querySelector('[name="residual_days_window"]').value = data.residual_days_window;
+
+                // Booleans need careful checking for existence
+                if (typeof data.ignore_tolerance !== 'undefined')
                     document.querySelector('[name="ignore_tolerance"]').checked = data.ignore_tolerance;
+                if (typeof data.enable_best_fit !== 'undefined')
+                    document.querySelector('[name="enable_best_fit"]').checked = data.enable_best_fit;
+
             })
             .catch(err => console.error("Errore caricamento config:", err));
     }
@@ -298,10 +343,15 @@
     function saveConfig() {
         const configData = {
             algorithm: document.querySelector('[name="algorithm"]').value,
-            tolleranza: parseFloat(document.querySelector('[name="tolerance"]').value),
-            giorni_finestra: parseInt(document.querySelector('[name="days_window"]').value),
-            max_combinazioni: parseInt(document.querySelector('[name="max_combinations"]').value),
-            ignore_tolerance: document.querySelector('[name="ignore_tolerance"]').checked
+            sorting_strategy: document.querySelector('[name="sorting_strategy"]').value,
+            search_direction: document.querySelector('[name="search_direction"]').value,
+            tolerance: parseFloat(document.querySelector('[name="tolerance"]').value),
+            days_window: parseInt(document.querySelector('[name="days_window"]').value),
+            max_combinations: parseInt(document.querySelector('[name="max_combinations"]').value),
+            residual_threshold: parseFloat(document.querySelector('[name="residual_threshold"]').value),
+            residual_days_window: parseInt(document.querySelector('[name="residual_days_window"]').value),
+            ignore_tolerance: document.querySelector('[name="ignore_tolerance"]').checked,
+            enable_best_fit: document.querySelector('[name="enable_best_fit"]').checked
         };
 
         fetch('/api/config', {

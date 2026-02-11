@@ -138,7 +138,8 @@ def processa_file():
             'sorting_strategy': request.form.get('sorting_strategy', 'date', type=str),
             'search_direction': request.form.get('search_direction', 'past_only', type=str),
             'algorithm': request.form.get('algorithm', 'auto', type=str),
-            'ignore_tolerance': request.form.get('ignore_tolerance') == 'true'
+            'ignore_tolerance': request.form.get('ignore_tolerance') == 'true',
+            'enable_best_fit': request.form.get('enable_best_fit') == 'true'
         }
 
         # --- 2. DataFrame Preparation ---
