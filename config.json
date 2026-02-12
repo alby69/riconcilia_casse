@@ -1,32 +1,46 @@
 {
-  "tolleranza": 100,
-  "giorni_finestra": 10,
-  "max_combinazioni": 6,
-  "cartella_input": "input",
-  "cartella_output": "output",
-  "pattern": [
-    "*.xlsx",
-    "*.csv"
-  ],
-  "colonne": {
-    "data": "DATA",
-    "versamenti": "VERSAMENTI",
-    "incassi": "INCASSI"
+  "common": {
+    "comment": "Parametri comuni a tutti gli algoritmi",
+    "column_mapping": {
+      "Data": "Date",
+      "Dare": "Debit",
+      "Avere": "Credit",
+      "INCASSI": "Debit",
+      "VERSAMENTI": "Credit"
+    },
+    "input_folder": "input",
+    "output_folder": "output",
+    "file_patterns": ["*.xlsx", "*.csv"],
+    "algorithm": "auto",
+    "residual_threshold": 100.0,
+    "residual_days_window": 90
   },
-  "mapping_colonne": {
-    "Data": "Data",
-    "Dare": "Dare",
-    "Avere": "Avere"
+  "subset_sum": {
+    "comment": "Parametri specifici per l'algoritmo subset_sum",
+    "tolerance": 0.5,
+    "days_window": 15,
+    "max_combinations": 8,
+    "search_direction": "both"
   },
-  "algorithm": "progressive_balance",
-  "residui": {
-    "attiva": true,
-    "soglia_importo": 100,
-    "giorni_finestra": 90
+  "progressive_balance": {
+    "comment": "Parametri specifici per l'algoritmo progressive_balance. Tolleranza molto bassa, solo futuro.",
+    "tolerance": 0.01,
+    "days_window": 7,
+    "search_direction": "future_only",
+    "ignore_tolerance": false
   },
-  "commento": "File di configurazione per il sistema di riconciliazione. Permette di personalizzare il comportamento degli script senza modificare il codice sorgente.",
-  "sorting_strategy": null,
-  "search_direction": "past_only",
-  "use_numba": true,
-  "ignore_tolerance": true
+  "optimizer": {
+    "comment": "Impostazioni per il processo di ottimizzazione dei parametri.",
+    "range_percentage": 0.3,
+    "n_trials_first_run": 100,
+    "n_trials_refinement": 50,
+    "parameter_space": {
+        "algorithm": {"type": "categorical", "values": ["subset_sum", "progressive_balance"]},
+        "days_window": {"type": "numeric", "min": 1, "max": 20},
+        "tolerance": {"type": "numeric", "min": 0.01, "max": 2.0, "step": 0.01, "value_type": "float"},
+        "max_combinations": {"type": "numeric", "min": 2, "max": 10},
+        "search_direction": {"type": "categorical", "values": ["past_only", "future_only", "both"]},
+        "sorting_strategy": {"type": "categorical", "values": ["date", "amount"]}
+    }
+  }
 }

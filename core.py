@@ -592,50 +592,11 @@ class ReconciliationEngine:
         )
 
     def _reconcile_subset_sum(self, verbose=True):
-        """Performs reconciliation using a multi-pass subset sum strategy.
-
-        This method orchestrates a series of reconciliation passes, each designed
-        to identify a specific type of relationship between debit and credit
-        transactions. It is based on solving the "subset sum" problem, where
-        the goal is to find a subset of transactions that perfectly or nearly
-        sum up to a target amount.
-
-        The passes are executed in a specific order to maximize matches:
-
-        1.  **Pass 1: Receipt Aggregation (Many DEBIT -> 1 CREDIT)**:
-            This is the most common scenario, simulating the aggregation of
-            multiple small receipts (Debits) into a single large bank deposit
-            (Credit). It uses a "best fit" heuristic (`enable_best_fit`) to
-            handle cases where a deposit is only partially covered by a set of
-            receipts, splitting the deposit into a matched part and a residual.
-
-        2.  **Pass 2: Split Deposits (1 DEBIT -> Many CREDIT)**:
-            This pass handles the inverse scenario, where a single large receipt
-            (Debit) might be split across multiple smaller deposits (Credits).
-            This is less common but important for comprehensive reconciliation.
-
-        3.  **Pass 3: Residual Recovery**:
-            After the main passes, this final pass attempts to reconcile any
-            remaining high-value transactions using an extended time window
-            (`residual_days_window`). It targets matches that fall outside the
-            standard `days_window`.
-
-        Args:
-            verbose (bool): If True, prints detailed progress for each pass to
-                the console. Defaults to True.
-
-        Returns:
-            list: A list of dictionaries, where each dictionary represents a
-                  successful match and contains detailed information about the
-                  matched debit and credit transactions.
-        """
+        """Performs reconciliation using a multi-pass subset sum strategy."""
         
         matches = []
 
-        # --- Pass 1: DEBIT combination for CREDIT (Many Receipts -> 1 Deposit) ---
-        # This is the "Human" logic: I look for which past receipts make up this deposit.
-        # Highest priority after implicit 1-to-1 matches.
-        # BEST FIT ENABLED: If it doesn't find an exact match, it tries to partially fill the deposit.
+        # Pass 1: DEBIT combination for CREDIT (Many Receipts -> 1 Deposit)
         self._run_reconciliation_pass_debit(
             self.debit_df, self.credit_df,
             self.days_window,
@@ -646,8 +607,7 @@ class ReconciliationEngine:
             enable_best_fit=self.enable_best_fit
         )
 
-        # --- Pass 2: Standard Inverse Reconciliation (1 Receipt -> Many Deposits) ---
-        # Useful if a very large receipt is deposited in several installments (less common but possible).
+        # Pass 2: Standard Inverse Reconciliation (1 Receipt -> Many Deposits)
         self._run_reconciliation_pass(
             self.debit_df, self.credit_df,
             self.days_window,
@@ -657,8 +617,7 @@ class ReconciliationEngine:
             verbose
         )
 
-        # --- Pass 3: Residual Analysis (Enlarged Window) ---
-        # Tries to recover what was left out with a wider window
+        # Pass 3: Residual Analysis (Enlarged Window)
         self._run_reconciliation_pass_debit(
             self.debit_df, self.credit_df,
             self.residual_days_window,
@@ -669,6 +628,62 @@ class ReconciliationEngine:
             enable_best_fit=False
         )
 
+        return matches
+
+    def _reconcile_greedy_amount_first(self, verbose=True):
+        """
+        Performs reconciliation using a greedy, amount-first strategy.
+        It sorts both debits and credits by amount (descending) and tries to match
+        the largest remaining items first.
+        """
+        if verbose:
+            print("\nStarting reconciliation with 'Greedy Amount First' algorithm...")
+
+        # 1. Prepare data: Filter unused and Sort by Amount (descending)
+        df_debit_temp = self.debit_df[~self.debit_df['orig_index'].isin(self.used_debit_indices)].copy()
+        df_credit_temp = self.credit_df[~self.credit_df['orig_index'].isin(self.used_credit_indices)].copy()
+        
+        df_debit_temp.sort_values(by='Debit', ascending=False, inplace=True)
+        df_credit_temp.sort_values(by='Credit', ascending=False, inplace=True)
+
+        matches = []
+        
+        # We iterate over the largest set to ensure we try to match every large transaction
+        if len(df_debit_temp) > len(df_credit_temp):
+            # Iterate through debits and find credits
+            self._run_generic_pass(
+                df_to_process=df_debit_temp,
+                df_candidates=df_credit_temp,
+                col_to_process='Debit',
+                col_candidates='Credit',
+                used_indices_candidates=self.used_credit_indices,
+                days_window=self.days_window,
+                max_combinations=self.max_combinations,
+                matches_list=matches,
+                title="Greedy Pass (Debit -> Credit)",
+                search_direction=self.search_direction,
+                find_function=self._find_matches,
+                verbose=verbose,
+                enable_best_fit=True
+            )
+        else:
+            # Iterate through credits and find debits
+            self._run_generic_pass(
+                df_to_process=df_credit_temp,
+                df_candidates=df_debit_temp,
+                col_to_process='Credit',
+                col_candidates='Debit',
+                used_indices_candidates=self.used_debit_indices,
+                days_window=self.days_window,
+                max_combinations=self.max_combinations,
+                matches_list=matches,
+                title="Greedy Pass (Credit -> Debit)",
+                search_direction=self.search_direction,
+                find_function=self._find_debit_matches,
+                verbose=verbose,
+                enable_best_fit=True
+            )
+            
         return matches
 
     def _finalize_matches(self, matches):
@@ -701,8 +716,8 @@ class ReconciliationEngine:
                     ','.join(map(str, [i + 2 for i in row['credit_indices']]))
                 ), axis=1
             )
-            df_matches['sort_date'] = df_matches['debit_dates'].apply(lambda x: x[0] if isinstance(x, list) else x)
-            df_matches['sort_importo'] = df_matches['debit_amounts'].apply(lambda x: sum(x) if isinstance(x, list) else x)
+            df_matches['sort_date'] = df_matches['debit_dates'].apply(lambda x: x[0] if isinstance(x, list) and x else pd.NaT)
+            df_matches['sort_importo'] = df_matches['debit_amounts'].apply(lambda x: sum(x) if isinstance(x, list) else 0)
             df_matches = df_matches.sort_values(by=['sort_date', 'sort_importo'], ascending=[True, False]).drop(columns=['sort_date', 'sort_importo'])
             df_matches = df_matches.reindex(columns=final_columns) # Ensures all columns exist
         else:
@@ -711,56 +726,15 @@ class ReconciliationEngine:
         return df_matches
 
     def _reconcile_progressive_balance(self, verbose=True):
-        """Performs reconciliation using a sequential progressive balance algorithm.
-
-        This method implements a "Two Pointers" approach that mimics how a human
-        might manually reconcile a statement. It operates on chronologically
-        sorted lists of debit and credit transactions, accumulating them into
-        a "block" and attempting to find a point of balance.
-
-        The core logic is as follows:
-        1.  **Sorting**: Both debit and credit transactions are strictly sorted
-            by date, regardless of the global `sorting_strategy`.
-        2.  **Two Pointers**: Two pointers, `i` (for debits) and `j` (for credits),
-            advance through their respective lists.
-        3.  **Accumulation**: The algorithm greedily adds the transaction with the
-            earlier date to a running total (either `cum_debit` or `cum_credit`).
-        4.  **Block Matching**: If `cum_debit` and `cum_credit` match within the
-            specified `tolerance`, all transactions accumulated since the last
-            match (the "block") are bundled into a single match. The totals are
-            then reset for the next block.
-        5.  **Timeout Handling**: If the time difference between the first and
-            last transaction in the current block exceeds `days_window`, the
-            block is considered "timed out."
-            - If `ignore_tolerance` is True, the block is force-closed as a
-              match, even with an imbalance.
-            - Otherwise, the block is discarded, and the pointers reset to
-              prevent the error from propagating.
-
-        This algorithm is generally much faster than `subset_sum` but is best
-        suited for datasets that are already mostly balanced and chronologically
-        ordered.
-
-        Args:
-            verbose (bool): If True, prints detailed progress to the console.
-                Defaults to True.
-
-        Returns:
-            list: A list of dictionaries, where each dictionary represents a
-                  matched block of transactions.
-        """
+        """Performs reconciliation using a sequential progressive balance algorithm."""
         from datetime import timedelta # Make sure it's imported
         if verbose:
             print("\nStarting reconciliation with 'Progressive Balance' algorithm (Sequential)...")
 
         # 1. Prepare data: Filter unused and Sort by Date
-        # Note: We use copies to not modify the original dfs during iteration
         df_debit_temp = self.debit_df[~self.debit_df['orig_index'].isin(self.used_debit_indices)].copy()
         df_credit_temp = self.credit_df[~self.credit_df['orig_index'].isin(self.used_credit_indices)].copy()
         
-        # Sorting by date: it is fundamental and intentional for this algorithm.
-        # The algorithm simulates a balance that progresses over time, so it ignores the global
-        # 'sorting_strategy' (e.g., by amount) and always forces a chronological order.
         df_debit_temp.sort_values(by=['Date', 'orig_index'], inplace=True)
         df_credit_temp.sort_values(by=['Date', 'orig_index'], inplace=True)
 
@@ -770,32 +744,17 @@ class ReconciliationEngine:
         n_debit = len(debit_rows)
         n_credit = len(credit_rows)
         
-        i = 0 # Debit pointer
-        j = 0 # Credit pointer
-        
-        cum_debit = 0
-        cum_credit = 0
-        
-        start_i = 0
-        start_j = 0
-        
+        i = j = start_i = start_j = cum_debit = cum_credit = 0
         matches = []
         
         if verbose:
             print(f"   - Sequential analysis on {n_debit} Debit movements and {n_credit} Credit movements...")
 
-        # Main loop (Two Pointers)
         while i < n_debit or j < n_credit:
-            # Check if we have reached a break-even point (with at least one movement processed in the current block)
             diff = cum_debit - cum_credit
             
-            # --- IMPROVED RESET LOGIC (Block Duration) ---
-            # Calculate the duration of the block accumulated so far
-            # Start date: minimum between the first DEBIT and the first CREDIT of the current block
             start_date_debit = debit_rows[start_i]['Date'] if start_i < n_debit else None
             start_date_credit = credit_rows[start_j]['Date'] if start_j < n_credit else None
-            
-            # End date: maximum between the last processed DEBIT and CREDIT (i-1, j-1) or current
             curr_date_debit = debit_rows[i]['Date'] if i < n_debit else (debit_rows[i-1]['Date'] if i > 0 else None)
             curr_date_credit = credit_rows[j]['Date'] if j < n_credit else (credit_rows[j-1]['Date'] if j > 0 else None)
             
@@ -810,9 +769,6 @@ class ReconciliationEngine:
 
             if should_reset:
                 if self.ignore_tolerance:
-                    # --- FORCE CLOSE (Accept error) ---
-                    # If the user has chosen to ignore the tolerance (or rather, to force on timeout),
-                    # we close the block as is.
                     block_debit = debit_rows[start_i:i]
                     block_credit = credit_rows[start_j:j]
                     match = {
@@ -823,31 +779,18 @@ class ReconciliationEngine:
                         'credit_dates': [r['Date'] for r in block_credit],
                         'credit_amounts': [r['Credit'] for r in block_credit],
                         'total_credit': cum_credit,
-                        'differenza': abs(diff),
+                        'difference': abs(diff),
                         'match_type': f'Forced (Timeout {self.days_window}d)',
                         'pass_name': 'Progressive Balance (Forced)'
                     }
                     self._register_match(match, matches)
-                    # Reset and continue
-                    start_i = i
-                    start_j = j
-                    cum_debit = 0
-                    cum_credit = 0
+                    start_i, start_j, cum_debit, cum_credit = i, j, 0, 0
                 else:
-                    # --- STANDARD RESET (Skip incorrect block) ---
-                    # Abandon the current block that doesn't balance and start fresh.
-                    # This allows finding subsequent matches instead of carrying over the error.
-                    start_i = i
-                    start_j = j
-                    cum_debit = 0
-                    cum_credit = 0
+                    start_i, start_j, cum_debit, cum_credit = i, j, 0, 0
             
-            # Match Condition: Zero difference (within tolerance) and we have advanced at least one of the pointers
             if abs(diff) <= self.tolerance and (i > start_i or j > start_j):
-                # --- BALANCED BLOCK FOUND ---
                 block_debit = debit_rows[start_i:i]
                 block_credit = credit_rows[start_j:j]
-                
                 match = {
                     'debit_indices': [r['orig_index'] for r in block_debit],
                     'debit_dates': [r['Date'] for r in block_debit],
@@ -855,81 +798,46 @@ class ReconciliationEngine:
                     'credit_indices': [r['orig_index'] for r in block_credit],
                     'credit_dates': [r['Date'] for r in block_credit],
                     'credit_amounts': [r['Credit'] for r in block_credit],
-                    'total_credit': cum_credit, # Or cum_debit, they are equal
-                    'differenza': abs(diff),
+                    'total_credit': cum_credit,
+                    'difference': abs(diff),
                     'match_type': f'Progressive Balance (Seq. {len(block_debit)}D vs {len(block_credit)}C)',
                     'pass_name': 'Progressive Balance'
                 }
                 self._register_match(match, matches)
-
-                # Reset for the next block (we start from zero to avoid error accumulation)
-                start_i = i
-                start_j = j
-                cum_debit = 0
-                cum_credit = 0
-                
-                # If we have finished both, we exit
-                if i == n_debit and j == n_credit:
-                    break
-            
-            # --- ADVANCEMENT LOGIC (GREEDY) ---
-            # We decide which pointer to advance to try to balance the accounts.
+                start_i, start_j, cum_debit, cum_credit = i, j, 0, 0
+                if i == n_debit and j == n_credit: break
             
             can_advance_debit = i < n_debit
             can_advance_credit = j < n_credit
             
             if can_advance_debit and can_advance_credit:
-                # If Debit amount is behind, we add Debit
                 if cum_debit < cum_credit:
-                    cum_debit += debit_rows[i]['Debit']
-                    i += 1
-                # If Credit amount is behind, we add Credit
+                    cum_debit += debit_rows[i]['Debit']; i += 1
                 elif cum_credit < cum_debit:
-                    cum_credit += credit_rows[j]['Credit']
-                    j += 1
+                    cum_credit += credit_rows[j]['Credit']; j += 1
                 else:
-                    # If amounts are equal (start of block or zero amounts), we advance the one with the earlier date
-                    date_debit = debit_rows[i]['Date']
-                    date_credit = credit_rows[j]['Date']
-                    
-                    if date_debit <= date_credit:
-                        cum_debit += debit_rows[i]['Debit']
-                        i += 1
+                    if debit_rows[i]['Date'] <= credit_rows[j]['Date']:
+                        cum_debit += debit_rows[i]['Debit']; i += 1
                     else:
-                        cum_credit += credit_rows[j]['Credit']
-                        j += 1
-                        
+                        cum_credit += credit_rows[j]['Credit']; j += 1
             elif can_advance_debit:
-                # We can only advance Debit
-                cum_debit += debit_rows[i]['Debit']
-                i += 1
+                cum_debit += debit_rows[i]['Debit']; i += 1
             elif can_advance_credit:
-                # We can only advance Credit
-                cum_credit += credit_rows[j]['Credit']
-                j += 1
+                cum_credit += credit_rows[j]['Credit']; j += 1
             else:
-                # We can't advance either, but we haven't matched (case of non-squared final residual)
                 break
 
         if verbose:
             print(f"   - Found {len(matches)} balanced blocks.")
-            
         return matches
 
-    def _register_match(self, match, matches_list): # Removed debit_df, credit_df from args
+    def _register_match(self, match, matches_list):
         """Marks the elements as 'used' and registers the match."""
-        if not match:
-            return
-
+        if not match: return
         debit_indices_orig = match.get('debit_indices', [])
         credit_indices_orig = match.get('credit_indices', [])
-
-        # Add the indices to the sets of used indices
         self.used_debit_indices.update(debit_indices_orig)
         self.used_credit_indices.update(credit_indices_orig)
-
-        # Add to formatted results
-        # Ensure 'pass_name' is included
         credit_dates = match.get('credit_dates')
         matches_list.append({
             'debit_indices': debit_indices_orig,
@@ -947,346 +855,156 @@ class ReconciliationEngine:
 
     def _calculate_monthly_balance(self):
         """Calculates aggregate statistics by month to identify periodic imbalances."""
-        if self.debit_df is None or self.credit_df is None:
-            return pd.DataFrame()
+        if self.debit_df is None or self.credit_df is None: return pd.DataFrame()
 
-        # Helper to group
         def aggregate(df, value_col):
-            if df.empty:
-                return pd.DataFrame()
+            if df.empty: return pd.DataFrame()
             temp = df.copy()
-            # Make sure Data is datetime
-            temp['Date'] = pd.to_datetime(temp['Date'])
-            temp['Month'] = temp['Date'].dt.to_period('M')
-            
-            # Group by month
-            group = temp.groupby('Month')
-            
-            total = group[value_col].sum()
+            temp['Month'] = pd.to_datetime(temp['Date']).dt.to_period('M')
+            total = temp.groupby('Month')[value_col].sum()
             used = temp[temp['used']].groupby('Month')[value_col].sum()
-            
-            res = pd.DataFrame({
-                f'Total {value_col}': total,
-                f'Used {value_col}': used
-            })
+            res = pd.DataFrame({f'Total {value_col}': total, f'Used {value_col}': used})
             return res.fillna(0)
 
-        stats_debit = aggregate(self.debit_df, 'Debit') # Columns: Total Debit, Used Debit
-        stats_credit = aggregate(self.credit_df, 'Credit') # Columns: Total Credit, Used Credit
-
-        # Union of the two dataframes (outer join to cover all months)
+        stats_debit = aggregate(self.debit_df, 'Debit')
+        stats_credit = aggregate(self.credit_df, 'Credit')
         stats = pd.merge(stats_debit, stats_credit, left_index=True, right_index=True, how='outer')
         
-        # --- NEW: Calculation of the absorbed imbalance in matches ---
         absorbed_imbalance = pd.DataFrame()
         if self.matches_df is not None and not self.matches_df.empty:
             df_temp_matches = self.matches_df.copy()
-            
-            # The reference date for the month is the date of the first DEBIT in the block
-            df_temp_matches['Month'] = df_temp_matches['debit_dates'].apply(
-                lambda x: x[0].to_period('M') if isinstance(x, list) and x else None
-            )
+            df_temp_matches['Month'] = df_temp_matches['debit_dates'].apply(lambda x: x[0].to_period('M') if isinstance(x, list) and x else None)
             df_temp_matches.dropna(subset=['Month'], inplace=True)
-            
-            # Calculate the signed difference (DEBIT - CREDIT) for each block
             df_temp_matches['total_debit'] = df_temp_matches['debit_amounts'].apply(lambda x: sum(x) if isinstance(x, list) else 0)
             df_temp_matches['block_imbalance'] = df_temp_matches['total_debit'] - df_temp_matches['total_credit']
-            
             absorbed_imbalance = df_temp_matches.groupby('Month')['block_imbalance'].sum().to_frame('Absorbed Imbalance (in match)')
 
         if not absorbed_imbalance.empty:
             stats = pd.merge(stats, absorbed_imbalance, left_index=True, right_index=True, how='outer')
 
         stats = stats.fillna(0)
-        
-        # Calculation of Deltas (still in cents)
         stats['Unmatched DEBIT'] = stats['Total Debit'] - stats['Used Debit']
         stats['Unmatched CREDIT'] = stats['Total Credit'] - stats['Used Credit']
-        
-        # Net imbalance of only unmatched movements
         stats['Residual Imbalance (DEBIT - CREDIT)'] = stats['Unmatched DEBIT'] - stats['Unmatched CREDIT']
-
-        # Final Monthly Imbalance
         if 'Absorbed Imbalance (in match)' not in stats.columns:
             stats['Absorbed Imbalance (in match)'] = 0
-            
         stats['Final Monthly Imbalance'] = stats['Residual Imbalance (DEBIT - CREDIT)'] + stats['Absorbed Imbalance (in match)']
-
-        # Reorganize columns for clarity
-        stats = stats[[
-            'Total Debit', 'Used Debit', 'Unmatched DEBIT',
-            'Total Credit', 'Used Credit', 'Unmatched CREDIT',
-            'Residual Imbalance (DEBIT - CREDIT)',
-            'Absorbed Imbalance (in match)',
-            'Final Monthly Imbalance'
-        ]]
-
-        # Sort by month
+        stats = stats[['Total Debit', 'Used Debit', 'Unmatched DEBIT', 'Total Credit', 'Used Credit', 'Unmatched CREDIT', 'Residual Imbalance (DEBIT - CREDIT)', 'Absorbed Imbalance (in match)', 'Final Monthly Imbalance']]
         stats = stats.sort_index()
-        
-        # Format the index (Period) into a string
         stats.index = stats.index.astype(str)
         stats.index.name = 'Month'
-        
         return stats.reset_index()
 
     def _verify_total_balance(self, tot_debit_orig, tot_credit_orig, verbose=True):
-        """Verifies that the final total (used + residual) matches the original total."""
-        if self.debit_df is None or self.credit_df is None:
-            return
-
+        if self.debit_df is None or self.credit_df is None: return
         tot_debit_final = self.debit_df['Debit'].sum()
         tot_credit_final = self.credit_df['Credit'].sum()
-        
         diff_debit = tot_debit_final - tot_debit_orig
         diff_credit = tot_credit_final - tot_credit_orig
-        
         if verbose:
             print("\n🔍 Verifying Total Balances (Original vs Final):")
             print(f"   DEBIT:  {tot_debit_orig/100:,.2f} € (Orig) vs {tot_debit_final/100:,.2f} € (Fin) -> Delta: {diff_debit/100:,.2f} €")
             print(f"   CREDIT: {tot_credit_orig/100:,.2f} € (Orig) vs {tot_credit_final/100:,.2f} € (Fin) -> Delta: {diff_credit/100:,.2f} €")
-            
         if abs(diff_debit) > 1 or abs(diff_credit) > 1:
              print(f"⚠️  WARNING: Discrepancy detected in totals! DEBIT: {diff_debit}, CREDIT: {diff_credit}", file=sys.stderr)
         elif verbose:
              print("   ✅ Balance confirmed: No loss of amounts during splitting.")
 
     def create_excel_report(self, output_file, original_df):
-        """Delegates report generation to the reporting module."""
         from reporting import ExcelReporter
         reporter = ExcelReporter(self)
         reporter.generate_report(output_file, original_df)
 
     def get_stats(self):
-        """Calculates and returns a complete dictionary of statistics."""
         if self.debit_df is None or self.credit_df is None or 'used' not in self.debit_df.columns or 'used' not in self.credit_df.columns: return {}
-
-        num_debit_tot = len(self.debit_df)
-        num_debit_used = int(self.debit_df['used'].sum()) # Now the 'used' column exists
-        amt_debit_tot = self.debit_df['Debit'].sum() # in cents
-        amt_debit_used = self.debit_df[self.debit_df['used']]['Debit'].sum() # in cents
-
-        num_credit_tot = len(self.credit_df)
-        num_credit_used = int(self.credit_df['used'].sum()) # Now the 'used' column exists
-        amt_credit_tot = self.credit_df['Credit'].sum() # in cents
-        amt_credit_used = self.credit_df[self.credit_df['used']]['Credit'].sum() # in cents
-
-        # Recalculate unused_debit_df and unreconciled_credit_df based on the updated 'used' column
+        num_debit_tot, amt_debit_tot = len(self.debit_df), self.debit_df['Debit'].sum()
+        num_debit_used, amt_debit_used = int(self.debit_df['used'].sum()), self.debit_df[self.debit_df['used']]['Debit'].sum()
+        num_credit_tot, amt_credit_tot = len(self.credit_df), self.credit_df['Credit'].sum()
+        num_credit_used, amt_credit_used = int(self.credit_df['used'].sum()), self.credit_df[self.credit_df['used']]['Credit'].sum()
         unused_debit_amount = (self.unused_debit_df['Debit'].sum() / 100) if self.unused_debit_df is not None and not self.unused_debit_df.empty else 0
         unreconciled_credit_amount = (self.unreconciled_credit_df['Credit'].sum() / 100) if self.unreconciled_credit_df is not None and not self.unreconciled_credit_df.empty else 0
-
         structural_imbalance = amt_debit_tot - amt_credit_tot
-
         return {
-            'Total Receipts (DEBIT)': num_debit_tot,
-            'Used Receipts (DEBIT)': num_debit_used,
+            'Total Receipts (DEBIT)': num_debit_tot, 'Used Receipts (DEBIT)': num_debit_used,
             '% Used Receipts (DEBIT) (Num)': f"{(num_debit_used / num_debit_tot * 100) if num_debit_tot > 0 else 0:.1f}%",
             '% Covered Receipts (DEBIT) (Vol)': f"{(amt_debit_used / amt_debit_tot * 100) if amt_debit_tot > 0 else 0:.1f}%",
             'Unused Receipts (DEBIT)': num_debit_tot - num_debit_used,
-            
-            'Total Deposits (CREDIT)': num_credit_tot,
-            'Reconciled Deposits (CREDIT)': num_credit_used,
+            'Total Deposits (CREDIT)': num_credit_tot, 'Reconciled Deposits (CREDIT)': num_credit_used,
             '% Reconciled Deposits (CREDIT) (Num)': f"{(num_credit_used / num_credit_tot * 100) if num_credit_tot > 0 else 0:.1f}%",
             '% Covered Deposits (CREDIT) (Vol)': f"{(amt_credit_used / amt_credit_tot * 100) if amt_credit_tot > 0 else 0:.1f}%",
             'Unreconciled Deposits (CREDIT)': num_credit_tot - num_credit_used,
-
             'Final delta (DEBIT - CREDIT)': f"{(unused_debit_amount - unreconciled_credit_amount):,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."),
             'Structural Imbalance (Source)': f"{(structural_imbalance / 100):,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."),
-            
-            # Raw values for aggregations and internal calculations
-            '_raw_unused_debit_amount': unused_debit_amount,
-            '_raw_unreconciled_credit_amount': unreconciled_credit_amount,
+            '_raw_unused_debit_amount': unused_debit_amount, '_raw_unreconciled_credit_amount': unreconciled_credit_amount,
             '_raw_debit_amount_perc': (amt_debit_used / amt_debit_tot * 100) if amt_debit_tot > 0 else 0,
             '_raw_credit_amount_perc': (amt_credit_used / amt_credit_tot * 100) if amt_credit_tot > 0 else 0,
         }
 
     def _evaluate_best_configuration(self, df, verbose=True):
-        """
-        Runs a competition between different algorithms/configurations
-        to determine the best one for the current dataset.
-        """
-        if verbose:
-            print("\n🧠 AUTO-EVALUATION: Analyzing data to select the best strategy...")
-            
-        # 1. Define Candidate Strategies
-        # Modular approach: each strategy is a configuration override.
+        if verbose: print("\n🧠 AUTO-EVALUATION: Analyzing data to select the best strategy...")
         strategies = [
-            {
-                'name': 'Progressive Balance (Strict)',
-                'params': {
-                    'algorithm': 'progressive_balance',
-                    'sorting_strategy': 'date',
-                    'search_direction': 'past_only'
-                }
-            },
-            {
-                'name': 'Subset Sum (Standard)',
-                'params': {
-                    'algorithm': 'subset_sum',
-                    # Inherit current settings where appropriate
-                    'sorting_strategy': self.sorting_strategy,
-                    'search_direction': self.search_direction
-                }
-            }
+            {'name': 'Progressive Balance (Strict)', 'params': {'algorithm': 'progressive_balance', 'sorting_strategy': 'date', 'search_direction': 'past_only'}},
+            {'name': 'Subset Sum (Standard)', 'params': {'algorithm': 'subset_sum', 'sorting_strategy': self.sorting_strategy, 'search_direction': self.search_direction}},
+            {'name': 'Greedy Amount First', 'params': {'algorithm': 'greedy_amount_first'}}
         ]
-        
-        # Add an aggressive strategy if dataset is manageable size
         if len(df) < 5000:
-             strategies.append({
-                'name': 'Subset Sum (Aggressive)',
-                'params': {
-                    'algorithm': 'subset_sum',
-                    'days_window': max(self.days_window, 30), # Force at least 30 days
-                    'max_combinations': max(self.max_combinations, 12) # Allow more combinations
-                }
-            })
+             strategies.append({'name': 'Subset Sum (Aggressive)', 'params': {'algorithm': 'subset_sum', 'days_window': max(self.days_window, 30), 'max_combinations': max(self.max_combinations, 12)}})
 
-        best_score = -1
-        best_params = {}
-        
+        best_score, best_params = -1, {}
         for strat in strategies:
             if verbose: print(f"   👉 Testing: {strat['name']}...", end="")
-            
-            # Construct config for temp engine based on current attributes
-            cfg = {
-                'tolerance': self.tolerance / 100.0, # Convert back to float for init
-                'days_window': self.days_window,
-                'max_combinations': self.max_combinations,
-                'residual_threshold': self.residual_threshold / 100.0,
-                'residual_days_window': self.residual_days_window,
-                'sorting_strategy': self.sorting_strategy,
-                'search_direction': self.search_direction,
-                'column_mapping': self.column_mapping,
-                'use_numba': self.use_numba,
-                'ignore_tolerance': self.ignore_tolerance,
-                'enable_best_fit': self.enable_best_fit
-            }
-            # Override with strategy params
+            cfg = { 'tolerance': self.tolerance / 100.0, 'days_window': self.days_window, 'max_combinations': self.max_combinations, 'residual_threshold': self.residual_threshold / 100.0, 'residual_days_window': self.residual_days_window, 'sorting_strategy': self.sorting_strategy, 'search_direction': self.search_direction, 'column_mapping': self.column_mapping, 'use_numba': self.use_numba, 'ignore_tolerance': self.ignore_tolerance, 'enable_best_fit': self.enable_best_fit }
             cfg.update(strat['params'])
-            
             try:
-                # Run simulation silently using a temporary engine
                 with contextlib.redirect_stdout(io.StringIO()):
                      sim_engine = ReconciliationEngine(**cfg)
                      stats = sim_engine.run(df.copy(), output_file=None, verbose=False)
-                
                 if stats:
-                    # Score: Sum of % Reconciled Volume (Debit + Credit)
                     score = stats.get('_raw_debit_amount_perc', 0) + stats.get('_raw_credit_amount_perc', 0)
-                    
-                    # Heuristic: Prefer Progressive Balance if score is very high (it's faster and cleaner)
-                    if strat['params']['algorithm'] == 'progressive_balance' and score > 190:
-                        score += 5 # Bonus points
-                        
+                    if strat['params']['algorithm'] == 'progressive_balance' and score > 190: score += 5
                     if verbose: print(f" Score: {score:.2f}")
-                    
                     if score > best_score:
-                        best_score = score
-                        best_params = strat['params']
+                        best_score, best_params = score, strat['params']
                 else:
                     if verbose: print(" Failed.")
             except Exception as e:
                 if verbose: print(f" Error: {e}")
-                
-        if verbose:
-            print(f"   🏆 Selected Strategy: {best_params.get('algorithm')} (Score: {best_score:.2f})")
-            
+        if verbose: print(f"   🏆 Selected Strategy: {best_params.get('algorithm')} (Score: {best_score:.2f})")
         return best_params
 
     def run(self, input_file, output_file=None, verbose=True):
-        """Executes the entire end-to-end reconciliation process.
-
-        This is the main public method that orchestrates the workflow, from data
-        loading to report generation. It can handle a file path or a pre-loaded
-        DataFrame, making it flexible for use in different contexts like batch
-        processing or parameter optimization.
-
-        The process includes the following steps:
-        1.  **Data Loading**: If `input_file` is a path, it loads the file using
-            `load_file`. If it's a DataFrame, it uses it directly.
-        2.  **Preprocessing**: Original totals are calculated for later verification,
-            and transactions are split into separate Debit and Credit DataFrames.
-        3.  **Algorithm Selection**: If `algorithm` is set to 'auto', it runs a
-            quick evaluation (`_evaluate_best_configuration`) to determine the
-            most effective algorithm ('subset_sum' or 'progressive_balance') for
-            the given dataset and applies it.
-        4.  **Reconciliation**: Executes the chosen algorithm(s). This may involve
-            multiple passes with different strategies (e.g., many-to-one,
-            one-to-many, residual analysis).
-        5.  **Finalization**: Marks all reconciled transactions as 'used', creates
-            a clean DataFrame of all matches, and verifies that the sum of
-            reconciled amounts and residuals equals the original totals.
-        6.  **Statistics Calculation**: Computes final summary statistics on the
-            outcome (e.g., percentage of reconciled amounts, remaining balances).
-        7.  **Report Generation**: If `output_file` is provided, it calls the
-            `ExcelReporter` to generate a detailed multi-sheet Excel report.
-
-        Args:
-            input_file (str or pd.DataFrame): The path to the input data file
-                or a pre-loaded pandas DataFrame containing the transactions.
-            output_file (str, optional): The path where the final Excel report
-                will be saved. If None, no report is generated. Defaults to None.
-            verbose (bool): If True, detailed progress and logging information
-                will be printed to the console during execution. Defaults to True.
-
-        Returns:
-            dict: A dictionary containing key statistics about the reconciliation
-                  results, such as the number and value of reconciled items,
-                  percentages, and final imbalances. Returns None if a critical
-                  error occurs.
-        """
         if not NUMBA_AVAILABLE and verbose:
-            # Print a warning if Numba is not available
             print("\n⚠️  WARNING: 'numba' library not found. Running in non-optimized mode (slower).")
             print("   For better performance, install it with: pip install numba\n")
         try:
-           # Reset used indices for each run, important for the optimizer
-            self.used_debit_indices = set()
-            self.used_credit_indices = set()
-
-            # --- CHANGE: Flexible input handling ---
-            # The optimizer passes a DataFrame for efficiency, main.py passes a path.
+            self.used_debit_indices, self.used_credit_indices = set(), set()
             if isinstance(input_file, pd.DataFrame):
                 if verbose: print("1. Using pre-loaded DataFrame.")
-                # The input is already a processed df, we use it directly
                 df = input_file
             else:
                 if verbose: print(f"1. Loading and validating file: {input_file}")
                 df = self.load_file(input_file)
 
-            # Calculation of original totals for balance verification
-            tot_debit_orig = df['Debit'].sum()
-            tot_credit_orig = df['Credit'].sum()
-
+            tot_debit_orig, tot_credit_orig = df['Debit'].sum(), df['Credit'].sum()
             if verbose: print("2. Separating and sorting DEBIT/CREDIT movements...")
             self._separate_movements(df)
-
             if verbose: print("3. Starting reconciliation passes...")
-            
             all_matches = []
 
-            # --- AUTO-SELECTION LOGIC ---
             if self.algorithm == 'auto':
                 best_params = self._evaluate_best_configuration(df, verbose=verbose)
                 if best_params:
                     if verbose: print(f"   ⚙️  Applying optimal parameters: {best_params}")
-                    # Apply best params to self
                     for k, v in best_params.items():
-                        if hasattr(self, k):
-                            setattr(self, k, v)
-                    
-                    # Re-check algorithm after update
+                        if hasattr(self, k): setattr(self, k, v)
                     if verbose: print(f"   -> Proceeding with algorithm: {self.algorithm}")
 
-            # --- ALGORITHM CHOICE ---
-            # If 'all', it first runs progressive balance (for blocks) then subset sum (for residuals)
             algorithms_to_run = []
-            if self.algorithm == 'all' or (self.algorithm == 'progressive_balance' and abs(tot_debit_orig - tot_credit_orig) > self.tolerance):
-                # Fallback: if progressive balance is chosen but data is structurally unbalanced, suggest subset_sum logic or run both
-                algorithms_to_run = ['progressive_balance', 'subset_sum']
-            elif self.algorithm == 'progressive_balance':
-                algorithms_to_run = ['progressive_balance']
-            else: # subset_sum o default
+            if self.algorithm == 'all':
+                algorithms_to_run = ['progressive_balance', 'subset_sum', 'greedy_amount_first']
+            elif self.algorithm in ['progressive_balance', 'subset_sum', 'greedy_amount_first']:
+                algorithms_to_run = [self.algorithm]
+            else: # default
                 algorithms_to_run = ['subset_sum']
 
             for algo in algorithms_to_run:
@@ -1294,235 +1012,112 @@ class ReconciliationEngine:
                     all_matches.extend(self._reconcile_progressive_balance(verbose=verbose))
                 elif algo == 'subset_sum':
                     all_matches.extend(self._reconcile_subset_sum(verbose=verbose))
+                elif algo == 'greedy_amount_first':
+                    all_matches.extend(self._reconcile_greedy_amount_first(verbose=verbose))
 
-            # Common finalization
             self.debit_df['used'] = self.debit_df['orig_index'].isin(self.used_debit_indices)
             self.credit_df['used'] = self.credit_df['orig_index'].isin(self.used_credit_indices)
             self.matches_df = self._finalize_matches(all_matches)
-            # Balance verification
             self._verify_total_balance(tot_debit_orig, tot_credit_orig, verbose=verbose)
 
-            # --- CHECK STRUCTURAL IMBALANCE ---
             structural_diff = tot_debit_orig - tot_credit_orig
-            if verbose and abs(structural_diff) > 100: # > 1 euro
+            if verbose and abs(structural_diff) > 100:
                  print(f"\n⚖️  INITIAL DATA ANALYSIS: Structural imbalance detected!")
                  print(f"    Total DEBIT (Receipts):    {tot_debit_orig/100:,.2f} €")
                  print(f"    Total CREDIT (Deposits): {tot_credit_orig/100:,.2f} €")
                  print(f"    Difference at source:    {structural_diff/100:,.2f} € (This amount can never be reconciled)")
 
-            # Calculate the dataframes of the unused, necessary for reports and statistics
             self.unused_debit_df = self.debit_df[~self.debit_df['used']].copy()
             self.unreconciled_credit_df = self.credit_df[~self.credit_df['used']].copy()
 
             if verbose: print("4. Calculating final statistics...")
             stats = self.get_stats()
-
-            # If an output file is provided, save the results
             if output_file:
                 if verbose: print(f"5. Generating Excel report in: {output_file}")
                 self.create_excel_report(output_file, df)
                 if verbose: print("✓ Excel report created successfully.")
-
             if verbose: print("\n🎉 Reconciliation completed successfully!")
             return stats
-
         except (FileNotFoundError, ValueError, IndexError) as e:
-            # Handles all known errors (file not found, missing columns, corrupted file)
             print(f"\n❌ CRITICAL ERROR during processing of '{input_file}': {e}", file=sys.stderr)
             return None
         except Exception as e:
-            # Handles any other unexpected error
             print(f"\n❌ UNEXPECTED ERROR: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc()
             return None
 
 # --- FUNCTION COMPILED WITH NUMBA ---
-# This function lives outside the class to be correctly compiled by Numba.
-# @jit is the decorator that compiles the function into machine code.
-# nopython=True ensures there is no fallback to the Python interpreter, guaranteeing maximum speed.
-@jit(nopython=True) # Questo decoratore sarà quello reale di Numba o quello fittizio
+@jit(nopython=True)
 def _numba_find_combination(target, candidates_np, max_combinations, tolerance):
-    """Finds an exact combination of candidates that sum to a target amount.
-
-    This is a high-performance implementation of the subset sum problem,
-    heavily optimized for speed using Numba's JIT compiler in `nopython` mode.
-    To ensure Numba compatibility, it uses a manually managed stack for iterative,
-    depth-first searching, avoiding native Python recursion.
-
-    The function employs pruning techniques to cut down the search space:
-    - It stops exploring a path if the current sum exceeds the target plus tolerance.
-    - It uses an optimistic estimate of the maximum possible sum for a given
-      branch to terminate non-viable branches early.
-
-    Args:
-        target (int): The target sum (in cents).
-        candidates_np (np.array): A 2D NumPy array where each row represents a
-            candidate transaction, containing `[amount_in_cents, original_index]`.
-            This array must be sorted by amount in descending order for the
-            pruning to be effective.
-        max_combinations (int): The maximum number of items allowed in a valid
-            combination.
-        tolerance (int): The acceptable margin of error (in cents) for the sum
-            to be considered a match.
-
-    Returns:
-        np.array: A 1D NumPy array containing the `original_index` values of
-            the transactions that form the first valid combination found.
-            Returns an empty array if no combination is found.
-    """
-    # Stack: (candidate_index, current_sum, level)
-    # Initialize with first-level candidates
-    stack = []
-    n_candidates = len(candidates_np)
-    
-    # We iterate in reverse order to push onto the stack, so we process the largest candidates first (index 0)
+    """Finds an exact combination of candidates that sum to a target amount."""
+    stack, n_candidates = [], len(candidates_np)
     for i in range(n_candidates - 1, -1, -1):
         val = candidates_np[i, 0]
         if val <= target + tolerance:
             stack.append((i, val, 1))
-            
     path = np.full(max_combinations, -1, dtype=np.int64)
-
     while len(stack) > 0:
         idx, current_sum, level = stack.pop()
         path[level-1] = idx
-        
-        # Check exact match
         if abs(target - current_sum) <= tolerance:
              result_indices = np.full(level, 0, dtype=np.int64)
              for k in range(level):
                  result_indices[k] = candidates_np[path[k], 1]
              return result_indices
-             
-        if level >= max_combinations:
-            continue
-            
-        # Pruning: If even by adding the largest remaining values we don't reach the target
+        if level >= max_combinations: continue
         remaining_slots = max_combinations - level
         if idx + 1 < n_candidates:
-            # Optimistic estimate: we use the next largest value for all remaining slots
             max_add = candidates_np[idx+1, 0] * remaining_slots
-            if current_sum + max_add < target - tolerance:
-                continue
+            if current_sum + max_add < target - tolerance: continue
         elif current_sum < target - tolerance:
-            # No candidates left and we are not at the target
             continue
-
-        # Generate children: try subsequent candidates
-        # Push in reverse order (from smallest to largest) to explore the large ones first
         for i in range(n_candidates - 1, idx, -1):
             val = candidates_np[i, 0]
             new_sum = current_sum + val
             if new_sum <= target + tolerance:
                  stack.append((i, new_sum, level + 1))
-
-    # If the stack becomes empty, no combination was found.
     return np.empty(0, dtype=np.int64)
 
 @jit(nopython=True)
 def _numba_find_best_fit_combination(target, candidates_np, max_combinations, tolerance):
-    """Finds the best-fitting combination of candidates that maximizes the sum
-    without exceeding the target amount (0/1 Knapsack problem).
-
-    This Numba-optimized function implements the "best fit" or "splitting"
-    heuristic. Instead of searching for a combination that equals the target,
-    it solves a variation of the 0/1 Knapsack problem: it finds the subset of
-    candidates whose sum is as large as possible but not greater than the target.
-
-    This is crucial for scenarios where a large transaction (e.g., a deposit)
-    is only partially covered by a set of smaller transactions (e.g., receipts).
-
-    Like `_numba_find_combination`, it uses a stack-based iterative approach
-    for Numba `nopython` compatibility and employs pruning to efficiently
-    search the solution space.
-
-    Args:
-        target (int): The target sum (in cents) that should not be exceeded.
-        candidates_np (np.array): A 2D NumPy array of candidate transactions,
-            formatted as `[amount_in_cents, original_index]`. Must be sorted
-            by amount in descending order.
-        max_combinations (int): The maximum number of items allowed in the
-            best-fit combination.
-        tolerance (int): An acceptable error margin. Although the primary goal
-            is not to exceed the target, this is used in boundary conditions.
-
-    Returns:
-        np.array: A 1D NumPy array with the `original_index` values of the
-            transactions in the best combination found. Returns an empty array
-            if no suitable combination (e.g., one that fills a minimal
-            percentage of the target) is found.
-    """
-    # Stack: (candidate_index, current_sum, level)
-    stack = []
-    n_candidates = len(candidates_np)
-    
+    """Finds the best-fitting combination of candidates that maximizes the sum without exceeding the target amount."""
+    stack, n_candidates = [], len(candidates_np)
     for i in range(n_candidates - 1, -1, -1):
         val = candidates_np[i, 0]
         if val <= target + tolerance:
             stack.append((i, val, 1))
-    
     path = np.full(max_combinations, -1, dtype=np.int64)
-    
-    # Variables to track the best solution found so far
-    best_sum = 0
-    best_path_len = 0
+    best_sum, best_path_len = 0, 0
     best_path = np.full(max_combinations, -1, dtype=np.int64)
-    
-    # Minimum threshold to consider a best fit useful (e.g., fill at least 1% of the target)
     min_fill_threshold = target * 0.01
-
     while len(stack) > 0:
         idx, current_sum, level = stack.pop()
         path[level-1] = idx
-        
-        # If the current sum is better than the one found so far, update the best fit
         if current_sum > best_sum:
-            best_sum = current_sum
-            best_path_len = level
-            # Copy the current path to best_path
-            for k in range(level):
-                best_path[k] = path[k]
-                
-            # If we found an almost perfect match (within tolerance), we can stop
-            if abs(target - best_sum) <= tolerance:
-                break
-
-        if level >= max_combinations:
-            continue
-            
+            best_sum, best_path_len = current_sum, level
+            for k in range(level): best_path[k] = path[k]
+            if abs(target - best_sum) <= tolerance: break
+        if level >= max_combinations: continue
         remaining_slots = max_combinations - level
-        
-        # Pruning Upper Bound
         if idx + 1 < n_candidates:
              max_potential = current_sum + candidates_np[idx+1, 0] * remaining_slots
-             if max_potential <= best_sum:
-                 continue
+             if max_potential <= best_sum: continue
         else:
              continue
-
         for i in range(n_candidates - 1, idx, -1):
             val = candidates_np[i, 0]
             new_sum = current_sum + val
-            
-            if new_sum > target + tolerance:
-                continue
-                
-            # Local Pruning
-            if new_sum + (val * (remaining_slots - 1)) <= best_sum:
-                continue
-                
+            if new_sum > target + tolerance: continue
+            if new_sum + (val * (remaining_slots - 1)) <= best_sum: continue
             stack.append((i, new_sum, level + 1))
-
-    # If we found a valid solution
     if best_path_len > 0 and best_sum >= min_fill_threshold:
         result_indices = np.full(best_path_len, 0, dtype=np.int64)
         for k in range(best_path_len):
             result_indices[k] = candidates_np[best_path[k], 1]
         return result_indices
-
     return np.empty(0, dtype=np.int64)
 
-# Aliases for backward compatibility and English support
+# Aliases
 RiconciliatoreContabile = ReconciliationEngine
 AccountingReconciler = ReconciliationEngine

@@ -62,39 +62,13 @@ The recommended way to run the application is with Docker Compose, which simplif
     docker compose down
     ```
 
-## 🚀 How to Use
+## 🚀 How to Use the Web Application
 
-### Web Application
+The primary way to use the application is through the web interface, which is started using Docker Compose as described above.
 
-The web app is ideal for interactive, single-file processing.
-
-#### 1. Start the Application
-
-**Development Mode (for local testing):**
-Uses the Flask development server, suitable for a single user.
-```bash
-python app.py
-```
-Dopo aver eseguito il comando, vedrai un output simile a questo:
-```
- * Running on http://127.0.0.1:5000
-```
-Apri il tuo browser e vai all'indirizzo **http://127.0.0.1:5000** per usare l'applicazione.
-
-### 2. Modalità di Produzione (Consigliata)
-
-Per un uso reale con più utenti, è necessario un server WSGI come **Gunicorn**, in grado di gestire più richieste contemporaneamente.
-
-**a. Installa Gunicorn:**
-```bash
-pip install gunicorn  # Già incluso in requirements.txt
-```
-
-**b. Avvia il server con Gunicorn:**
-```bash
-python batch_processor.py
-python batch.py
-```
+The service runs on a Gunicorn WSGI server, configured for production use. The configuration is handled automatically by the `start.sh` script inside the Docker container:
+- **Workers**: The number of worker processes is set dynamically to `(2 * CPU cores) + 1` for optimal performance.
+- **Timeout**: A timeout of 300 seconds is configured to allow for long-running optimization and processing tasks without interruptions.
 
 ### Output Generato
 
@@ -334,6 +308,13 @@ Here is an overview of the key files in the project and how they interact:
 
 ## 📜 Changelog
 
+### v3.1.0 (Febbraio 2026)
+- **Optimizer**: Aggiunta la `sorting_strategy` allo spazio di ricerca per testare diverse strategie di ordinamento.
+- **Gunicorn**: Ottimizzato l'avvio in Docker con worker dinamici (`(2 * core) + 1`) e timeout aumentato per gestire elaborazioni lunghe.
+- **Multiprocessing**: Reso stabile il parallelismo di Optuna in Docker tramite l'uso di uno storage SQLite temporaneo.
+- **Reporting**: Migliorata la leggibilità del grafico "Monthly Performance" con colori distinti per i volumi totali e utilizzati.
+- **Bug Fixes**: Corretti diversi errori relativi all'importazione, alla gestione dei parametri e all'esecuzione dell'ottimizzatore.
+
 ### v3.0.0 (Versione Corrente)
 - **Docker**: Aggiunto supporto ufficiale con `Dockerfile` e `.dockerignore`.
 - **Core Engine**: Riscrittura completa del motore (`core.py`) utilizzando **Pandas DataFrame** per performance elevate.
@@ -341,34 +322,3 @@ Here is an overview of the key files in the project and how they interact:
 - **Refactoring**: Spostamento utility in `tools/` e pulizia del codice.
 - **Logging**: Controllo granulare sul salvataggio dei log (parametro `save_log`).
 - **Best Fit**: Migliorata la logica di abbinamento parziale con opzione per disabilitarla.
-
-### v1.1.0 (2025-01-15)
-- ✨ Aggiunto Batch Processor per elaborazione multipla
-- 📊 Log JSON e CSV dettagliati
-- 🚀 Ottimizzazioni performance per file grandi
-
-### v1.0.0 (2025-01-14)
-- 🎉 Release iniziale
-- ✅ Algoritmo riconciliazione base
-- 📄 Export Excel multi-foglio
-
----
-
-**Versione**: 3.0.0
-**Ultimo aggiornamento**: Gennaio 2026
-gunicorn --workers 4 --bind 0.0.0.0:5000 app:app
-```
-- `--workers 4`: Avvia 4 "operai". Questo significa che il server può processare fino a 4 richieste utente in parallelo. Puoi adattare questo numero in base alla CPU e alla RAM del tuo server.
-- `--bind 0.0.0.0:5000`: Rende l'applicazione accessibile da altre macchine sulla stessa rete all'indirizzo IP del server sulla porta 5000.
-- `app:app`: Indica a Gunicorn di eseguire l'oggetto `app` che si trova all'interno del file `app.py`.
-
-## 📖 Come Usare l'Interfaccia Web
-
-1.  **Avvia il server** usando uno dei metodi descritti sopra.
-2.  **Apri il browser** all'indirizzo del server (es. `http://127.0.0.1:5000`).
-3.  **Carica il file**:
-    - Clicca su "Scegli file".
-    - Seleziona un file Excel (`.xlsx` o `.xls`).
-    - **Requisito**: Il file deve contenere obbligatoriamente le tre colonne `Data`, `Dare`, `Avere`.
-4.  **Elabora**: Clicca sul pulsante "Elabora File".
-5.  **Scarica il risultato**: Dopo pochi istanti, il browser scaricherà automaticamente il file Excel elaborato, con un nome simile a `Riconciliato_tuofile.xlsx`.

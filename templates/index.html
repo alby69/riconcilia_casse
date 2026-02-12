@@ -93,21 +93,20 @@
                 <!-- Upload Area -->
                 <div class="upload-area mb-4" id="dropZone">
                     <i class="fas fa-cloud-upload-alt fa-3x mb-3"></i>
-                    <h5>Drag and drop your Excel file here</h5>
-                    <p class="text-muted small">or click to select</p>
+                    <h5>Trascina qui il tuo file Excel</h5>
+                    <p class="text-muted small">o clicca per selezionare</p>
                     <input type="file" name="file_input" id="fileInput" class="d-none" accept=".xlsx, .xls">
                     <div id="fileName" class="mt-2 fw-bold text-success"></div>
-                    
-                    <!-- Column Instructions -->
-                    <div class="mt-3 badge bg-light text-dark border p-2 fw-normal">
-                        <i class="fas fa-info-circle me-1 text-info"></i> File must contain columns: <strong>Data</strong>, <strong>Dare</strong>, <strong>Avere</strong>
+                    <div id="optimizationSpinner" class="mt-3 d-none">
+                        <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                        <span class="ms-2 text-muted">Ricerca parametri ottimali...</span>
                     </div>
                 </div>
 
                 <!-- Advanced Settings Toggle -->
                 <div class="text-center mb-3">
                     <span class="settings-toggle" onclick="toggleSettings()">
-                        <i class="fas fa-cog"></i> Advanced Settings <i class="fas fa-chevron-down ms-1" id="toggleIcon"></i>
+                        <i class="fas fa-cog"></i> Impostazioni Avanzate <i class="fas fa-chevron-down ms-1" id="toggleIcon"></i>
                     </span>
                 </div>
 
@@ -115,69 +114,39 @@
                 <div class="advanced-section" id="advancedSettings">
                     <div class="row g-3">
                         <div class="col-md-6">
-                            <label class="form-label small fw-bold">Algorithm</label>
-                            <select class="form-select form-select-sm" name="algorithm">
-                                <option value="auto">AUTO (Recommended)</option>
-                                <option value="subset_sum">Subset Sum (Combinatorial)</option>
-                                <option value="progressive_balance">Progressive Balance (Sequential)</option>
-                                <option value="all">Run All</option>
+                            <label class="form-label small fw-bold">Algoritmo</label>
+                            <select class="form-select form-select-sm" name="algorithm" id="algorithm_select">
+                                <option value="auto">AUTO (Consigliato)</option>
+                                <!-- Options will be populated by JS -->
                             </select>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label small fw-bold">Sorting Strategy</label>
-                            <select class="form-select form-select-sm" name="sorting_strategy">
-                                <option value="date">Date</option>
-                                <option value="amount">Amount</option>
-                            </select>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label small fw-bold">Search Direction</label>
+                            <label class="form-label small fw-bold">Direzione Ricerca</label>
                             <select class="form-select form-select-sm" name="search_direction">
-                                <option value="past_only">Past Only</option>
-                                <option value="future_only">Future Only</option>
-                                <option value="both">Both</option>
+                                <option value="past_only">Solo Passato</option>
+                                <option value="future_only">Solo Futuro</option>
+                                <option value="both">Entrambi</option>
                             </select>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label small fw-bold">Tolerance (€)</label>
-                            <input type="number" class="form-control form-select-sm" name="tolerance" step="0.01" value="0.01">
+                            <label class="form-label small fw-bold">Tolleranza (€)</label>
+                            <input type="number" class="form-control form-select-sm" name="tolerance" step="0.01">
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label small fw-bold">Time Window (days)</label>
-                            <input type="number" class="form-control form-select-sm" name="days_window" value="10">
+                            <label class="form-label small fw-bold">Finestra Temporale (giorni)</label>
+                            <input type="number" class="form-control form-select-sm" name="days_window">
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label small fw-bold">Max Combinations</label>
-                            <input type="number" class="form-control form-select-sm" name="max_combinations" value="6">
+                            <label class="form-label small fw-bold">Max Combinazioni (Subset Sum)</label>
+                            <input type="number" class="form-control form-select-sm" name="max_combinations">
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label small fw-bold">Residual Threshold (€)</label>
-                            <input type="number" class="form-control form-select-sm" name="residual_threshold" step="1" value="100">
+                            <label class="form-label small fw-bold">Soglia Residui (€)</label>
+                            <input type="number" class="form-control form-select-sm" name="residual_threshold" step="1">
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label small fw-bold">Residual Days Window</label>
-                            <input type="number" class="form-control form-select-sm" name="residual_days_window" value="30">
-                        </div>
-
-                        <div class="col-12">
-                             <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="enableBestFit" name="enable_best_fit" value="true" checked>
-                                <label class="form-check-label small" for="enableBestFit">Enable "Best Fit" (Splitting)</label>
-                            </div>
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="ignoreTolerance" name="ignore_tolerance" value="true">
-                                <label class="form-check-label small fw-bold text-danger" for="ignoreTolerance">Force window closure (Progressive Balance)</label>
-                                <div class="form-text x-small">If active, closes the block upon expiration even if unbalanced (useful for structural imbalances).</div>
-                            </div>
-                            <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="saveLog" name="save_log" value="true">
-                                <label class="form-check-label small" for="saveLog">Save log to disk</label>
-                            </div>
-                        </div>
-                        <div class="col-12 text-end mt-3 border-top pt-2">
-                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="saveConfig()">
-                                <i class="fas fa-save me-1"></i> Save Settings as Default
-                            </button>
+                         <div class="col-md-6">
+                            <label class="form-label small fw-bold">Finestra Residui (giorni)</label>
+                            <input type="number" class="form-control form-select-sm" name="residual_days_window">
                         </div>
                     </div>
                 </div>
@@ -185,7 +154,7 @@
                 <!-- Action Button -->
                 <div class="text-center mt-4">
                     <button type="submit" class="btn btn-process px-5" id="btnSubmit">
-                        <i class="fas fa-magic me-2"></i>Process File
+                        <i class="fas fa-magic me-2"></i>Elabora File
                     </button>
                 </div>
             </form>
@@ -193,112 +162,87 @@
             <!-- Progress & Results -->
             <div id="progressContainer" class="mt-4 d-none text-center">
                 <div class="spinner-border text-primary mb-2" role="status"></div>
-                <p class="text-muted blink">Processing...</p>
+                <p class="text-muted blink">Elaborazione in corso...</p>
             </div>
 
             <div id="resultContainer" class="mt-4 d-none text-center">
                 <div class="alert alert-success shadow-sm">
-                    <h4 class="alert-heading"><i class="fas fa-check-circle me-2"></i>Done!</h4>
-                    <p>The file has been processed successfully.</p>
+                    <h4 class="alert-heading"><i class="fas fa-check-circle me-2"></i>Fatto!</h4>
+                    <p>Il file è stato elaborato con successo.</p>
                     <hr>
                     <a id="downloadLink" href="#" class="btn btn-success fw-bold">
-                        <i class="fas fa-download me-2"></i>Download Excel Result
+                        <i class="fas fa-download me-2"></i>Scarica il Report Excel
                     </a>
                 </div>
-                <button class="btn btn-outline-secondary btn-sm mt-2" onclick="toggleLog()">Show/Hide Technical Log</button>
+                <button class="btn btn-outline-secondary btn-sm mt-2" onclick="toggleLog()">Mostra/Nascondi Log Tecnico</button>
             </div>
 
             <div class="log-container shadow-inner" id="logOutput"></div>
         </div>
     </div>
-    <div class="text-center text-muted small mb-4">v3.3 - Powered by Python & Pandas</div>
+    <div class="text-center text-muted small mb-4">v4.0 - Ottimizzazione Automatica</div>
 </div>
 
 <script>
+    // --- Config Data from Backend ---
+    const CONFIG = {{ config | tojson }};
+
     // --- Theme Logic ---
     const themeToggle = document.getElementById('themeToggle');
     const body = document.body;
     const icon = themeToggle.querySelector('i');
 
-    // Load saved theme
     const savedTheme = localStorage.getItem('theme') || 'light';
     body.setAttribute('data-theme', savedTheme);
     updateIcon(savedTheme);
 
     themeToggle.addEventListener('click', () => {
-        const currentTheme = body.getAttribute('data-theme');
-        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+        const newTheme = body.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
         body.setAttribute('data-theme', newTheme);
         localStorage.setItem('theme', newTheme);
         updateIcon(newTheme);
     });
 
     function updateIcon(theme) {
-        if (theme === 'dark') {
-            icon.classList.remove('fa-moon');
-            icon.classList.add('fa-sun');
-        } else {
-            icon.classList.remove('fa-sun');
-            icon.classList.add('fa-moon');
-        }
+        icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
     }
 
     // --- UI Logic ---
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const fileNameDisplay = document.getElementById('fileName');
+    const optimizationSpinner = document.getElementById('optimizationSpinner');
 
     dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', handleFileSelect);
 
-    fileInput.addEventListener('change', (e) => {
-        if (fileInput.files.length > 0) {
-            fileNameDisplay.textContent = fileInput.files[0].name;
-            dropZone.style.borderColor = "#198754";
-            dropZone.style.backgroundColor = "#f0fff4";
-        }
-    });
-
-    // Drag & Drop effects
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
         dropZone.addEventListener(eventName, preventDefaults, false);
     });
     function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
     
-    ['dragenter', 'dragover'].forEach(eventName => {
-        dropZone.addEventListener(eventName, () => dropZone.classList.add('dragover'), false);
-    });
-    ['dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, () => dropZone.classList.remove('dragover'), false);
-    });
+    ['dragenter', 'dragover'].forEach(e => dropZone.addEventListener(e, () => dropZone.classList.add('dragover')));
+    ['dragleave', 'drop'].forEach(e => dropZone.addEventListener(e, () => dropZone.classList.remove('dragover')));
+    
     dropZone.addEventListener('drop', (e) => {
-        const dt = e.dataTransfer;
-        const files = dt.files;
-        fileInput.files = files;
-        if (files.length > 0) {
-            fileNameDisplay.textContent = files[0].name;
-            dropZone.style.borderColor = "#198754";
-            dropZone.style.backgroundColor = "#f0fff4";
-        }
+        fileInput.files = e.dataTransfer.files;
+        handleFileSelect();
     });
 
-    // Toggle Settings
+    function handleFileSelect() {
+        if (fileInput.files.length > 0) {
+            fileNameDisplay.textContent = fileInput.files[0].name;
+            dropZone.style.borderColor = "#198754";
+            runOptimization();
+        }
+    }
+
     function toggleSettings() {
         const section = document.getElementById('advancedSettings');
         const icon = document.getElementById('toggleIcon');
-        if (section.style.display === 'none' || section.style.display === '') {
-            section.style.display = 'block';
-            icon.classList.remove('fa-chevron-down');
-            icon.classList.add('fa-chevron-up');
-            // Load config only when opened first time
-            if (!section.dataset.loaded) {
-                loadConfig();
-                section.dataset.loaded = "true";
-            }
-        } else {
-            section.style.display = 'none';
-            icon.classList.remove('fa-chevron-up');
-            icon.classList.add('fa-chevron-down');
-        }
+        const isHidden = section.style.display === 'none' || section.style.display === '';
+        section.style.display = isHidden ? 'block' : 'none';
+        icon.className = isHidden ? 'fas fa-chevron-up ms-1' : 'fas fa-chevron-down ms-1';
     }
 
     function toggleLog() {
@@ -306,71 +250,69 @@
         log.style.display = (log.style.display === 'none' || log.style.display === '') ? 'block' : 'none';
     }
 
-    // --- API Logic ---
-    function loadConfig() {
-        fetch('/api/config')
+    // --- Parameter & Form Logic ---
+    function populateForm(params) {
+        for (const key in params) {
+            const element = document.querySelector(`[name="${key}"]`);
+            if (element) {
+                element.value = params[key];
+            }
+        }
+    }
+
+    function initializeForm() {
+        // Populate algorithm dropdown
+        const algoSelect = document.getElementById('algorithm_select');
+        const algorithms = Object.keys(CONFIG).filter(k => k !== 'common' && k !== 'optimizer');
+        algorithms.forEach(algo => {
+            if (algo !== 'auto') { // "auto" is already there
+                const option = document.createElement('option');
+                option.value = algo;
+                option.textContent = algo.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+                algoSelect.appendChild(option);
+            }
+        });
+
+        // Set initial values from common config
+        populateForm(CONFIG.common);
+    }
+    
+    function runOptimization() {
+        if (!fileInput.files.length) return;
+
+        const formData = new FormData();
+        formData.append('file_input', fileInput.files[0]);
+
+        optimizationSpinner.classList.remove('d-none');
+
+        fetch('/optimize', { method: 'POST', body: formData })
             .then(response => response.json())
             .then(data => {
-                // Populate form fields with config data
-                if(data.algorithm) document.querySelector('[name="algorithm"]').value = data.algorithm;
-                if(data.sorting_strategy) document.querySelector('[name="sorting_strategy"]').value = data.sorting_strategy;
-                if(data.search_direction) document.querySelector('[name="search_direction"]').value = data.search_direction;
-                
-                // Use new keys if available, otherwise fall back to old keys for compatibility
-                if(data.tolerance) document.querySelector('[name="tolerance"]').value = data.tolerance;
-                else if(data.tolleranza) document.querySelector('[name="tolerance"]').value = data.tolleranza;
-
-                if(data.days_window) document.querySelector('[name="days_window"]').value = data.days_window;
-                else if(data.giorni_finestra) document.querySelector('[name="days_window"]').value = data.giorni_finestra;
-                
-                if(data.max_combinations) document.querySelector('[name="max_combinations"]').value = data.max_combinations;
-                 else if(data.algoritmo && data.algoritmo.max_combinazioni) 
-                    document.querySelector('[name="max_combinations"]').value = data.algoritmo.max_combinazioni;
-
-                if(data.residual_threshold) document.querySelector('[name="residual_threshold"]').value = data.residual_threshold;
-                if(data.residual_days_window) document.querySelector('[name="residual_days_window"]').value = data.residual_days_window;
-
-                // Booleans need careful checking for existence
-                if (typeof data.ignore_tolerance !== 'undefined')
-                    document.querySelector('[name="ignore_tolerance"]').checked = data.ignore_tolerance;
-                if (typeof data.enable_best_fit !== 'undefined')
-                    document.querySelector('[name="enable_best_fit"]').checked = data.enable_best_fit;
-
+                optimizationSpinner.classList.add('d-none');
+                if (data.error) {
+                    alert("Optimization Error: " + data.error);
+                    return;
+                }
+                // Populate form with optimized parameters
+                populateForm(data);
+                // Open the advanced settings to show the user the new parameters
+                const section = document.getElementById('advancedSettings');
+                if (section.style.display === 'none' || section.style.display === '') {
+                    toggleSettings();
+                }
             })
-            .catch(err => console.error("Errore caricamento config:", err));
+            .catch(error => {
+                optimizationSpinner.classList.add('d-none');
+                alert("Server communication error during optimization: " + error);
+            });
     }
 
-    function saveConfig() {
-        const configData = {
-            algorithm: document.querySelector('[name="algorithm"]').value,
-            sorting_strategy: document.querySelector('[name="sorting_strategy"]').value,
-            search_direction: document.querySelector('[name="search_direction"]').value,
-            tolerance: parseFloat(document.querySelector('[name="tolerance"]').value),
-            days_window: parseInt(document.querySelector('[name="days_window"]').value),
-            max_combinations: parseInt(document.querySelector('[name="max_combinations"]').value),
-            residual_threshold: parseFloat(document.querySelector('[name="residual_threshold"]').value),
-            residual_days_window: parseInt(document.querySelector('[name="residual_days_window"]').value),
-            ignore_tolerance: document.querySelector('[name="ignore_tolerance"]').checked,
-            enable_best_fit: document.querySelector('[name="enable_best_fit"]').checked
-        };
-
-        fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(configData)
-        })
-        .then(response => response.json())
-        .then(data => {
-            alert("Impostazioni salvate con successo!");
-        })
-        .catch(err => alert("Error saving settings: " + err));
-    }
-
+    // --- Main Form Submission ---
     document.getElementById('uploadForm').addEventListener('submit', function(e) {
         e.preventDefault();
         
         if (!fileInput.files.length) {
-            alert("Please select a file before proceeding.");
+            alert("Per favore, seleziona un file prima di procedere.");
             return;
         }
 
@@ -380,36 +322,36 @@
         const result = document.getElementById('resultContainer');
         const log = document.getElementById('logOutput');
 
-        // Reset UI
         btn.disabled = true;
         progress.classList.remove('d-none');
         result.classList.add('d-none');
         log.style.display = 'none';
         log.textContent = '';
 
-        fetch('/processa', {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => response.json())
-        .then(data => {
-            progress.classList.add('d-none');
-            btn.disabled = false;
+        fetch('/processa', { method: 'POST', body: formData })
+            .then(response => response.json())
+            .then(data => {
+                progress.classList.add('d-none');
+                btn.disabled = false;
 
-            if (data.error) {
-                alert("Error: " + data.error);
-            } else {
-                result.classList.remove('d-none');
-                document.getElementById('downloadLink').href = data.download_url;
-                log.textContent = JSON.stringify(JSON.parse(data.log_content), null, 4);
-            }
-        })
-        .catch(error => {
-            progress.classList.add('d-none');
-            btn.disabled = false;
-            alert("Server communication error: " + error);
-        });
+                if (data.error) {
+                    alert("Errore: " + data.error);
+                } else {
+                    result.classList.remove('d-none');
+                    document.getElementById('downloadLink').href = data.download_url;
+                    log.textContent = data.log_content;
+                }
+            })
+            .catch(error => {
+                progress.classList.add('d-none');
+                btn.disabled = false;
+                alert("Errore di comunicazione con il server: " + error);
+            });
     });
+
+    // --- Initial setup ---
+    document.addEventListener('DOMContentLoaded', initializeForm);
+
 </script>
 </body>
 </html>

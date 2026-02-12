@@ -30,5 +30,10 @@ RUN --mount=type=bind,from=builder,source=/wheels,target=/wheels \
     pip install --no-cache-dir /wheels/*
 
 COPY . .
+
+# Rendi eseguibile lo script di avvio
+COPY start.sh .
+RUN chmod +x ./start.sh
+
 EXPOSE 5000
-CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:5000", "app:app"]
+CMD ["./start.sh"]
