@@ -3,6 +3,11 @@ import pstats
 import io
 import json
 import os
+import sys
+
+# Aggiungi la directory padre al path per importare i moduli core se lo script è in tools/
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 from optimizer import run_simulation, load_optimizer_config, generate_dynamic_ranges
 
 def run_profiling():

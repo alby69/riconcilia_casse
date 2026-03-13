@@ -1,143 +1,167 @@
 """
-Optimizer - Libreria per la Ricerca Operativa dei Parametri di Riconciliazione.
+Optimizer - Operations Research Module for Reconciliation Parameters.
 
-Questo modulo contiene le funzioni per eseguire simulazioni multiple,
-variando i parametri chiave per trovare la combinazione che massimizza
-le percentuali di riconciliazione.
-Utilizza Optuna per l'ottimizzazione.
+This module runs multiple simulations on a given dataset, varying key
+parameters to find the combination that maximizes reconciliation percentages.
+It is designed to be called from other parts of the application, such as a
+web endpoint.
 """
-
 import pandas as pd
-import json
-import sys
 import optuna
 from tqdm import tqdm
+from core import ReconciliationEngine
+import copy
+import os
+import uuid
 
-from core import RiconciliatoreContabile
-
-
-def load_optimizer_config(config_path='config_optimizer.json'):
-    """Carica la configurazione dell'ottimizzatore da un file JSON."""
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        settings = config.get('optimizer_settings', {})
-        params = config.get('optimization_params', {})
-        return settings, params
-    except FileNotFoundError:
-        print(f"⚠️  File di configurazione dell'ottimizzatore '{config_path}' non trovato.")
-        return {}, {}
-    except json.JSONDecodeError as e:
-        print(f"❌ ERRORE: Formato JSON non valido in '{config_path}': {e}")
-        return {}, {}
-
-
-def run_simulation(base_config, file_input_df, n_trials=50, show_progress=True, sequential=False):
+def find_best_parameters(input_df: pd.DataFrame, base_config: dict, optimizer_config: dict, show_progress=False, sequential=False):
     """
-    Esegue l'ottimizzazione usando Optuna per trovare i parametri migliori.
-    
+    Runs the core optimization process using Optuna to find the best parameters.
+
+    This function sets up and executes an Optuna "study" to find the combination
+    of reconciliation parameters that maximizes the final reconciled percentage.
+
     Args:
-        base_config (dict): La configurazione di base da cui partire.
-        file_input_df (pd.DataFrame): Il DataFrame già caricato e pre-processato su cui eseguire le simulazioni.
-        n_trials (int): Il numero di simulazioni (trial) da eseguire.
-        show_progress (bool): Se mostrare una barra di progresso (non implementato per il web).
-        sequential (bool): Se forzare l'esecuzione sequenziale (1 solo processo).
+        input_df (pd.DataFrame): The pre-loaded and pre-processed DataFrame
+            containing the transaction data for the simulation.
+        base_config (dict): A dictionary with the base reconciliation parameters,
+            typically from `config.json['reconciliation_defaults']`.
+        optimizer_config (dict): A dictionary defining the optimizer's behavior,
+            including the parameter search space. This typically comes from
+            `config.json['optimizer_config']`.
+        show_progress (bool): If True, displays a `tqdm` progress bar for the
+            optimization trials. Defaults to False.
+        sequential (bool): If True, forces the trials to run sequentially in a
+            single process (`n_jobs=1`). Defaults to False.
 
     Returns:
-        dict: Un dizionario contenente i parametri migliori ('best_params') e il punteggio migliore ('best_score').
+        dict: A dictionary containing the best-performing parameter combination
+              found by the study.
     """
     
-    _, optimizer_config_ranges = load_optimizer_config()
-    if not optimizer_config_ranges:
-        raise ValueError("Impossibile caricare i range dei parametri per l'ottimizzazione.")
+    parameter_space = optimizer_config.get('parameter_space', {})
+    optimizer_settings = optimizer_config.get('settings', {})
+    n_trials = optimizer_settings.get('n_trials_first_run', 100)
 
-    def objective(trial):
-        """Funzione obiettivo che Optuna cercherà di massimizzare."""
+    def objective(trial, data_df):
+        """Objective function that Optuna will try to maximize."""
         params = {}
-        for param_name, details in optimizer_config_ranges.items():
+        # Suggest parameters for this trial based on the defined search space
+        for param_name, details in parameter_space.items():
             if details['type'] == 'numeric':
-                if details.get('value_type') == 'float':
-                    params[param_name] = trial.suggest_float(param_name, details['min'], details['max'], step=details['step'])
-                else:
-                    params[param_name] = trial.suggest_int(param_name, details['min'], details['max'], step=details['step'])
+                # Handle nested parameters like 'residuals.threshold'
+                keys = param_name.split('.')
+                # For flat params
+                if len(keys) == 1:
+                    step = details.get('step')
+                    if details.get('value_type') == 'float':
+                        params[param_name] = trial.suggest_float(param_name, details['min'], details['max'], step=step)
+                    else:
+                        step = step if step is not None else 1
+                        params[param_name] = trial.suggest_int(param_name, details['min'], details['max'], step=step)
+
             elif details['type'] == 'categorical':
                 params[param_name] = trial.suggest_categorical(param_name, details['values'])
+        
+        # Create a deep copy to avoid modifying the base config in-place
+        run_config = copy.deepcopy(base_config)
 
-        run_config = base_config.copy()
+        # Special handling for nested residual parameters
+        nested_params = {k: v for k, v in params.items() if '.' in k}
+        for key, value in nested_params.items():
+            parent, child = key.split('.')
+            if parent in run_config and isinstance(run_config[parent], dict):
+                run_config[parent][child] = value
+            # remove from flat params to avoid clashes
+            del params[key]
+
+        # Update the config with the flat parameters suggested by Optuna
         run_config.update(params)
-        
-        expected_params = [
-            'tolleranza', 'giorni_finestra', 'max_combinazioni', 
-            'soglia_residui', 'giorni_finestra_residui', 
-            'sorting_strategy', 'search_direction'
-        ]
-        riconciliatore_config = {key: run_config[key] for key in expected_params if key in run_config}
-        
-        # Gestione speciale per la tolleranza e soglia che sono in Euro nel config e in centesimi nel core
-        if 'tolleranza' in riconciliatore_config:
-            riconciliatore_config['tolleranza'] = int(riconciliatore_config['tolleranza'] * 100)
-        if 'soglia_residui' in riconciliatore_config:
-             riconciliatore_config['soglia_residui'] = int(riconciliatore_config['soglia_residui'] * 100)
 
+        try:
+            # The ReconciliationEngine expects some parameters for residuals inside a nested dict.
+            # We construct the final config based on what the engine expects.
+            engine_params = {
+                'tolerance': run_config.get('tolerance'),
+                'days_window': run_config.get('days_window'),
+                'max_combinations': run_config.get('max_combinations'),
+                'sorting_strategy': run_config.get('sorting_strategy'),
+                'search_direction': run_config.get('search_direction'),
+                'algorithm': run_config.get('algorithm'),
+                'use_numba': run_config.get('use_numba', True),
+                'ignore_tolerance': run_config.get('ignore_tolerance', False),
+                'enable_best_fit': run_config.get('enable_best_fit', True),
+                # Pass residual params in the expected nested structure
+                'residual_threshold': run_config.get('residuals', {}).get('threshold'),
+                'residual_days_window': run_config.get('residuals', {}).get('days_window'),
+            }
+            
+            # Filter out None values to let the engine use its defaults
+            engine_params = {k: v for k, v in engine_params.items() if v is not None}
+            
+            engine_sim = ReconciliationEngine(**engine_params)
+            
+            # Run the reconciliation on a copy of the dataframe
+            stats = engine_sim.run(data_df.copy(), output_file=None, verbose=False)
 
-        riconciliatore_sim = RiconciliatoreContabile(**riconciliatore_config)
-        
-        # Passiamo il DataFrame direttamente per evitare riletture
-        stats = riconciliatore_sim.run(file_input_df.copy(), output_file=None, verbose=False)
+            if stats:
+                debit_perc = stats.get('_raw_debit_amount_perc', 0.0)
+                credit_perc = stats.get('_raw_credit_amount_perc', 0.0)
+                # The score to maximize is the sum of reconciled volume percentages
+                return debit_perc + credit_perc
+        except Exception:
+            # If any error occurs during engine run, this trial is a failure
+            return 0.0
 
-        if stats:
-            perc_dare = stats.get('_raw_perc_dare_importo', 0.0)
-            perc_avere = stats.get('_raw_perc_avere_importo', 0.0)
-            return perc_dare + perc_avere
-        
+        # If stats are not produced, trial is a failure
         return 0.0
 
+    # --- Optuna Study Execution ---
     optuna.logging.set_verbosity(optuna.logging.WARNING)
-    study = optuna.create_study(direction="maximize")
     
-    n_jobs = 1 if sequential else -1
+    # Configurazione sicura per multiprocessing in Docker
+    if not sequential:
+        # Usa SQLite per thread-safety con processi multipli
+        os.makedirs('output', exist_ok=True)
+        db_path = os.path.join(os.getcwd(), 'output', 'optuna.db')
+        storage_url = f"sqlite:///{db_path}"
+        study_name = f"study_{uuid.uuid4().hex}" # Nome univoco per evitare collisioni
+    else:
+        storage_url = None
+        study_name = None
+
+    study = optuna.create_study(direction="maximize", storage=storage_url, study_name=study_name)
+
+    # Usa 2 job invece di -1 (tutti i core) per evitare crash OOM in Docker
+    n_jobs = 1 if sequential else 2
         
-    study.optimize(
-        objective,
-        n_trials=n_trials,
-        n_jobs=n_jobs,
-        show_progress_bar=show_progress # Mostra la barra di progresso di Optuna
-    )
+    if show_progress:
+        with tqdm(total=n_trials, desc="Optimization Trials") as pbar:
+            def callback(study, trial):
+                pbar.update(1)
+            study.optimize(
+                lambda trial: objective(trial, data_df=input_df),
+                n_trials=n_trials, 
+                n_jobs=n_jobs, 
+                callbacks=[callback]
+            )
+    else:
+        study.optimize(
+            lambda trial: objective(trial, data_df=input_df),
+            n_trials=n_trials, 
+            n_jobs=n_jobs
+        )
 
-    return {
-        "best_params": study.best_params,
-        "best_score": study.best_value
-    }
+    # Return the best parameter set found
+    best_params = study.best_params
+    
+    # Arrotonda i valori float (come la tolleranza) a 2 cifre decimali
+    for key, value in best_params.items():
+        if isinstance(value, float):
+            best_params[key] = round(value, 2)
 
+    # Pulizia dello studio dal DB per non far crescere il file all'infinito
+    if storage_url:
+        optuna.delete_study(study_name=study_name, storage=storage_url)
 
-def update_config_file(config_path, best_params):
-    """Aggiorna il file di configurazione JSON con i parametri migliori trovati."""
-    try:
-        with open(config_path, 'r+') as f:
-            config_data = json.load(f)
-            
-            # Gestione speciale per i parametri annidati come 'residui'
-            residui_params = {}
-            params_to_update = best_params.copy()
-
-            for key in list(params_to_update.keys()):
-                if key.startswith('residui_'):
-                    residui_key = key.replace('residui_', '')
-                    residui_params[residui_key] = params_to_update.pop(key)
-            
-            # Aggiorna i parametri di primo livello
-            config_data.update(params_to_update)
-
-            # Aggiorna l'oggetto 'residui' se ci sono parametri per esso
-            if residui_params:
-                if 'residui' not in config_data:
-                    config_data['residui'] = {}
-                config_data['residui'].update(residui_params)
-
-            f.seek(0)
-            json.dump(config_data, f, indent=2, ensure_ascii=False)
-            f.truncate()
-        return True
-    except Exception as e:
-        print(f"❌ Errore durante l'aggiornamento del file di configurazione: {e}")
-        return False
+    return best_params

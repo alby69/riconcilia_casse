@@ -1,209 +1,186 @@
 import io
 import os
 import json
-import uuid
 import pandas as pd
 from datetime import datetime
-from flask import Flask, request, render_template, flash, redirect, url_for, jsonify, send_from_directory, session
-from core import RiconciliatoreContabile
-from optimizer import run_simulation, update_config_file
+from flask import Flask, request, render_template, jsonify, send_from_directory, session, url_for
+import uuid
+from core import ReconciliationEngine
+from optimizer import find_best_parameters
 
-# --- Configurazione dell'App Flask ---
+# --- Flask App Configuration ---
 app = Flask(__name__)
-app.secret_key = 'supersecretkey_dev' # Cambiare in produzione
+app.secret_key = 'supersecretkey_dev' # Change in production
 
-# --- Configurazione delle cartelle ---
+# --- Folder Configuration ---
 LOG_FOLDER = 'log'
-INPUT_FOLDER = 'input'
-OUTPUT_FOLDER = os.path.join('output', 'processed_files')
+OUTPUT_FOLDER = 'output'
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
+CONFIG_FILE_PATH = 'config.json'
 
-# Assicura che le cartelle esistano all'avvio
+# Ensure folders exist on startup
 os.makedirs(LOG_FOLDER, exist_ok=True)
-os.makedirs(INPUT_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
+# --- Helper Functions ---
+def load_config():
+    """Loads the configuration from config.json."""
+    with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
+        return json.load(f)
 
-# --- Pagina Principale ---
+def robust_currency_parser(value):
+    """Robustly converts a string or number into a standard numeric format."""
+    if isinstance(value, (int, float)):
+        return value
+    if not isinstance(value, str):
+        return None
+    cleaned_str = str(value).strip().replace('€', '').replace(' ', '')
+    if '.' in cleaned_str and ',' in cleaned_str:
+        return cleaned_str.replace('.', '').replace(',', '.')
+    if ',' in cleaned_str:
+        return cleaned_str.replace(',', '.')
+    return cleaned_str
+
+def prepare_dataframe(file_stream):
+    """Reads an Excel file from a stream and prepares the DataFrame for the engine."""
+    df = pd.read_excel(io.BytesIO(file_stream.read()))
+    df.columns = df.columns.str.strip()
+
+    config = load_config()
+    mapping_conf = config.get('common', {}).get('column_mapping', {})
+    
+    # Apply renaming based on config { "Nome Colonna File": "Nome Interno" }
+    df.rename(columns=mapping_conf, inplace=True)
+
+    required_columns = ['Date', 'Debit', 'Credit']
+    missing = [col for col in required_columns if col not in df.columns]
+    if missing:
+        raise ValueError(f"Colonne mancanti dopo il mapping: {', '.join(missing)}. Colonne trovate: {df.columns.tolist()}")
+
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce', dayfirst=True)
+    df.dropna(subset=['Date'], inplace=True)
+    
+    # Parse currency and convert to cents in the final columns
+    df['Debit'] = pd.to_numeric(df['Debit'].apply(robust_currency_parser), errors='coerce')
+    df['Credit'] = pd.to_numeric(df['Credit'].apply(robust_currency_parser), errors='coerce')
+    df[['Debit', 'Credit']] = df[['Debit', 'Credit']].fillna(0)
+    
+    # The engine expects integer cents
+    df['Debit'] = (df['Debit'] * 100).round().astype(int)
+    df['Credit'] = (df['Credit'] * 100).round().astype(int)
+    
+    df['orig_index'] = df.index
+    return df
+
+# --- Routes ---
 @app.route('/')
 def index():
-    """Mostra la pagina iniziale con il form di upload."""
-    with open('config.json', 'r', encoding='utf-8') as f:
-        config_data = json.load(f)
-    return render_template('index.html', config=config_data)
+    """Displays the main page, passing the full configuration to the template."""
+    config = load_config()
+    return render_template('index.html', config=config)
 
-
-# --- Endpoint per la Configurazione ---
-@app.route('/config', methods=['GET', 'POST'])
-def handle_config():
-    """Gestisce la lettura e la scrittura della configurazione."""
-    if request.method == 'POST':
-        try:
-            new_config = request.get_json()
-            # La funzione update_config_file di optimizer.py è più robusta
-            # per gestire anche i parametri annidati.
-            success = update_config_file('config.json', new_config)
-            if not success:
-                raise ValueError("La funzione update_config_file ha fallito.")
-            
-            return jsonify({'success': True, 'message': 'Configurazione salvata con successo.'})
-        except Exception as e:
-            return jsonify({'success': False, 'message': f'Errore nel salvataggio della configurazione: {str(e)}'}), 500
-    else: # GET
-        try:
-            with open('config.json', 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-            return jsonify(config_data)
-        except FileNotFoundError:
-            return jsonify({'error': 'File di configurazione non trovato.'}), 404
-        except Exception as e:
-            return jsonify({'error': f'Errore nella lettura della configurazione: {str(e)}'}), 500
-
-
-# --- Endpoint per l'Elaborazione (modificato per AJAX) ---
-@app.route('/processa', methods=['POST'])
-def processa_file():
-    """
-    Gestisce il caricamento del file, l'elaborazione, salva i risultati
-    e restituisce un JSON con il link per il download e il log.
-    Salva anche il file di input per l'ottimizzatore.
-    """
+@app.route('/optimize', methods=['POST'])
+def optimize_parameters():
+    """Analyzes the uploaded file and returns optimal parameters."""
     if 'file_input' not in request.files:
         return jsonify({'error': 'Nessun file selezionato.'}), 400
-
     file = request.files['file_input']
-
     if file.filename == '':
         return jsonify({'error': 'Nessun file selezionato.'}), 400
 
-    if not (file.filename.endswith('.xlsx') or file.filename.endswith('.xls')):
-        return jsonify({'error': 'Formato file non supportato. Si prega di caricare un file Excel (.xlsx o .xls).'}), 400
-    
     try:
-        # --- 1. Salvataggio del file per l'ottimizzatore ---
-        # Usiamo un nome fisso per semplicità, sovrascrivendo il file precedente.
-        # In un'applicazione multi-utente, qui servirebbe un ID di sessione o utente.
-        input_filepath = os.path.join(INPUT_FOLDER, 'last_uploaded_file.xlsx')
-        file.save(input_filepath)
-        session['last_uploaded_file'] = input_filepath
+        file.stream.seek(0)
+        df = prepare_dataframe(file.stream)
+        config = load_config()
+        # Usa 'common' come fallback se 'reconciliation_defaults' non esiste
+        base_config = config.get('reconciliation_defaults', config.get('common', {}))
+        optimizer_config = config.get('optimizer', {})
         
-        # --- 2. Preparazione del DataFrame ---
-        # Riapri il file appena salvato per l'elaborazione
-        df_input = pd.read_excel(input_filepath)
-        df_input['Data'] = pd.to_datetime(df_input['Data'], errors='coerce', dayfirst=True)
-        df_input.dropna(subset=['Data'], inplace=True)
+        # Run optimization
+        # Pass both base parameters and optimizer-specific configurations
+        # sequential=False abilita il multiprocessing (configurato in modo sicuro in optimizer.py)
+        best_params = find_best_parameters(df, base_config, optimizer_config, sequential=False)
         
-        # Conversione sicura a numerico, gestendo virgole e punti
-        for col in ['Dare', 'Avere']:
-            if df_input[col].dtype == 'object':
-                df_input[col] = df_input[col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
-            df_input[col] = pd.to_numeric(df_input[col], errors='coerce')
-        
-        df_input[['Dare', 'Avere']] = df_input[['Dare', 'Avere']].fillna(0)
-        
-        # Conversione in centesimi
-        df_input['Dare'] = (df_input['Dare'] * 100).round().astype(int)
-        df_input['Avere'] = (df_input['Avere'] * 100).round().astype(int)
-        df_input['indice_orig'] = df_input.index
+        return jsonify(best_params)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f"Errore critico durante l'ottimizzazione: {str(e)}"}), 500
 
-        # --- 3. Esecuzione della logica di riconciliazione ---
-        with open('config.json', 'r', encoding='utf-8') as f:
-            config = json.load(f)
+@app.route('/processa', methods=['POST'])
+def processa_file():
+    """Handles the main file processing with user-provided or optimized parameters."""
+    if 'file_input' not in request.files:
+        return jsonify({'error': 'Nessun file selezionato.'}), 400
+    file = request.files['file_input']
+    if file.filename == '':
+        return jsonify({'error': 'Nessun file selezionato.'}), 400
 
-        riconciliatore_config = {
-            "tolleranza": int(config.get("tolleranza", 0.01) * 100),
-            "giorni_finestra": config.get("giorni_finestra", 10),
-            "max_combinazioni": config.get("max_combinazioni", 6),
-            "soglia_residui": int(config.get("residui", {}).get("soglia_importo", 100) * 100),
-            "giorni_finestra_residui": config.get("residui", {}).get("giorni_finestra", 90)
+    try:
+        form_data = request.form.to_dict()
+        
+        # Build column mapping from form inputs
+        col_date = form_data.get('col_date', 'Data')
+        col_debit = form_data.get('col_debit', 'Dare')
+        col_credit = form_data.get('col_credit', 'Avere')
+        col_store_id = form_data.get('col_store_id')
+        col_valuta_date = form_data.get('col_valuta_date')
+        
+        # Only use valuta_date if explicitly provided and not empty
+        valuta_date_col = col_valuta_date if col_valuta_date and col_valuta_date.strip() else None
+        
+        # Build column mapping dict (source -> internal)
+        column_mapping = {
+            col_date: 'Date',
+            col_debit: 'Debit',
+            col_credit: 'Credit'
         }
-        riconciliatore = RiconciliatoreContabile(**riconciliatore_config)
-        stats = riconciliatore.run(df_input.copy(), output_file=None, verbose=False)
+        
+        engine_params = {
+            'tolerance': float(form_data.get('tolerance', 0.01)),
+            'days_window': int(form_data.get('days_window', 7)),
+            'max_combinations': int(form_data.get('max_combinations', 10)),
+            'residual_threshold': float(form_data.get('residual_threshold', 100.0)),
+            'residual_days_window': int(form_data.get('residual_days_window', 30)),
+            'search_direction': form_data.get('search_direction', 'past_only'),
+            'algorithm': form_data.get('algorithm', 'auto'),
+            'ignore_tolerance': form_data.get('ignore_tolerance') == 'true',
+            'store_id_column': col_store_id if col_store_id and col_store_id.strip() else None,
+            'valuta_date_column': valuta_date_col,
+            'column_mapping': column_mapping
+        }
+        
+        file.stream.seek(0)
+        df_input = prepare_dataframe(file.stream)
 
-        # --- 4. Salvataggio del file di output con nome unico ---
+        # The engine receives the dataframe with amounts already in cents
+        engine = ReconciliationEngine(**engine_params)
+        stats = engine.run(df_input, verbose=False)
+
         unique_id = uuid.uuid4()
         sanitized_filename = "".join(c for c in file.filename if c.isalnum() or c in ('.', '_')).rstrip()
         unique_output_filename = f"{unique_id}_{sanitized_filename}"
         output_filepath = os.path.join(app.config['OUTPUT_FOLDER'], unique_output_filename)
         
-        # Passiamo df_input originale (non modificato da run) per il report
-        riconciliatore._crea_report_excel(output_filepath, df_input)
+        engine.create_excel_report(output_filepath, df_input)
 
-        # --- 5. Creazione e salvataggio del file di log ---
-        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        log_filename = f"{timestamp}_{sanitized_filename}_summary.log"
-        log_filepath = os.path.join(LOG_FOLDER, log_filename)
-        
-        with open(log_filepath, 'w', encoding='utf-8') as f:
-            json.dump(stats, f, indent=4, ensure_ascii=False)
-        
-        # --- 6. Preparazione dei nomi e salvataggio in sessione ---
-        base_name, extension = os.path.splitext(sanitized_filename)
-        pretty_download_filename = f"{base_name}_risultato{extension}"
+        base_name, _ = os.path.splitext(sanitized_filename)
+        pretty_download_filename = f"{base_name}_result.xlsx"
         session['download_map'] = {pretty_download_filename: unique_output_filename}
         
-        # --- 7. Restituzione del JSON per il frontend ---
         return jsonify({
             'log_content': json.dumps(stats, indent=4, ensure_ascii=False),
-            'download_url': url_for('download_file', filename=pretty_download_filename),
-            'version': '3.1' 
+            'download_url': url_for('download_file', filename=pretty_download_filename)
         })
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'error': f"Si è verificato un errore critico: {str(e)}"}), 500
+        return jsonify({'error': f"Errore critico durante l'elaborazione: {str(e)}"}), 500
 
-
-# --- Endpoint per l'Ottimizzazione ---
-@app.route('/optimize', methods=['POST'])
-def optimize_params():
-    """
-    Esegue l'ottimizzazione dei parametri sul file caricato più di recente.
-    """
-    last_file = session.get('last_uploaded_file')
-    if not last_file or not os.path.exists(last_file):
-        return jsonify({'error': 'Nessun file valido su cui eseguire l\'ottimizzazione. Si prega di elaborare un file prima.'}), 400
-
-    try:
-        data = request.get_json()
-        n_trials = data.get('n_trials', 50)
-
-        # Carica la configurazione di base
-        with open('config.json', 'r', encoding='utf-8') as f:
-            base_config = json.load(f)
-
-        # Carica il df di input
-        loader = RiconciliatoreContabile()
-        input_df = loader.carica_file(last_file) # carica_file gestisce la preparazione
-
-        # Avvia la simulazione
-        # show_progress=True stamperà la barra di avanzamento nella console del server
-        results = run_simulation(
-            base_config=base_config,
-            file_input_df=input_df,
-            n_trials=n_trials,
-            show_progress=True,
-            sequential=False # Usa tutti i core
-        )
-
-        return jsonify(results)
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': f"Si è verificato un errore durante l'ottimizzazione: {str(e)}"}), 500
-
-
-
-
-# --- Nuovo Endpoint per il Download ---
 @app.route('/download/<filename>')
 def download_file(filename):
-    """
-    Serve il file di output usando una mappa salvata in sessione
-    per trovare il file fisico con nome univoco.
-    """
+    """Handles secure downloading of the generated report file."""
     download_map = session.get('download_map', {})
     actual_filename = download_map.get(filename)
     
@@ -214,10 +191,8 @@ def download_file(filename):
         app.config['OUTPUT_FOLDER'], 
         actual_filename, 
         as_attachment=True,
-        download_name=filename  # FIX: Specifica il nome del file per il download
+        download_name=filename
     )
 
-
-# --- Avvio del Server ---
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0')
+    app.run(debug=True, host='0.0.0.0', port=5001)

@@ -1,798 +1,423 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="it">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>CashRec Riconciliazione</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CashRec - Smart Reconciliation</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #1a365d; /* Deep Blue matching logo */
+            --secondary-color: #2a4365;
+            --accent-color: #319795; /* Teal */
+            --bg-color: #f7fafc;
+            --text-color: #2d3748;
+            --card-bg: #ffffff;
+            --border-color: #cbd5e0;
+            --input-bg: #ffffff;
+            --btn-text: #ffffff;
+        }
+        [data-theme="dark"] {
+            --primary-color: #90cdf4;
+            --secondary-color: #63b3ed;
+            --bg-color: #1a202c;
+            --text-color: #f7fafc;
+            --card-bg: #2d3748;
+            --border-color: #4a5568;
+            --input-bg: #4a5568;
+            --btn-text: #1a202c;
+        }
+        body { background-color: var(--bg-color); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: var(--text-color); transition: background-color 0.3s, color 0.3s; }
+        .navbar { background-color: var(--card-bg); box-shadow: 0 2px 15px rgba(0,0,0,0.05); padding-top: 1rem; padding-bottom: 1rem; transition: background-color 0.3s; }
+        .navbar-brand img { height: 45px; }
+        .navbar-brand span { font-weight: 800; color: var(--primary-color); font-size: 1.4rem; letter-spacing: -0.5px; }
+        
+        .hero-banner {
+            max-width: 100%;
+            width: 600px;
+            margin: 40px auto 20px auto;
+            display: block;
+            filter: drop-shadow(0 10px 15px rgba(0,0,0,0.05));
+        }
+        
+        .main-card { max-width: 800px; margin: 0 auto 60px auto; border: none; box-shadow: 0 20px 40px rgba(0,0,0,0.08); border-radius: 20px; overflow: hidden; background-color: var(--card-bg); transition: background-color 0.3s; }
+        .card-body { padding: 3rem !important; }
+        
+        .upload-area { border: 2px dashed var(--border-color); border-radius: 15px; padding: 50px 20px; text-align: center; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); background: var(--card-bg); }
+        .upload-area:hover { border-color: var(--primary-color); transform: translateY(-3px); box-shadow: 0 10px 20px rgba(0,0,0,0.05); }
+        [data-theme="light"] .upload-area:hover { background-color: #ebf8ff; }
+        [data-theme="dark"] .upload-area:hover { background-color: #2c313d; }
+        .upload-area.dragover { border-color: var(--accent-color); background-color: #e6fffa; }
+        [data-theme="dark"] .upload-area.dragover { background-color: #234e52; }
+        .upload-area i { color: var(--primary-color); transition: color 0.3s; }
+        
+        .advanced-section { background-color: var(--bg-color); border-radius: 12px; padding: 25px; margin-top: 30px; display: none; border: 1px solid var(--border-color); }
+        .log-container { background: #1a202c; color: #48bb78; padding: 20px; border-radius: 10px; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.85rem; max-height: 300px; overflow-y: auto; margin-top: 30px; display: none; border: 1px solid #2d3748; }
+        
+        .btn-process { background-color: var(--primary-color); color: var(--btn-text); border: none; padding: 15px 40px; font-size: 1.1rem; font-weight: 700; border-radius: 50px; letter-spacing: 0.5px; transition: all 0.3s; box-shadow: 0 4px 15px rgba(0,0,0, 0.2); }
+        .btn-process:hover { background-color: var(--secondary-color); color: var(--btn-text); transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0, 0.3); }
+        .btn-process:disabled { background-color: #cbd5e0; transform: none; box-shadow: none; }
+        
+        .settings-toggle { color: var(--text-color); opacity: 0.7; text-decoration: none; font-size: 0.95rem; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: all 0.2s; }
+        .settings-toggle:hover { color: var(--primary-color); }
+        
+        .form-control, .form-select { background-color: var(--input-bg); color: var(--text-color); border-color: var(--border-color); }
+        .form-control:focus, .form-select:focus { background-color: var(--input-bg); color: var(--text-color); border-color: var(--primary-color); box-shadow: 0 0 0 0.25rem rgba(49, 151, 149, 0.25); }
+        .text-muted { color: #a0aec0 !important; }
+    </style>
 </head>
-<body>
+<body data-theme="light">
 
-    <header class="cashrec-banner">
-        <img src="{{ url_for('static', filename='img/cashrec-banner-it.svg') }}" alt="CashRec Banner">
-    </header>
+<!-- New Navbar -->
+<nav class="navbar">
+    <div class="container position-relative justify-content-center">
+        <a class="navbar-brand d-flex align-items-center mx-auto" href="/">
+            <img src="{{ url_for('static', filename='img/cashrec-logo-concept-1.svg') }}" alt="CashRec Logo" class="me-2">
+            <span>CashRec</span>
+        </a>
+        <button class="btn btn-link position-absolute end-0 text-decoration-none" id="themeToggle" style="color: var(--text-color);">
+            <i class="fas fa-moon"></i>
+        </button>
+    </div>
+</nav>
 
-    <div class="cashrec-container">
-        <div class="cashrec-logo">
-            <img src="{{ url_for('static', filename='img/cashrec-logo-concept-1.svg') }}" alt="CashRec Logo">
-        </div>
+<div class="container">
+    <!-- Banner -->
+    <img src="{{ url_for('static', filename='img/cashrec-banner-en.svg') }}" alt="CashRec Banner" class="hero-banner">
 
-        <h1>Riconciliazione Cassa</h1>
-
-                <!-- Tab Navigation -->
-
-                <div class="cashrec-tabs">
-
-                    <button class="cashrec-tab-button active" onclick="openTab(event, 'elaborazione')">Elaborazione</button>
-
-                    <button class="cashrec-tab-button" onclick="openTab(event, 'configurazione')">Configurazione</button>
-
-                    <button class="cashrec-tab-button" onclick="openTab(event, 'ottimizzatore')">Ottimizzatore</button>
-
-                </div>
-
-        
-
-                <!-- Tab Content: Elaborazione -->
-
-                <div id="elaborazione" class="cashrec-tab-content" style="display: block;">
-
-                    <div class="cashrec-form-container">
-
-                        <p class="cashrec-text-center cashrec-mb-20">
-
-                            Seleziona un file Excel (.xlsx, .xls) con le colonne 'Data', 'Dare' e 'Avere'.<br>
-
-                            Questo file verrà usato anche per l'ottimizzazione.
-
-                        </p>
-
-                        <form id="upload-form">
-
-                            <div class="cashrec-form-group">
-
-                                <label for="file_input">Seleziona il file da elaborare</label>
-
-                                <input type="file" id="file_input" name="file_input" accept=".xlsx, .xls" required>
-
-                            </div>
-
-                            <div class="cashrec-btn-container">
-
-                                <button type="submit" id="submit-button" class="cashrec-btn cashrec-btn-primary">Elabora File</button>
-
-                            </div>
-
-                        </form>
-
-                        
-
-                        <div id="progress-container" class="cashrec-progress-container">
-
-                            <div class="cashrec-progress-bar-container">
-
-                                <div id="progress-bar"></div>
-
-                            </div>
-
-                        </div>
-
-        
-
-                        <div id="message-container"></div>
-
+    <div class="card main-card">
+        <div class="card-body p-4">
+            
+            <form id="uploadForm" enctype="multipart/form-data">
+                <!-- Upload Area -->
+                <div class="upload-area mb-4" id="dropZone">
+                    <i class="fas fa-cloud-upload-alt fa-3x mb-3"></i>
+                    <h5>Trascina qui il tuo file Excel</h5>
+                    <p class="text-muted small">o clicca per selezionare</p>
+                    <input type="file" name="file_input" id="fileInput" class="d-none" accept=".xlsx, .xls">
+                    <div id="fileName" class="mt-2 fw-bold text-success"></div>
+                    <div id="optimizationSpinner" class="mt-3 d-none">
+                        <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                        <span class="ms-2 text-muted">Ricerca parametri ottimali...</span>
                     </div>
+                </div>
 
-        
+                <!-- Advanced Settings Toggle -->
+                <div class="text-center mb-3">
+                    <span class="settings-toggle" onclick="toggleSettings()">
+                        <i class="fas fa-cog"></i> Impostazioni Avanzate <i class="fas fa-chevron-down ms-1" id="toggleIcon"></i>
+                    </span>
+                </div>
 
-                    <div id="results-container" class="cashrec-results-container">
-
-                        <h4 class="cashrec-text-center cashrec-mb-20">Riepilogo Elaborazione</h4>
-
-                        <pre id="log-output"></pre>
-
-                        <div id="download-button-container" class="cashrec-btn-container">
-
-                            <!-- Il pulsante di download verrà inserito qui -->
-
+                <!-- Advanced Settings Section -->
+                <div class="advanced-section" id="advancedSettings">
+                    <!-- Column Mapping -->
+                    <div class="mb-4">
+                        <h6 class="fw-bold text-primary mb-3"><i class="fas fa-columns me-2"></i>Mappatura Colonne File</h6>
+                        <p class="small text-muted mb-3">Inserisci i nomi delle colonne presenti nel tuo file Excel</p>
+                        <div class="row g-2">
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small">Data</label>
+                                <input type="text" class="form-control form-control-sm" name="col_date" placeholder="es: Data" value="Data">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small">Dare (Incassi)</label>
+                                <input type="text" class="form-control form-control-sm" name="col_debit" placeholder="es: Dare" value="Dare">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small">Avere (Versamenti)</label>
+                                <input type="text" class="form-control form-control-sm" name="col_credit" placeholder="es: Avere" value="Avere">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small">Codice Negozio</label>
+                                <input type="text" class="form-control form-control-sm" name="col_store_id" placeholder="opzionale">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small">Data Valuta</label>
+                                <input type="text" class="form-control form-control-sm" name="col_valuta_date" placeholder="es: Data Valuta" value="Data Valuta">
+                            </div>
                         </div>
-
                     </div>
-
-                </div>
-
-        
-
-                <!-- Tab Content: Configurazione -->
-
-                <div id="configurazione" class="cashrec-tab-content">
-
-                    <form id="config-form" class="cashrec-form-container">
-
-                        <h4 class="cashrec-text-center cashrec-mb-20">Impostazioni Ottimizzatore</h4>
-
-                        
-
-                        <div class="cashrec-form-grid">
-
-                            <div class="cashrec-form-group">
-
-                                <label for="tolleranza">Tolleranza (€)</label>
-
-                                <input type="number" step="0.01" id="tolleranza" name="tolleranza" value="{{ config.tolleranza }}">
-
-                            </div>
-
-                            <div class="cashrec-form-group">
-
-                                <label for="giorni_finestra">Giorni Finestra</label>
-
-                                <input type="number" id="giorni_finestra" name="giorni_finestra" value="{{ config.giorni_finestra }}">
-
-                            </div>
-
-                            <div class="cashrec-form-group">
-
-                                <label for="max_combinazioni">Max Combinazioni</label>
-
-                                <input type="number" id="max_combinazioni" name="max_combinazioni" value="{{ config.max_combinazioni }}">
-
-                            </div>
-
+                    
+                    <hr>
+                    
+                    <!-- Algorithm Parameters -->
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Algoritmo</label>
+                            <select class="form-select form-select-sm" name="algorithm" id="algorithm_select">
+                                <option value="auto">AUTO (Consigliato)</option>
+                                <!-- Options will be populated by JS -->
+                            </select>
                         </div>
-
-        
-
-                        <h5 class="cashrec-text-center cashrec-mb-20 cashrec-mt-20">Gestione Residui</h5>
-
-                        <div class="cashrec-form-grid">
-
-                            <div class="cashrec-form-group">
-
-                                <label for="residui_attiva" class="cashrec-checkbox-label">
-
-                                    <input type="checkbox" id="residui_attiva" name="residui_attiva" {% if config.residui.attiva %}checked{% endif %}>
-
-                                    Attiva
-
-                                </label>
-
-                            </div>
-
-                            <div class="cashrec-form-group">
-
-                                <label for="residui_soglia_importo">Soglia Importo Residui (€)</label>
-
-                                <input type="number" step="0.01" id="residui_soglia_importo" name="residui_soglia_importo" value="{{ config.residui.soglia_importo }}">
-
-                            </div>
-
-                            <div class="cashrec-form-group">
-
-                                <label for="residui_giorni_finestra">Giorni Finestra Residui</label>
-
-                                <input type="number" id="residui_giorni_finestra" name="residui_giorni_finestra" value="{{ config.residui.giorni_finestra }}">
-
-                            </div>
-
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Direzione Ricerca</label>
+                            <select class="form-select form-select-sm" name="search_direction">
+                                <option value="future_only">Solo Futuro</option>
+                                <option value="past_only">Solo Passato</option>
+                                <option value="both">Entrambi</option>
+                            </select>
                         </div>
-
-        
-
-                        <div id="config-message-container" class="cashrec-mt-20"></div>
-
-        
-
-                        <div class="cashrec-btn-container cashrec-mt-20">
-
-                            <button type="submit" class="cashrec-btn cashrec-btn-primary">Salva Configurazione</button>
-
-                            <button type="button" id="restore-defaults-button" class="cashrec-btn cashrec-btn-secondary">Ripristina Default</button>
-
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Tolleranza (€)</label>
+                            <input type="number" class="form-control form-select-sm" name="tolerance" step="0.01">
                         </div>
-
-                    </form>
-
-                </div>
-
-        
-
-                <!-- Tab Content: Ottimizzatore -->
-
-                <div id="ottimizzatore" class="cashrec-tab-content">
-
-                    <div class="cashrec-form-container">
-
-                        <h4 class="cashrec-text-center cashrec-mb-20">Trova i Parametri Migliori</h4>
-
-                        <p class="cashrec-text-center cashrec-mb-20">
-
-                            L'ottimizzatore eseguirà una serie di simulazioni sul file caricato più di recente per trovare la configurazione che massimizza i risultati.
-
-                            Questo processo può richiedere diversi minuti.
-
-                        </p>
-
-                        <form id="optimizer-form">
-
-                            <div class="cashrec-form-group">
-
-                                <label for="n_trials">Numero di Simulazioni (Trials)</label>
-
-                                <input type="number" id="n_trials" name="n_trials" value="50" min="10" max="500" required>
-
-                            </div>
-
-                            <div class="cashrec-btn-container">
-
-                                <button type="submit" id="optimizer-button" class="cashrec-btn cashrec-btn-primary">Avvia Ottimizzazione</button>
-
-                            </div>
-
-                        </form>
-
-        
-
-                        <div id="optimizer-progress-container" class="cashrec-progress-container cashrec-mt-20">
-
-                            <div class="cashrec-progress-bar-container">
-
-                                <div id="optimizer-progress-bar"></div>
-
-                            </div>
-
-                            <div id="optimizer-progress-text" class="cashrec-text-center cashrec-mt-10"></div>
-
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Finestra Temporale (giorni)</label>
+                            <input type="number" class="form-control form-select-sm" name="days_window">
                         </div>
-
-        
-
-                        <div id="optimizer-message-container" class="cashrec-mt-20"></div>
-
-        
-
-                        <div id="optimizer-results-container" class="cashrec-results-container cashrec-mt-20">
-
-                            <h4 class="cashrec-text-center cashrec-mb-20">🏆 Risultato Ottimale Trovato 🏆</h4>
-
-                            <pre id="optimizer-log-output"></pre>
-
-                            <div class="cashrec-btn-container cashrec-mt-20">
-
-                                 <button type="button" id="apply-best-params-button" class="cashrec-btn cashrec-btn-primary">Applica e Salva Parametri</button>
-
-                            </div>
-
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Max Combinazioni (Subset Sum)</label>
+                            <input type="number" class="form-control form-select-sm" name="max_combinations">
                         </div>
-
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Soglia Residui (€)</label>
+                            <input type="number" class="form-control form-select-sm" name="residual_threshold" step="1">
+                        </div>
+                         <div class="col-md-6">
+                            <label class="form-label small fw-bold">Finestra Residui (giorni)</label>
+                            <input type="number" class="form-control form-select-sm" name="residual_days_window">
+                        </div>
                     </div>
-
                 </div>
 
-        
+                <!-- Action Button -->
+                <div class="text-center mt-4">
+                    <button type="submit" class="btn btn-process px-5" id="btnSubmit">
+                        <i class="fas fa-magic me-2"></i>Elabora File
+                    </button>
+                </div>
+            </form>
 
-        
-
-                <footer class="cashrec-footer">
-
-                    <small>CashRec Reconciliation Service v2.1</small>
-
-                </footer>
-
+            <!-- Progress & Results -->
+            <div id="progressContainer" class="mt-4 d-none text-center">
+                <div class="spinner-border text-primary mb-2" role="status"></div>
+                <p class="text-muted blink">Elaborazione in corso...</p>
             </div>
 
-        
+            <div id="resultContainer" class="mt-4 d-none text-center">
+                <div class="alert alert-success shadow-sm">
+                    <h4 class="alert-heading"><i class="fas fa-check-circle me-2"></i>Fatto!</h4>
+                    <p>Il file è stato elaborato con successo.</p>
+                    <hr>
+                    <a id="downloadLink" href="#" class="btn btn-success fw-bold">
+                        <i class="fas fa-download me-2"></i>Scarica il Report Excel
+                    </a>
+                    <button class="btn btn-outline-primary fw-bold ms-2" id="btnNewFile">
+                        <i class="fas fa-plus me-2"></i>Nuovo File
+                    </button>
+                </div>
+                <button class="btn btn-outline-secondary btn-sm mt-2" onclick="toggleLog()">Mostra/Nascondi Log Tecnico</button>
+            </div>
 
-            <script>
+            <div class="log-container shadow-inner" id="logOutput"></div>
+        </div>
+    </div>
+    <div class="text-center text-muted small mb-4">v5.0 - Data Valuta & Column Mapping</div>
+</div>
 
-                // --- State Globale ---
+<script>
+    // --- Config Data from Backend ---
+    const CONFIG = {{ config | tojson }};
 
-                let bestParamsFound = null;
+    // --- Theme Logic ---
+    const themeToggle = document.getElementById('themeToggle');
+    const body = document.body;
+    const icon = themeToggle.querySelector('i');
 
-                
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    body.setAttribute('data-theme', savedTheme);
+    updateIcon(savedTheme);
 
-                // --- Gestione Tab ---
+    themeToggle.addEventListener('click', () => {
+        const newTheme = body.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+        body.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+        updateIcon(newTheme);
+    });
 
-                function openTab(evt, tabName) {
+    function updateIcon(theme) {
+        icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+    }
 
-                    var i, tabcontent, tablinks;
+    // --- UI Logic ---
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileNameDisplay = document.getElementById('fileName');
+    const optimizationSpinner = document.getElementById('optimizationSpinner');
 
-                    tabcontent = document.getElementsByClassName("cashrec-tab-content");
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', handleFileSelect);
 
-                    for (i = 0; i < tabcontent.length; i++) {
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, preventDefaults, false);
+    });
+    function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
+    
+    ['dragenter', 'dragover'].forEach(e => dropZone.addEventListener(e, () => dropZone.classList.add('dragover')));
+    ['dragleave', 'drop'].forEach(e => dropZone.addEventListener(e, () => dropZone.classList.remove('dragover')));
+    
+    dropZone.addEventListener('drop', (e) => {
+        fileInput.files = e.dataTransfer.files;
+        handleFileSelect();
+    });
 
-                        tabcontent[i].style.display = "none";
+    function handleFileSelect() {
+        if (fileInput.files.length > 0) {
+            fileNameDisplay.textContent = fileInput.files[0].name;
+            dropZone.style.borderColor = "#198754";
+            runOptimization();
+        }
+    }
 
-                    }
+    function toggleSettings() {
+        const section = document.getElementById('advancedSettings');
+        const icon = document.getElementById('toggleIcon');
+        const isHidden = section.style.display === 'none' || section.style.display === '';
+        section.style.display = isHidden ? 'block' : 'none';
+        icon.className = isHidden ? 'fas fa-chevron-up ms-1' : 'fas fa-chevron-down ms-1';
+    }
 
-                    tablinks = document.getElementsByClassName("cashrec-tab-button");
+    function toggleLog() {
+        const log = document.getElementById('logOutput');
+        log.style.display = (log.style.display === 'none' || log.style.display === '') ? 'block' : 'none';
+    }
 
-                    for (i = 0; i < tablinks.length; i++) {
+    // --- Parameter & Form Logic ---
+    function populateForm(params) {
+        for (const key in params) {
+            const element = document.querySelector(`[name="${key}"]`);
+            if (element) {
+                element.value = params[key];
+            }
+        }
+    }
 
-                        tablinks[i].className = tablinks[i].className.replace(" active", "");
+    function initializeForm() {
+        // Populate algorithm dropdown
+        const algoSelect = document.getElementById('algorithm_select');
+        const algorithms = Object.keys(CONFIG).filter(k => k !== 'common' && k !== 'optimizer');
+        algorithms.forEach(algo => {
+            if (algo !== 'auto') { // "auto" is already there
+                const option = document.createElement('option');
+                option.value = algo;
+                option.textContent = algo.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+                algoSelect.appendChild(option);
+            }
+        });
 
-                    }
+        // Set initial values from common config
+        populateForm(CONFIG.common);
+    }
+    
+    function runOptimization() {
+        if (!fileInput.files.length) return;
 
-                    document.getElementById(tabName).style.display = "block";
+        const formData = new FormData();
+        formData.append('file_input', fileInput.files[0]);
 
-                    evt.currentTarget.className += " active";
+        optimizationSpinner.classList.remove('d-none');
 
+        fetch('/optimize', { method: 'POST', body: formData })
+            .then(response => response.json())
+            .then(data => {
+                optimizationSpinner.classList.add('d-none');
+                if (data.error) {
+                    alert("Optimization Error: " + data.error);
+                    return;
                 }
-
-        
-
-                // --- Gestione Form Elaborazione ---
-
-                const form = document.getElementById('upload-form');
-
-                const submitButton = document.getElementById('submit-button');
-
-                const messageContainer = document.getElementById('message-container');
-
-                const progressContainer = document.getElementById('progress-container');
-
-                const progressBar = document.getElementById('progress-bar');
-
-                const resultsContainer = document.getElementById('results-container');
-
-                const logOutput = document.getElementById('log-output');
-
-                const downloadButtonContainer = document.getElementById('download-button-container');
-
-        
-
-                form.addEventListener('submit', async (event) => {
-
-                    event.preventDefault();
-
-        
-
-                    messageContainer.innerHTML = '';
-
-                    resultsContainer.style.display = 'none';
-
-                    logOutput.textContent = '';
-
-                    downloadButtonContainer.innerHTML = '';
-
-                    bestParamsFound = null; // Resetta i parametri ottimali
-
-                    document.getElementById('optimizer-results-container').style.display = 'none';
-
-        
-
-        
-
-                    const formData = new FormData(form);
-
-                    if (!formData.get('file_input').name) {
-
-                        displayMessage('Per favore, seleziona un file.', 'danger', 'message-container');
-
-                        return;
-
-                    }
-
-        
-
-                    submitButton.disabled = true;
-
-                    submitButton.textContent = 'Elaborazione...';
-
-                    progressContainer.style.display = 'block';
-
-        
-
-                    let progress = 0;
-
-                    const interval = setInterval(() => {
-
-                        progress += 5;
-
-                        if (progress <= 95) {
-
-                            progressBar.style.width = progress + '%';
-
-                        }
-
-                    }, 200);
-
-        
-
-                    try {
-
-                        const response = await fetch('/processa', {
-
-                            method: 'POST',
-
-                            body: formData,
-
-                        });
-
-        
-
-                        clearInterval(interval);
-
-                        progressBar.style.width = '100%';
-
-        
-
-                        const result = await response.json();
-
-        
-
-                        if (!response.ok) {
-
-                            throw new Error(result.error || 'Errore del server.');
-
-                        }
-
-                        
-
-                        if (result.version.startsWith('2.')) { // Supporta v2.x
-
-                             throw new Error('Il backend non è aggiornato. Per favore, arresta (Ctrl+C) e riavvia il server python.');
-
-                        }
-
-        
-
-                        logOutput.textContent = result.log_content;
-
-                        const downloadLink = document.createElement('a');
-
-                        downloadLink.href = result.download_url;
-
-                        downloadLink.className = 'cashrec-btn cashrec-btn-primary';
-
-                        downloadLink.textContent = 'Scarica Report Excel';
-
-                        downloadButtonContainer.appendChild(downloadLink);
-
-                        resultsContainer.style.display = 'block';
-
-                        displayMessage('Elaborazione completata. Ora puoi avviare l\'ottimizzatore se lo desideri.', 'success', 'message-container');
-
-        
-
-        
-
-                    } catch (error) {
-
-                        displayMessage(error.message, 'danger', 'message-container');
-
-                        progressContainer.style.display = 'none';
-
-                    } finally {
-
-                        setTimeout(() => {
-
-                            submitButton.disabled = false;
-
-                            submitButton.textContent = 'Elabora File';
-
-                            progressContainer.style.display = 'none';
-
-                            progressBar.style.width = '0%';
-
-                        }, 500);
-
-                    }
-
-                });
-
-        
-
-                function displayMessage(message, type = 'info', containerId = 'message-container') {
-
-                    const container = document.getElementById(containerId);
-
-                    const messageClass = type === 'danger' ? 'cashrec-message-danger' : 'cashrec-message-success';
-
-                    container.innerHTML = `<div class="${messageClass}">${message}</div>`;
-
+                // Populate form with optimized parameters
+                populateForm(data);
+                // Open the advanced settings to show the user the new parameters
+                const section = document.getElementById('advancedSettings');
+                if (section.style.display === 'none' || section.style.display === '') {
+                    toggleSettings();
                 }
+            })
+            .catch(error => {
+                optimizationSpinner.classList.add('d-none');
+                alert("Server communication error during optimization: " + error);
+            });
+    }
 
+    // --- Main Form Submission ---
+    document.getElementById('uploadForm').addEventListener('submit', function(e) {
+        e.preventDefault();
         
-
-                // --- Gestione Form Configurazione ---
-
-                const configForm = document.getElementById('config-form');
-
-                
-
-                configForm.addEventListener('submit', async (event) => {
-
-                    event.preventDefault();
-
-                    await saveConfiguration();
-
-                });
-
-        
-
-                async function saveConfiguration(configData) {
-
-                    // Se non vengono passati dati, li raccoglie dal form
-
-                    if (!configData) {
-
-                        const tolleranzaEuro = parseFloat(document.getElementById('tolleranza').value);
-
-                        const sogliaResiduiEuro = parseFloat(document.getElementById('residui_soglia_importo').value);
-
-        
-
-                        configData = {
-
-                            tolleranza: tolleranzaEuro, // Mantiene il valore in Euro
-
-                            giorni_finestra: parseInt(document.getElementById('giorni_finestra').value, 10),
-
-                            max_combinazioni: parseInt(document.getElementById('max_combinazioni').value, 10),
-
-                            cartella_input: "{{ config.cartella_input }}",
-
-                            cartella_output: "{{ config.cartella_output }}",
-
-                            pattern: {{ config.pattern|tojson }},
-
-                            colonne: {{ config.colonne|tojson }},
-
-                            mapping_colonne: {{ config.mapping_colonne|tojson }},
-
-                            residui: {
-
-                                attiva: document.getElementById('residui_attiva').checked,
-
-                                soglia_importo: sogliaResiduiEuro, // Mantiene il valore in Euro
-
-                                giorni_finestra: parseInt(document.getElementById('residui_giorni_finestra').value, 10)
-
-                            },
-
-                            commento: "{{ config.commento }}"
-
-                        };
-
-                    }
-
-        
-
-                    try {
-
-                        const response = await fetch('/config', {
-
-                            method: 'POST',
-
-                            headers: { 'Content-Type': 'application/json' },
-
-                            body: JSON.stringify(configData)
-
-                        });
-
-        
-
-                        const result = await response.json();
-
-                        if (!response.ok || !result.success) {
-
-                            throw new Error(result.message || 'Errore nel salvataggio.');
-
-                        }
-
-                        
-
-                        displayMessage('Configurazione salvata con successo!', 'success', 'config-message-container');
-
-                        return true;
-
-        
-
-                    } catch (error) {
-
-                        displayMessage(error.message, 'danger', 'config-message-container');
-
-                        return false;
-
-                    }
-
-                }
-
-                
-
-                // --- Gestione Ottimizzatore ---
-
-                const optimizerForm = document.getElementById('optimizer-form');
-
-                const optimizerButton = document.getElementById('optimizer-button');
-
-                const optimizerProgressContainer = document.getElementById('optimizer-progress-container');
-
-                const optimizerProgressBar = document.getElementById('optimizer-progress-bar');
-
-                const optimizerProgressText = document.getElementById('optimizer-progress-text');
-
-                const optimizerMessageContainer = document.getElementById('optimizer-message-container');
-
-                const optimizerResultsContainer = document.getElementById('optimizer-results-container');
-
-                const optimizerLogOutput = document.getElementById('optimizer-log-output');
-
-        
-
-                optimizerForm.addEventListener('submit', async (event) => {
-
-                    event.preventDefault();
-
-                    optimizerMessageContainer.innerHTML = '';
-
-                    optimizerResultsContainer.style.display = 'none';
-
-        
-
-                    const n_trials = document.getElementById('n_trials').value;
-
-                    if (parseInt(n_trials) <= 0) {
-
-                        displayMessage('Il numero di simulazioni deve essere maggiore di zero.', 'danger', 'optimizer-message-container');
-
-                        return;
-
-                    }
-
+        if (!fileInput.files.length) {
+            alert("Per favore, seleziona un file prima di procedere.");
+            return;
+        }
+
+        const formData = new FormData(this);
+        const btn = document.getElementById('btnSubmit');
+        const progress = document.getElementById('progressContainer');
+        const result = document.getElementById('resultContainer');
+        const log = document.getElementById('logOutput');
+
+        btn.disabled = true;
+        progress.classList.remove('d-none');
+        result.classList.add('d-none');
+        log.style.display = 'none';
+        log.textContent = '';
+
+            fetch('/processa', { method: 'POST', body: formData })
+            .then(response => response.json())
+            .then(data => {
+                progress.classList.add('d-none');
+                btn.disabled = false;
+
+                if (data.error) {
+                    alert("Errore: " + data.error);
+                } else {
+                    result.classList.remove('d-none');
+                    document.getElementById('downloadLink').href = data.download_url;
+                    log.textContent = data.log_content;
                     
+                    // NOTE: Don't auto-reset - user needs time to download the file
+                    // User can manually click "Nuovo File" button when ready
+                    console.log('Processing complete - user can download and then click Nuovo File to reset');
+                }
+            })
+            .catch(error => {
+                progress.classList.add('d-none');
+                btn.disabled = false;
+                alert("Errore di comunicazione con il server: " + error);
+            });
+    });
 
-                    optimizerButton.disabled = true;
+    // --- Initial setup ---
+    document.addEventListener('DOMContentLoaded', initializeForm);
 
-                    optimizerButton.textContent = 'Ottimizzazione in corso...';
-
-                    optimizerProgressContainer.style.display = 'block';
-
-                    optimizerProgressBar.style.width = '0%';
-
-                    optimizerProgressText.textContent = 'Avvio...';
-
+    // --- Reset Form Function ---
+    function resetForm() {
+        const result = document.getElementById('resultContainer');
+        const log = document.getElementById('logOutput');
         
-
-                    try {
-
-                        const response = await fetch('/optimize', {
-
-                            method: 'POST',
-
-                            headers: { 'Content-Type': 'application/json' },
-
-                            body: JSON.stringify({ n_trials: parseInt(n_trials) })
-
-                        });
-
+        // Reset file input
+        fileInput.value = '';
+        fileNameDisplay.textContent = '';
+        fileNameDisplay.classList.remove('text-success');
+        dropZone.style.borderColor = '';
         
-
-                        const result = await response.json();
-
+        // Hide result and log
+        result.classList.add('d-none');
+        log.style.display = 'none';
+        log.textContent = '';
         
-
-                        if (!response.ok) {
-
-                            throw new Error(result.error || 'Errore del server durante l\'ottimizzazione.');
-
-                        }
-
+        // Reset form fields to defaults
+        document.getElementById('uploadForm').reset();
         
-
-                        bestParamsFound = result.best_params; // Salva i parametri
-
-                        
-
-                        let logContent = `Punteggio Ottimale (Somma %): ${result.best_score.toFixed(2)}\n\n`;
-
-                        logContent += "Parametri Migliori Trovati:\n";
-
-                        for (const [key, value] of Object.entries(result.best_params)) {
-
-                            logContent += `  - ${key}: ${value}\n`;
-
-                        }
-
+        // Repopulate default values from config
+        populateForm(CONFIG.common);
         
+        console.log('Form manually reset - ready for next file');
+    }
 
-                        optimizerLogOutput.textContent = logContent;
+    // Add click handler for "Nuovo File" button
+    document.getElementById('btnNewFile')?.addEventListener('click', resetForm);
 
-                        optimizerResultsContainer.style.display = 'block';
-
-                        displayMessage('Ottimizzazione completata!', 'success', 'optimizer-message-container');
-
-        
-
-                    } catch (error) {
-
-                        displayMessage(error.message, 'danger', 'optimizer-message-container');
-
-                    } finally {
-
-                        optimizerButton.disabled = false;
-
-                        optimizerButton.textContent = 'Avvia Ottimizzazione';
-
-                        optimizerProgressContainer.style.display = 'none';
-
-                    }
-
-                });
-
-        
-
-                // Pulsante per applicare i parametri
-
-                document.getElementById('apply-best-params-button').addEventListener('click', async () => {
-
-                    if (!bestParamsFound) {
-
-                        displayMessage('Nessun parametro ottimale da applicare.', 'danger', 'optimizer-message-container');
-
-                        return;
-
-                    }
-
-        
-
-                    // Prende la configurazione corrente per non perdere campi non ottimizzati
-
-                    const currentConfigResponse = await fetch('/config');
-
-                    const currentConfig = await currentConfigResponse.json();
-
-        
-
-                    // Sovrascrive con i parametri migliori
-
-                    const newConfig = { ...currentConfig, ...bestParamsFound };
-
-        
-
-                    // Gestisce i residui come oggetto separato
-
-                    if (bestParamsFound.soglia_residui || bestParamsFound.giorni_finestra_residui) {
-
-                        newConfig.residui = { ...currentConfig.residui, ...bestParamsFound };
-
-                    }
-
-        
-
-                    const success = await saveConfiguration(newConfig);
-
-                    if (success) {
-
-                        // Aggiorna anche il form nella scheda configurazione per coerenza
-
-                        for (const [key, value] of Object.entries(bestParamsFound)) {
-
-                            const input = document.getElementById(key);
-
-                            if (input) {
-
-                                if (input.type === 'checkbox') input.checked = value;
-
-                                else input.value = value;
-
-                            }
-
-                        }
-
-                        displayMessage('Parametri ottimali applicati e salvati con successo. Puoi vederli nella scheda Configurazione.', 'success', 'optimizer-message-container');
-
-                    }
-
-                });
-
-        
-
-            </script>
-
-        </body>
-
-        </html>
-
-        
+</script>
+</body>
+</html>

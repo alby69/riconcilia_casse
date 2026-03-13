@@ -1,0 +1,17 @@
+services:
+  web:
+    build: .
+    container_name: accounting_reconciliation_app
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./output:/app/output
+      - ./log:/app/log
+      - ./input:/app/input
+      - ./app.py:/app/app.py
+      - ./core.py:/app/core.py
+      - ./optimizer.py:/app/optimizer.py
+      - ./reporting.py:/app/reporting.py
+      - ./config.json:/app/config.json
+      - ./templates:/app/templates
+    restart: unless-stopped

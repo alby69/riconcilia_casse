@@ -6,46 +6,184 @@ import warnings
 import numpy as np
 
 warnings.filterwarnings('ignore')
-from tqdm import tqdm
 import sys
+import io
+import contextlib
 
-# --- MODIFICA: Gestione di Numba come dipendenza opzionale ---
+# --- CHANGE: Management of Numba as an optional dependency ---
 try:
     from numba import jit
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
-    # Definisci un decoratore fittizio se Numba non è disponibile
+    # Define a dummy decorator if Numba is not available
     def jit(signature_or_function=None, locals={}, cache=False, pipeline_class=None, boundscheck=None, **options):
         def decorator(func):
             return func
         return decorator
 
-class RiconciliatoreContabile:
-    """Contiene la logica di business per la riconciliazione."""
+def _robust_currency_parser(value):
+    """
+    Robustly converts a string or number into a standard numeric format for pd.to_numeric.
+    This helper function is used by `load_file`.
+    """
+    # If it's already a number, it's fine.
+    if isinstance(value, (int, float)):
+        return value
+    # If it's not a string, we can't do anything.
+    if not isinstance(value, str):
+        return None # Will be converted to NaN
+    
+    # Clean the string from spaces and euro symbol
+    cleaned_str = str(value).strip().replace('€', '').replace(' ', '')
+    
+    # Case 1: Full Italian format (e.g., "1.234,56")
+    if '.' in cleaned_str and ',' in cleaned_str:
+        return cleaned_str.replace('.', '').replace(',', '.')
+    # Case 2: Italian format with only decimals (e.g., "1234,56")
+    elif ',' in cleaned_str:
+        return cleaned_str.replace(',', '.')
+    # Case 3: Format without commas (e.g., "1234" or "1234.56"). We leave the dot.
+    return cleaned_str
 
-    def __init__(self, tolleranza=0.01, giorni_finestra=30, max_combinazioni=6, soglia_residui=100, giorni_finestra_residui=60, sorting_strategy="date", search_direction="both", column_mapping=None):
-        self.tolleranza = tolleranza
-        self.giorni_finestra = giorni_finestra
-        self.max_combinazioni = max_combinazioni
-        self.soglia_residui = soglia_residui
-        self.giorni_finestra_residui = giorni_finestra_residui
+class ReconciliationEngine:
+    """Contains the business logic for reconciliation."""
+
+    def __init__(self, tolerance=0.01, days_window=7, max_combinations=10, residual_threshold=100.0, residual_days_window=30, sorting_strategy="date", search_direction="past_only", column_mapping=None, algorithm="subset_sum", use_numba=True, ignore_tolerance=False, enable_best_fit=True, store_id_column=None, valuta_date_column=None):
+        """Initializes the ReconciliationEngine with its configuration.
+
+        This constructor sets up the core parameters that govern the reconciliation
+        algorithms. Amounts are converted from floating-point (Euros) to integers
+        (cents) internally to prevent floating-point inaccuracies.
+
+        Args:
+            tolerance (float): The maximum acceptable difference between the sum of
+                a set of transactions and a target amount to be considered a match.
+                Default is 0.01.
+            days_window (int): The primary time window (in days) to search for
+                matching transactions. The search can be forward, backward, or
+                in both directions from the transaction date. Default is 7.
+            max_combinations (int): The maximum number of individual transactions
+                that can be combined to form a match. Higher numbers increase
+                computation time. Default is 10.
+            residual_threshold (float): During the residual analysis pass, only
+                unmatched transactions with an amount greater than this threshold
+                will be considered. Default is 100.0.
+            residual_days_window (int): An extended time window (in days) used
+                during the final residual reconciliation pass to catch more
+                difficult matches. Default is 30.
+            sorting_strategy (str): The strategy for sorting transactions before
+                processing. Can be 'date' (chronological) or 'amount'
+                (descending). Default is 'date'.
+            search_direction (str): The temporal direction for the search.
+                Can be 'past_only', 'future_only', or 'both'. This determines
+                the date range relative to the transaction being matched.
+                Default is 'past_only'.
+            column_mapping (dict, optional): A dictionary to map custom column
+                names from the input file to the internal standard names
+                ('Date', 'Debit', 'Credit'). Defaults to a standard mapping.
+            algorithm (str): The reconciliation algorithm to use. Can be
+                'subset_sum' (a complex combination-finding algorithm),
+                'progressive_balance' (a faster, sequential algorithm),
+                or 'auto' to let the engine choose the best one. Default is 'subset_sum'.
+            use_numba (bool): If True, the engine will leverage the Numba JIT
+                compiler for performance-critical calculations, if Numba is
+                installed. Default is True.
+            ignore_tolerance (bool): Specific to the 'progressive_balance'
+                algorithm. If True, forces a block of transactions to be closed
+                as a match even if the final balance is not within tolerance,
+                once the time window is exceeded. Default is False.
+            enable_best_fit (bool): If True, enables a "best fit" or "splitting"
+                heuristic. If an exact match for a large transaction cannot be
+                found, the algorithm will try to find a combination of smaller
+                transactions that partially "fills" it, leaving the rest as a
+                residual. Default is True.
+            store_id_column (str, optional): Column name in the input file
+                containing the store/branch identifier. If provided, matching
+                will prioritize transactions from the same store. Default is None.
+            valuta_date_column (str, optional): Column name for the "valuta date"
+                (value date) of CREDIT transactions. This is the date the deposit
+                refers to, not the registration date. If provided, matching will
+                use this date instead of the registration date for CREDIT movements.
+                This is crucial for year-end reconciliations where deposits in early
+                January may have valuta date in December. Default is None.
+        """
+        # FIX: Converts values from euros (float) to cents (int) for internal consistency
+        self.tolerance = int(tolerance * 100)
+        self.days_window = days_window
+        self.max_combinations = max_combinations
+        # FIX: Converts values from euros (float) to cents (int)
+        self.residual_threshold = int(residual_threshold * 100)
+        self.residual_days_window = residual_days_window
         self.sorting_strategy = sorting_strategy
         self.search_direction = search_direction
-        # AGGIUNTA: Imposta la mappatura delle colonne, con un default se non fornita.
-        self.column_mapping = column_mapping or {'Data': 'Data', 'Dare': 'Dare', 'Avere': 'Avere'}
+        self.algorithm = algorithm
+        # ADDITION: Sets the column mapping, with a default if not provided.
+        self.column_mapping = column_mapping or {'Date': 'Date', 'Debit': 'Debit', 'Credit': 'Credit'}
         
-        # Stato interno che verrà popolato durante l'esecuzione
-        self.dare_df = self.avere_df = self.df_abbinamenti = None
-        self.dare_non_util = self.avere_non_riconc = self.original_df = None
+        # Flag to enable/disable Numba
+        self.use_numba = use_numba and NUMBA_AVAILABLE
+        
+        # Flag to force closing blocks in Progressive Balance even if they don't match (on window timeout)
+        self.ignore_tolerance = ignore_tolerance
 
-        # Ottimizzazione: Usare set per tenere traccia degli indici usati
-        self.used_dare_indices = set()
-        self.used_avere_indices = set()
+        # ADDITION: Flag to enable best-fit logic (splitting)
+        self.enable_best_fit = enable_best_fit
 
-    def carica_file(self, file_path):
-        """Carica un file Excel o CSV in un DataFrame."""
-        # Parametri comuni per la lettura di CSV/Excel con formato europeo
+        # Store ID column for multi-store matching
+        self.store_id_column = store_id_column
+
+        # Valuta date column - for CREDIT transactions, this is the "value date"
+        # that indicates the period the deposit refers to (not the registration date)
+        self.valuta_date_column = valuta_date_column
+
+        # Internal state that will be populated during execution
+        self.debit_df = self.credit_df = self.matches_df = None
+        self.unused_debit_df = self.unreconciled_credit_df = self.original_df = None
+
+        # Optimization: Use sets to keep track of used indices
+        self.used_debit_indices = set()
+        self.used_credit_indices = set()
+        
+        # Counter to generate new unique IDs for residuals
+        self.max_id_counter = 0
+
+    def load_file(self, file_path):
+        """Loads and standardizes data from an Excel, CSV, or Feather file.
+
+        This method is responsible for reading a source file and transforming it
+        into a clean, standardized DataFrame ready for reconciliation. It performs
+        several key operations:
+        
+        1.  **File Reading**: Supports '.xlsx', '.csv', and '.feather' formats.
+        2.  **Column Mapping**: Renames columns from the source file to the
+            engine's internal standard ('Date', 'Debit', 'Credit') based on the
+            `column_mapping` provided during initialization.
+        3.  **Date Parsing**: Converts the 'Date' column to datetime objects,
+            handling common European formats (day-first). It flags rows with
+            future dates.
+        4.  **Amount Cleaning**: Uses a robust parser to handle various currency
+            formats (e.g., "1.234,56" or "1234.56 €"). It strips symbols and
+            correctly interprets decimal and thousands separators.
+        5.  **Integer Conversion**: Converts 'Debit' and 'Credit' amounts into
+            integer cents to eliminate floating-point arithmetic errors during
+            reconciliation.
+        6.  **Index Preservation**: Stores the original row number in the
+            'orig_index' column for traceability in the final report.
+
+        Args:
+            file_path (str): The absolute or relative path to the input file.
+
+        Returns:
+            pd.DataFrame: A DataFrame with standardized columns ('Date', 'Debit',
+            'Credit', 'orig_index'), ready for processing.
+
+        Raises:
+            ValueError: If the columns specified in the `column_mapping` are
+                not found in the input file.
+            FileNotFoundError: If the specified `file_path` does not exist.
+        """
+        # Common parameters for reading CSV/Excel with European format
         common_read_params = {
             'decimal': ',',
             'thousands': '.'
@@ -56,676 +194,1242 @@ class RiconciliatoreContabile:
         elif str(file_path).endswith('.feather'):
             df = pd.read_feather(file_path)
         else:
-            # Questo ramo dovrebbe essere raggiunto solo se non è un feather e non è un CSV.
-            # Per i file Excel, convert_to_feather.py dovrebbe aver già gestito il parsing.
+            # This branch should only be reached if it's not a feather and not a CSV.
+            # For Excel files, convert_to_feather.py should have already handled the parsing.
             df = pd.read_excel(file_path, decimal=',', thousands='.', engine='openpyxl')
 
-        # --- MODIFICA: Gestione dinamica dei nomi delle colonne ---
-        # Inverti la mappa per rinominare: {'Nome Colonna Sorgente': 'Nome Interno'} -> {'Nome Interno': 'Nome Colonna Sorgente'}
+        # --- CHANGE: Dynamic handling of column names ---
+        # Invert the map for renaming: {'Source Column Name': 'Internal Name'} -> {'Internal Name': 'Source Column Name'}
         source_col_names = self.column_mapping.keys()
         
-        # Controlla se le colonne sorgente definite nella configurazione esistono nel file
+        # Check if the source columns defined in the configuration exist in the file
         if not set(source_col_names).issubset(df.columns):
             missing_cols = set(source_col_names) - set(df.columns)
-            raise ValueError(f"Il file di input non contiene le colonne sorgente specificate nella configurazione: {', '.join(missing_cols)}")
+            raise ValueError(f"The input file does not contain the source columns specified in the configuration: {', '.join(missing_cols)}")
 
-        # Rinomina le colonne del DataFrame usando la mappatura per standardizzarle ai nomi interni ('Data', 'Dare', 'Avere')
+        # Rename the DataFrame columns using the mapping to standardize them to internal names ('Date', 'Debit', 'Credit')
         df.rename(columns=self.column_mapping, inplace=True)
 
-        # Dopo la lettura, assicurati che 'Data' sia datetime e 'Dare'/'Avere' siano numerici.
-        # Questo è un fallback nel caso in cui i parametri di lettura non siano stati sufficienti
-        # o se il DataFrame proviene da una fonte già pre-caricata (es. dall'ottimizzatore).
-        df['Data'] = pd.to_datetime(df['Data'], errors='coerce', dayfirst=True)
-        df.dropna(subset=['Data'], inplace=True) # Rimuove righe con date non valide
+        # Handle optional store_id column
+        if self.store_id_column and self.store_id_column in df.columns:
+            df.rename(columns={self.store_id_column: 'store_id'}, inplace=True)
+        elif self.store_id_column:
+            df['store_id'] = None
+        else:
+            df['store_id'] = None
+        
+        # Handle optional valuta_date column (value date for CREDIT transactions)
+        # This is the date the deposit refers to, not the registration date
+        if self.valuta_date_column and self.valuta_date_column in df.columns:
+            df.rename(columns={self.valuta_date_column: 'valuta_date'}, inplace=True)
+            df['valuta_date'] = pd.to_datetime(df['valuta_date'], errors='coerce', dayfirst=True)
+        else:
+            df['valuta_date'] = None
+        
+        # After reading, ensure 'Date' is datetime and 'Debit'/'Credit' are numeric.
+        # This is a fallback in case the reading parameters were not sufficient
+        # or if the DataFrame comes from an already pre-loaded source (e.g., from the optimizer).
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce', dayfirst=True)
+        df.dropna(subset=['Date'], inplace=True) # Removes rows with invalid dates
 
-        # Converti 'Dare' e 'Avere' in numerico. Se sono già stati letti correttamente,
-        # questa operazione sarà veloce. Se sono ancora stringhe, pd.to_numeric li gestirà.
-        df['Dare'] = pd.to_numeric(df['Dare'], errors='coerce')
-        df['Avere'] = pd.to_numeric(df['Avere'], errors='coerce')
+        # --- CHECK DATE FUTURE ---
+        today = datetime.now()
+        future_rows = df[df['Date'] > today]
+        if not future_rows.empty:
+            print(f"\n⚠️  WARNING: Found {len(future_rows)} movements with a future date (compared to {today.strftime('%Y-%m-%d')})!")
+            print(f"    Example: {future_rows.iloc[0]['Date'].strftime('%Y-%m-%d')} (Row {future_rows.index[0] + 2})")
 
-        # Riempi i valori non numerici con 0 PRIMA di convertire in centesimi
-        df[['Dare', 'Avere']] = df[['Dare', 'Avere']].fillna(0)
+        # --- ROBUST AMOUNT CLEANING ---
+        # Apply the robust parser to each cell, then convert the entire column.
+        for col in ['Debit', 'Credit']:
+            df[col] = pd.to_numeric(df[col].apply(_robust_currency_parser), errors='coerce')
 
-        # --- OTTIMIZZAZIONE: Converti in interi (centesimi) per evitare errori di floating point ---
-        # Moltiplichiamo per 100 e arrotondiamo per sicurezza, poi convertiamo in interi.
-        df['Dare'] = (df['Dare'] * 100).round().astype(int)
-        df['Avere'] = (df['Avere'] * 100).round().astype(int)
+        # Fill non-numeric values with 0 BEFORE converting to cents
+        df[['Debit', 'Credit']] = df[['Debit', 'Credit']].fillna(0)
 
-        df['indice_orig'] = df.index
+        # --- OPTIMIZATION: Convert to integers (cents) to avoid floating point errors ---
+        # We multiply by 100 and round for safety, then convert to integers.
+        df['Debit'] = (df['Debit'] * 100).round().astype(int)
+        df['Credit'] = (df['Credit'] * 100).round().astype(int)
+
+        df['orig_index'] = df.index
+        
+        # Initialize the ID counter with the maximum existing index
+        if not df.empty:
+            self.max_id_counter = df.index.max()
+            
         return df
 
-    def _separa_movimenti(self, df):
-        """Separa il DataFrame in movimenti DARE e AVERE."""
-        self.dare_df = df[df['Dare'] != 0][['indice_orig', 'Data', 'Dare']].copy()
-        self.avere_df = df[df['Avere'] != 0][['indice_orig', 'Data', 'Avere']].copy()
+    def _separate_movements(self, df):
+        """Separates the DataFrame into DEBIT and CREDIT movements.
+        
+        For CREDIT movements, uses 'valuta_date' if available, otherwise falls back to 'Date'.
+        The valuta_date is the "value date" that indicates the period the deposit refers to.
+        """
+        # For DEBIT movements, we always use the registration Date
+        debit_cols = ['orig_index', 'Date', 'Debit']
+        if 'store_id' in df.columns:
+            debit_cols.append('store_id')
+        self.debit_df = df[df['Debit'] != 0][debit_cols].copy()
+        
+        # For CREDIT movements, we include valuta_date if available
+        credit_cols = ['orig_index', 'Date', 'Credit']
+        if 'store_id' in df.columns:
+            credit_cols.append('store_id')
+        if 'valuta_date' in df.columns:
+            credit_cols.append('valuta_date')
+        
+        self.credit_df = df[df['Credit'] != 0][credit_cols].copy()
+        
+        # Create effective_date column: use valuta_date if available, otherwise Date
+        if 'valuta_date' in self.credit_df.columns:
+            self.credit_df['effective_date'] = self.credit_df['valuta_date'].combine_first(self.credit_df['Date'])
+        else:
+            self.credit_df['effective_date'] = self.credit_df['Date']
+        
+        # Create analysis_date column: Data Analisi = Data Valuta if present, otherwise Data
+        # This is used for sorting and display purposes
+        if 'valuta_date' in self.credit_df.columns:
+            self.credit_df['analysis_date'] = self.credit_df['valuta_date'].combine_first(self.credit_df['Date'])
+        else:
+            self.credit_df['analysis_date'] = self.credit_df['Date']
        
         if self.sorting_strategy == "date":
-            return self.dare_df.sort_values('Data', ascending=True), self.avere_df.sort_values('Data', ascending=True)
+            self.debit_df = self.debit_df.sort_values('Date', ascending=True)
+            # Sort CREDIT by analysis_date (Data Analisi = Data Valuta if present, otherwise Data)
+            self.credit_df = self.credit_df.sort_values('analysis_date', ascending=True)
         elif self.sorting_strategy == "amount":
-            return self.dare_df.sort_values('Dare', ascending=False), self.avere_df.sort_values('Avere', ascending=False)
+            self.debit_df = self.debit_df.sort_values('Debit', ascending=False)
+            self.credit_df = self.credit_df.sort_values('Credit', ascending=False)
         else:
-            raise ValueError(f"Strategia di ordinamento non valida: '{self.sorting_strategy}'. Usare 'date' o 'amount'.")
+            raise ValueError(f"Invalid sorting strategy: '{self.sorting_strategy}'. Use 'date' or 'amount.")
+            
+        return self.debit_df, self.credit_df
 
-    def _trova_abbinamenti(self, dare_row, avere_candidati_np, avere_indices_map, giorni_finestra, max_combinazioni):
-        """Logica interna per trovare un abbinamento per un singolo DARE."""
-        """Logica interna per trovare un abbinamento per un singolo DARE. Riceve candidati pre-filtrati per data."""
-        dare_importo = dare_row['Dare']
-        dare_data = dare_row['Data']
+    def _find_matches(self, debit_row, credit_candidates_list, unused_map, days_window, max_combinations, enable_best_fit=False):
+        """Internal logic to find a match for a single DEBIT. Receives pre-filtered candidates by date."""
+        debit_amount = debit_row['Debit']
+        debit_date = debit_row['Date']
 
-        # --- OTTIMIZZAZIONE CORRETTA: Filtra la lista di dizionari ---
-        # avere_candidati_np è ora una lista di dizionari, non un array numpy
-        # I candidati sono già pre-filtrati per data e per indici non usati. Filtriamo solo per importo.
-        candidati_avere = [
-            c for c in avere_candidati_np if c['Avere'] <= dare_importo + self.tolleranza
+        # --- CORRECT OPTIMIZATION: Filter the list of dictionaries ---
+        # credit_candidates_list is now a list of dictionaries, not a numpy array
+        # Candidates are already pre-filtered by date and unused indices. We only filter by amount.
+        credit_candidates = [
+            c for c in credit_candidates_list if c['Credit'] <= debit_amount + self.tolerance
         ]
         
-        if not candidati_avere:
+        if not credit_candidates:
             return None
         
-        # 1. Cerca match esatto 1-a-1
-        match_esatto_list = [c for c in candidati_avere if abs(c['Avere'] - dare_importo) <= self.tolleranza]
-        if match_esatto_list:
-            best_match = match_esatto_list[0] # Prende il primo match esatto trovato
+        # 1. Search for exact 1-to-1 match
+        exact_match_list = [c for c in credit_candidates if abs(c['Credit'] - debit_amount) <= self.tolerance]
+        if exact_match_list:
+            best_match = exact_match_list[0] # Takes the first exact match found
             return {
-                'dare_indices': [dare_row['indice_orig']],
-                'dare_date': [dare_data],
-                'dare_importi': [dare_importo],
-                'avere_indices': [best_match['indice_orig']],
-                'avere_date': [best_match['Data']],
-                'avere_importi': [best_match['Avere']],
-                'somma_avere': best_match['Avere'],
-                'differenza': abs(dare_importo - best_match['Avere']),
-                'tipo_match': '1-a-1'
+                'debit_indices': [debit_row['orig_index']],
+                'debit_dates': [debit_date],
+                'debit_amounts': [debit_amount],
+                'credit_indices': [best_match['orig_index']],
+                'credit_dates': [best_match['Date']],
+                'credit_amounts': [best_match['Credit']],
+                'total_credit': best_match['Credit'],
+                'difference': abs(debit_amount - best_match['Credit']),
+                'match_type': '1-to-1'
             }
 
-        # 2. Cerca combinazioni multiple in modo ottimizzato
-        candidati_avere = sorted(candidati_avere, key=lambda x: x['Avere'], reverse=True)
+        # 2. Search for multiple combinations in an optimized way
+        credit_candidates = sorted(credit_candidates, key=lambda x: x['Credit'], reverse=True)
         
-        # Aggiunta cache per la memoization
+        # Added cache for memoization
         cache = {}
-        somma_totale_candidati = sum(c['Avere'] for c in candidati_avere)
+        total_candidates_sum = sum(c['Credit'] for c in credit_candidates)
         
         match = None
-        if NUMBA_AVAILABLE:
-            # --- OTTIMIZZAZIONE NUMBA ---
-            candidati_np_numba = np.array([(c['Avere'], c['indice_orig']) for c in candidati_avere], dtype=np.int64)
-            match_indices = _numba_find_combination(dare_importo, candidati_np_numba, max_combinazioni, self.tolleranza)
+        if self.use_numba:
+            # --- NUMBA OPTIMIZATION ---
+            candidates_np_numba = np.array([(c['Credit'], c['orig_index']) for c in credit_candidates], dtype=np.int64)
+            match_indices = _numba_find_combination(debit_amount, candidates_np_numba, max_combinations, self.tolerance)
             if len(match_indices) > 0:
-                match = [c for c in candidati_avere if c['indice_orig'] in match_indices]
+                match = [c for c in credit_candidates if c['orig_index'] in match_indices]
         else:
-            # --- FALLBACK A PYTHON PURO ---
-            for c in candidati_avere: c['Dare'] = c.pop('Avere') # Adatta per la funzione generica
-            match = self._trova_combinazioni_ricorsivo_py(dare_importo, candidati_avere, max_combinazioni, self.tolleranza)
+            # --- FALLBACK TO PURE PYTHON ---
+            for c in credit_candidates: c['Debit'] = c.pop('Credit') # Adapt for generic function
+            match = self._find_combinations_recursive_py(debit_amount, credit_candidates, max_combinations, self.tolerance)
             if match:
-                for c in match: c['Avere'] = c.pop('Dare') # Ripristina
+                for c in match: c['Credit'] = c.pop('Debit') # Restore
 
         if match:
+            total_credit = sum(m['Credit'] for m in match)
+            
+            # Capienza logic: debits can be >= credits (reverse capienza)
+            if debit_amount >= total_credit:
+                difference = debit_amount - total_credit
+            else:
+                difference = total_credit - debit_amount
+            
             return {
-                'dare_indices': [dare_row['indice_orig']],
-                'dare_date': [dare_data],
-                'dare_importi': [dare_importo],
-                'avere_indices': [m['indice_orig'] for m in match],
-                'avere_date': [m['Data'] for m in match],
-                'avere_importi': [m['Avere'] for m in match],
-                'somma_avere': sum(m['Avere'] for m in match),
-                'differenza': abs(dare_importo - sum(m['Avere'] for m in match)),
-                'tipo_match': f'Combinazione {len(match)}'
+                'debit_indices': [debit_row['orig_index']],
+                'debit_dates': [debit_date],
+                'debit_amounts': [debit_amount],
+                'credit_indices': [m['orig_index'] for m in match],
+                'credit_dates': [m['Date'] for m in match],
+                'credit_amounts': [m['Credit'] for m in match],
+                'total_credit': total_credit,
+                'difference': difference,
+                'match_type': f'Combination {len(match)}'
             }
         
         return None
 
-    def _trova_combinazioni_ricorsivo_py(self, target, candidati, max_combinazioni, tolleranza):
-        """Funzione iterativa (basata su stack) per il subset-sum. Versione Python pura."""
-        stack = deque([(0, 0, [])]) # (start_index, somma_parziale, percorso_parziale)
+    def _find_combinations_recursive_py(self, target, candidates, max_combinations, tolerance):
+        """Iterative function (stack-based) for subset-sum. Pure Python version."""
+        stack = deque([(0, 0, [])]) # (start_index, current_sum, current_path)
 
         while stack:
             idx, current_sum, current_path = stack.pop()
 
-            # --- CONDIZIONE DI SUCCESSO ---
-            if abs(target - current_sum) <= tolleranza and len(current_path) > 1:
+            # --- SUCCESS CONDITION ---
+            if abs(target - current_sum) <= tolerance and len(current_path) > 1:
                 return current_path
 
-            # --- CONDIZIONI DI PRUNING (POTATURA) ---
-            if len(current_path) >= max_combinazioni or idx >= len(candidati):
+            # --- PRUNING CONDITIONS ---
+            if len(current_path) >= max_combinations or idx >= len(candidates):
                 continue
 
-            # --- RAMO 1: Escludi il candidato corrente ---
-            # Continua l'esplorazione dal prossimo candidato.
+            # --- BRANCH 1: Exclude the current candidate ---
+            # Continue exploration from the next candidate.
             stack.append((idx + 1, current_sum, current_path))
 
-            # --- RAMO 2: Includi il candidato corrente ---
-            candidato = candidati[idx]
-            new_sum = current_sum + candidato['Dare'] # La funzione generica usa 'Dare'
+            # --- BRANCH 2: Include the current candidate ---
+            candidate = candidates[idx]
+            new_sum = current_sum + candidate['Debit'] # The generic function uses 'Debit'
             
-            # Pruning: non includere se la nuova somma sfora già troppo
-            if new_sum > target + tolleranza:
+            # Pruning: do not include if the new sum already exceeds too much
+            if new_sum > target + tolerance:
                 continue
 
-            new_path = current_path + [candidato]
+            new_path = current_path + [candidate]
             
-            # --- CONDIZIONE DI SUCCESSO (anche dopo l'aggiunta) ---
-            if abs(target - new_sum) <= tolleranza and len(new_path) > 1:
+            # --- SUCCESS CONDITION (even after addition) ---
+            if abs(target - new_sum) <= tolerance and len(new_path) > 1:
                 return new_path
 
-            # Continua l'esplorazione includendo l'elemento corrente
+            # Continue exploration including the current element
             stack.append((idx + 1, new_sum, new_path))
 
-        return None # Nessuna combinazione trovata
+        return None # No combination found
 
-    def _trova_abbinamenti_dare(self, avere_row, dare_candidati_np, dare_indices_map, giorni_finestra, max_combinazioni):
-        """Logica per trovare combinazioni di DARE che corrispondono a un AVERE. Riceve candidati pre-filtrati."""
-        avere_importo = avere_row['Avere']
-        avere_data = avere_row['Data']
+    def _find_debit_matches(self, credit_row, debit_candidates_list, unused_map, days_window, max_combinations, enable_best_fit=False):
+        """Logic to find combinations of DEBIT that match a CREDIT. Receives pre-filtered candidates."""
+        credit_amount = credit_row['Credit']
+        credit_date = credit_row['Date']
 
-        # I candidati sono già pre-filtrati per data e indici non usati. Filtriamo solo per importo.
-        candidati_dare_list = [c for c in dare_candidati_np if c['Dare'] <= avere_importo + self.tolleranza]
+        # Candidates are already pre-filtered by date and unused indices. We only filter by amount.
+        debit_candidates = [c for c in debit_candidates_list if c['Debit'] <= credit_amount + self.tolerance]
 
-        if not candidati_dare_list:
+        if not debit_candidates:
             return None
 
-        # Cerca combinazioni multiple di DARE in modo ottimizzato
-        candidati_da_modificare = [c.copy() for c in candidati_dare_list]
-        candidati_da_modificare = sorted(candidati_da_modificare, key=lambda x: x['Dare'], reverse=True)
+        # Search for multiple DEBIT combinations in an optimized way
+        candidates_to_modify = [c.copy() for c in debit_candidates]
+        candidates_to_modify = sorted(candidates_to_modify, key=lambda x: x['Debit'], reverse=True)
 
         match = None
-        if NUMBA_AVAILABLE:
-            candidati_np_numba = np.array([(c['Dare'], c['indice_orig']) for c in candidati_da_modificare], dtype=np.int64)
-            match_indices = _numba_find_combination(avere_importo, candidati_np_numba, max_combinazioni, self.tolleranza)
+        is_partial = False
+        
+        if self.use_numba:
+            candidates_np_numba = np.array([(c['Debit'], c['orig_index']) for c in candidates_to_modify], dtype=np.int64)
+            # Attempt 1: Exact Match
+            match_indices = _numba_find_combination(credit_amount, candidates_np_numba, max_combinations, self.tolerance)
+            
             if len(match_indices) > 0:
-                match = [c for c in candidati_da_modificare if c['indice_orig'] in match_indices]
+                match = [c for c in candidates_to_modify if c['orig_index'] in match_indices]
+            elif enable_best_fit:
+                # Attempt 2: Best Fit (Partial Match)
+                # Find the combination that best fills the payment without exceeding it
+                match_indices = _numba_find_best_fit_combination(credit_amount, candidates_np_numba, max_combinations, self.tolerance)
+                if len(match_indices) > 0:
+                    match = [c for c in candidates_to_modify if c['orig_index'] in match_indices]
+                    is_partial = True
         else:
-            match = self._trova_combinazioni_ricorsivo_py(avere_importo, candidati_da_modificare, max_combinazioni, self.tolleranza)
+            match = self._find_combinations_recursive_py(credit_amount, candidates_to_modify, max_combinations, self.tolerance)
 
         if match:
+            total_debit = sum(m['Debit'] for m in match)
+            
+            # Capienza logic: credit >= debits is acceptable (GDO behavior)
+            # If credit > debits, difference is positive (credit has excess)
+            # If debits > credit, difference is negative but we still accept within tolerance
+            if credit_amount >= total_debit:
+                # Capienza: credit can be greater than or equal to debits
+                difference = credit_amount - total_debit
+                is_capienza = True
+            else:
+                # Debits exceed credit - check if within tolerance
+                difference = total_debit - credit_amount
+                is_capienza = False
+            
+            # Accept match if difference is within tolerance
+            if difference > self.tolerance:
+                return None
+            
+            # If it's a partial best fit, we calculate the residual
+            residual = 0
+            if is_capienza and difference > 0:
+                residual = difference
+            
             return {
-                'dare_indices': [m['indice_orig'] for m in match],
-                'dare_date': [m['Data'] for m in match],
-                'dare_importi': [m['Dare'] for m in match],
-                'avere_indices': [avere_row['indice_orig']],
-                'avere_date': [avere_data],
-                'avere_importi': [avere_importo],
-                'somma_dare': sum(m['Dare'] for m in match),
-                'differenza': abs(avere_importo - sum(m['Dare'] for m in match)),
-                'tipo_match': f'Combinazione DARE {len(match)}'
+                'debit_indices': [m['orig_index'] for m in match],
+                'debit_dates': [m['Date'] for m in match],
+                'debit_amounts': [m['Debit'] for m in match],
+                'credit_indices': [credit_row['orig_index']],
+                'credit_dates': [credit_date],
+                'credit_amounts': [credit_amount],
+                'total_debit': total_debit,
+                'difference': difference,
+                'match_type': f'DEBIT Combination {len(match)}' + (' (Best Fit)' if is_partial else '') + (' (Capienza)' if is_capienza and difference > 0 else ''),
+                'residual': residual if is_partial else 0
             }
         return None
 
-    def _esegui_passata_riconciliazione_dare(self, dare_df, avere_df, giorni_finestra, max_combinazioni, abbinamenti_list, title, verbose=True):
-        """Esegue una passata cercando combinazioni di DARE per abbinare AVERE (ottimizzata con NumPy)."""
-        # Filtra gli AVERE che non sono ancora stati usati
-        avere_da_processare = avere_df[~avere_df['indice_orig'].isin(self.used_avere_indices)].copy() if avere_df is not None and not avere_df.empty else pd.DataFrame()
+    def _run_reconciliation_pass_debit(self, debit_df, credit_df, days_window, max_combinations, matches_list, title, verbose=True, enable_best_fit=False):
+        """Runs a pass looking for DEBIT combinations to match CREDIT (optimized with NumPy)."""
+        # Filter CREDITs that have not been used yet
+        credit_to_process = credit_df[~credit_df['orig_index'].isin(self.used_credit_indices)].copy() if credit_df is not None and not credit_df.empty else pd.DataFrame()
 
-        self._esegui_passata_generica(
-            df_da_processare=avere_da_processare,
-            df_candidati=dare_df,
-            col_da_processare='Avere',
-            col_candidati='Dare',
-            used_indices_candidati=self.used_dare_indices,
-            giorni_finestra=giorni_finestra,
-            max_combinazioni=max_combinazioni,
-            abbinamenti_list=abbinamenti_list,
+        self._run_generic_pass(
+            df_to_process=credit_to_process,
+            df_candidates=debit_df,
+            col_to_process='Credit',
+            col_candidates='Debit',
+            used_indices_candidates=self.used_debit_indices,
+            days_window=days_window,
+            max_combinations=max_combinations,
+            matches_list=matches_list,
             title=title,
-            search_direction="past_only", # La passata AVERE->DARE cerca solo nel passato
-            find_function=self._trova_abbinamenti_dare,
-            verbose=verbose
+            search_direction=self.search_direction, # Use the main direction from the configuration
+            find_function=self._find_debit_matches,
+            verbose=verbose,
+            enable_best_fit=enable_best_fit
         )
 
-    def _esegui_passata_generica(self, df_da_processare, df_candidati, col_da_processare, col_candidati, used_indices_candidati, giorni_finestra, max_combinazioni, abbinamenti_list, title, search_direction, find_function, verbose=True):
+    def _run_generic_pass(self, df_to_process, df_candidates, col_to_process, col_candidates, used_indices_candidates, days_window, max_combinations, matches_list, title, search_direction, find_function, verbose=True, enable_best_fit=False):
         """
-        Funzione helper generica che esegue una passata di riconciliazione.
-        Questa funzione astrae la logica comune tra le passate DARE->AVERE e AVERE->DARE.
+        Generic helper function that performs a reconciliation pass.
+        
+        Iterates over each row of `df_to_process` and searches for matches in `df_candidates`
+        using the provided `find_function`. Manages time window logic,
+        match registration, and splitting (Best Fit).
+
+        Args:
+            df_to_process (pd.DataFrame): Main DataFrame to iterate over.
+            df_candidates (pd.DataFrame): DataFrame where to search for combinations.
+            col_to_process (str): Amount column name in the main DF ('Debit' or 'Credit').
+            col_candidates (str): Amount column name in the candidate DF.
+            used_indices_candidates (set): Set of already used indices to exclude.
+            days_window (int): Time window for the search.
+            max_combinations (int): Max combinable elements.
+            matches_list (list): List to append found matches to.
+            title (str): Title of the pass for logging.
+            search_direction (str): Time direction ('past_only', 'future_only', 'both').
+            find_function (callable): Function that implements the specific matching logic.
+            verbose (bool): If True, prints logs.
+            enable_best_fit (bool): If True, enables splitting logic for partial matches.
         """
-        if df_da_processare is None or df_da_processare.empty:
+        if df_to_process is None or df_to_process.empty:
             return
 
         if verbose:
-            print(f"\n{title}...")
+            print(f"\n{title} (Direction: {search_direction})...")
 
-        # Prepara le liste di record una sola volta
-        records_da_processare = df_da_processare.to_dict('records')
-        records_candidati = sorted(df_candidati.to_dict('records'), key=lambda x: x['Data']) if df_candidati is not None else []
+        # Prepare the record lists once
+        records_to_process = df_to_process.to_dict('records')
+        records_candidates = sorted(df_candidates.to_dict('records'), key=lambda x: x['Date']) if df_candidates is not None else []
 
         matches = []
-        total_records = len(records_da_processare)
+        total_records = len(records_to_process)
         processed_count = 0
+        
+        # List to collect new residual movements generated by splitting
+        new_residuals = []
 
-        for record_row in records_da_processare:
+        for record_row in records_to_process:
             if verbose:
                 processed_count += 1
-                percentuale = (processed_count / total_records) * 100
-                sys.stdout.write(f"\r   - Avanzamento: {percentuale:.1f}% ({processed_count}/{total_records})")
+                percentage = (processed_count / total_records) * 100
+                sys.stdout.write(f"\r   - Progress: {percentage:.1f}% ({processed_count}/{total_records})")
                 sys.stdout.flush()
 
-            # Pre-filtra i candidati per finestra temporale
-            min_data, max_data = self._calcola_finestra_temporale(record_row['Data'], giorni_finestra, search_direction)
+            # Pre-filter candidates by time window
+            # For CREDIT transactions, use effective_date (valuta_date if available) instead of registration Date
+            if col_to_process == 'Credit' and 'effective_date' in record_row:
+                reference_date = record_row.get('effective_date', record_row['Date'])
+            else:
+                reference_date = record_row['Date']
             
-            candidati_prefiltrati = [
-                c for c in records_candidati
-                if min_data <= c['Data'] <= max_data and c['indice_orig'] not in used_indices_candidati
-            ]
+            # When processing CREDIT with valuta_date, use a symmetric window but filter by month/year
+            # This ensures deposits with December valuta don't match January receipts
+            effective_search_direction = search_direction
+            if col_to_process == 'Credit' and 'effective_date' in record_row:
+                # Use symmetric window for valuta_date-based matching (covers days before and after valuta)
+                effective_search_direction = 'both'
+            
+            min_date, max_date = self._calculate_time_window(reference_date, days_window, effective_search_direction)
+            
+            # Filter candidates also by their effective_date if available
+            if col_to_process == 'Credit':
+                candidates_prefiltered = []
+                valuta_date = record_row.get('effective_date')
+                for c in records_candidates:
+                    if c['orig_index'] in used_indices_candidates:
+                        continue
+                    
+                    # For DEBIT candidates, use Date (not effective_date which doesn't exist for DEBITs)
+                    # effective_date is only for CREDIT transactions
+                    candidate_date = c['Date']
+                    
+                    # If CREDIT has valuta_date, filter candidates to same month/year
+                    # This prevents December valuta from matching January DEBITs
+                    if valuta_date is not None:
+                        # Skip DEBITs from year AFTER valuta year
+                        if candidate_date.year > valuta_date.year:
+                            continue
+                        # Skip DEBITs from month AFTER valuta month (in same year)
+                        if candidate_date.year == valuta_date.year and candidate_date.month > valuta_date.month:
+                            continue
+                    
+                    if min_date <= candidate_date <= max_date:
+                        candidates_prefiltered.append(c)
+            else:
+                # Pass 2: DEBIT -> CREDIT
+                # Filter candidates (CREDIT) to prevent matching with credits from wrong period
+                candidates_prefiltered = []
+                debit_date = record_row['Date']
+                for c in records_candidates:
+                    if c['orig_index'] in used_indices_candidates:
+                        continue
+                    
+                    # For CREDIT candidates, use effective_date (valuta_date if available)
+                    # If CREDIT has valuta_date, filter to same month/year as DEBIT
+                    credit_effective_date = c.get('effective_date', c['Date'])
+                    
+                    # Skip CREDITs from year AFTER debit year
+                    if credit_effective_date.year > debit_date.year:
+                        continue
+                    # Skip CREDITs from month AFTER debit month (in same year)
+                    if credit_effective_date.year == debit_date.year and credit_effective_date.month > debit_date.month:
+                        continue
+                    
+                    if min_date <= c['Date'] <= max_date:
+                        candidates_prefiltered.append(c)
 
-            if candidati_prefiltrati:
-                match = find_function(record_row, candidati_prefiltrati, None, giorni_finestra, max_combinazioni)
+            if candidates_prefiltered:
+                match = find_function(record_row, candidates_prefiltered, None, days_window, max_combinations, enable_best_fit=enable_best_fit)
                 if match:
-                    matches.append(match)
+                    # Handle split (Best Fit)
+                    residual = match.get('residual', 0)
+                    if residual > 0:
+                        # Create a new movement for the residual
+                        new_movement = self._create_residual_movement(record_row, residual, col_to_process)
+                        new_residuals.append(new_movement)
 
-        if verbose: print(f"\n   - Trovati {len(matches)} potenziali abbinamenti. Registrazione in corso...")
-        for match in matches:
-            match['pass_name'] = title
-            self._registra_abbinamento(match, abbinamenti_list)
-        if verbose: sys.stdout.write("\n   ✓ Completato.\n")
+                        # Update the amount of the original row to reflect only the reconciled part
+                        # This corrects the statistics by avoiding amount duplication (Original + Residual)
+                        idx_orig = record_row['orig_index']
+                        new_amount = record_row[col_to_process] - residual
+                        
+                        if col_to_process == 'Credit':
+                            self.credit_df.loc[self.credit_df['orig_index'] == idx_orig, 'Credit'] = new_amount
+                            # FIX REPORT: Also update the match to show only the used part in Excel
+                            match['credit_amounts'] = [new_amount]
+                            match['total_credit'] = new_amount
+                            match['difference'] = abs(match.get('total_debit', 0) - new_amount)
+                        elif col_to_process == 'Debit':
+                            self.debit_df.loc[self.debit_df['orig_index'] == idx_orig, 'Debit'] = new_amount
+                            # FIX REPORT
+                            match['debit_amounts'] = [new_amount]
+                            match['total_debit'] = new_amount
+                            match['difference'] = abs(match.get('total_credit', 0) - new_amount)
 
-    def _calcola_finestra_temporale(self, data_riferimento, giorni_finestra, search_direction):
-        """Calcola la finestra temporale (min_data, max_data) in base alla direzione di ricerca."""
-        if search_direction == "future_only":
-            min_data = data_riferimento
-            max_data = data_riferimento + pd.Timedelta(days=giorni_finestra)
-        elif search_direction == "past_only":
-            min_data = data_riferimento - pd.Timedelta(days=giorni_finestra)
-            max_data = data_riferimento
-        elif search_direction == "both":
-            min_data = data_riferimento - pd.Timedelta(days=giorni_finestra)
-            max_data = data_riferimento + pd.Timedelta(days=giorni_finestra)
-        else:
-            raise ValueError(f"Direzione di ricerca temporale non valida: '{search_direction}'. Usare 'both', 'future_only' o 'past_only'.")
-        return min_data, max_data
+                    # --- CRITICAL FIX: IMMEDIATE REGISTRATION ---
+                    # Immediately register the match to mark indices as used and prevent
+                    # them from being reused in the same pass (Double Spending).
+                    match['pass_name'] = title
+                    self._register_match(match, matches_list)
+                    matches.append(match) # Keeps the list only for the final count
 
-    def _esegui_passata_riconciliazione(self, dare_df, avere_df, giorni_finestra, max_combinazioni, abbinamenti_list, title, verbose=True):
-        """Esegue una passata di riconciliazione e aggiorna i DataFrame (ottimizzata con NumPy)."""
-        # Filtra i DARE che non sono ancora stati usati
-        dare_da_processare = dare_df[~dare_df['indice_orig'].isin(self.used_dare_indices)].copy() if dare_df is not None and not dare_df.empty else pd.DataFrame()
+        if verbose: print(f"\n   - Registered {len(matches)} matches.")
+            
+        # Add the generated residuals to the original DataFrame to be processed in subsequent passes
+        if new_residuals:
+            if verbose: print(f"   - Generated {len(new_residuals)} residual movements from split (Best Fit).")
+            df_residuals = pd.DataFrame(new_residuals)
+            
+            if col_to_process == 'Credit':
+                self.credit_df = pd.concat([self.credit_df, df_residuals], ignore_index=True)
+                # Ensure types are correct
+                self.credit_df['Credit'] = self.credit_df['Credit'].astype(int)
+            elif col_to_process == 'Debit':
+                self.debit_df = pd.concat([self.debit_df, df_residuals], ignore_index=True)
+                self.debit_df['Debit'] = self.debit_df['Debit'].astype(int)
+                
+        if verbose: sys.stdout.write("\n   ✓ Completed.\n")
+
+    def _create_residual_movement(self, original_record, residual_amount, type_col):
+        """Creates a dictionary representing the residual movement."""
+        self.max_id_counter += 1
+        new_id = self.max_id_counter
         
-        self._esegui_passata_generica(
-            df_da_processare=dare_da_processare,
-            df_candidati=avere_df,
-            col_da_processare='Dare',
-            col_candidati='Avere',
-            used_indices_candidati=self.used_avere_indices,
-            giorni_finestra=giorni_finestra,
-            max_combinazioni=max_combinazioni,
-            abbinamenti_list=abbinamenti_list,
+        new_movement = original_record.copy()
+        new_movement['orig_index'] = new_id
+        new_movement[type_col] = residual_amount
+        # Note: 'used' will be False (or NaN which will be treated as False) by default when added to the DF
+        
+        return new_movement
+
+    def _calculate_time_window(self, reference_date, days_window, search_direction):
+        """Calculates the time window (min_date, max_date) based on the search direction."""
+        if search_direction == "future_only":
+            min_date = reference_date
+            max_date = reference_date + pd.Timedelta(days=days_window)
+        elif search_direction == "past_only":
+            min_date = reference_date - pd.Timedelta(days=days_window)
+            max_date = reference_date
+        elif search_direction == "both":
+            min_date = reference_date - pd.Timedelta(days=days_window)
+            max_date = reference_date + pd.Timedelta(days=days_window)
+        else:
+            raise ValueError(f"Invalid time search direction: '{search_direction}'. Use 'both', 'future_only' or 'past_only'.")
+        return min_date, max_date
+
+    def _run_reconciliation_pass(self, debit_df, credit_df, days_window, max_combinations, matches_list, title, verbose=True):
+        """Performs a reconciliation pass and updates the DataFrames (optimized with NumPy)."""
+        # Filter DEBITs that have not been used yet
+        debit_to_process = debit_df[~debit_df['orig_index'].isin(self.used_debit_indices)].copy() if debit_df is not None and not debit_df.empty else pd.DataFrame()
+        
+        # --- FIX: Logical inversion of the direction for the DEBIT->CREDIT pass ---
+        # If the global strategy is "past_only" (DEBIT before CREDIT),
+        # when we start from DEBIT we must search for CREDIT in the future ("future_only").
+        direction_for_pass2 = self.search_direction
+        if self.search_direction == "past_only":
+            direction_for_pass2 = "future_only"
+        elif self.search_direction == "future_only":
+            direction_for_pass2 = "past_only"
+        
+        self._run_generic_pass(
+            df_to_process=debit_to_process,
+            df_candidates=credit_df,
+            col_to_process='Debit',
+            col_candidates='Credit',
+            used_indices_candidates=self.used_credit_indices,
+            days_window=days_window,
+            max_combinations=max_combinations,
+            matches_list=matches_list,
             title=title,
-            search_direction=self.search_direction, # Usa la direzione principale
-            find_function=self._trova_abbinamenti,
+            search_direction=direction_for_pass2, # Use the correct (inverted) direction
+            find_function=self._find_matches,
             verbose=verbose
         )
 
-    def _riconcilia(self, dare_df, avere_df, verbose=True):
-        """Orchestra il processo di riconciliazione in più passate."""
+    def _reconcile_subset_sum(self, verbose=True):
+        """Performs reconciliation using a multi-pass subset sum strategy."""
         
-        abbinamenti = []
+        matches = []
 
-        # --- Passata 1: Riconciliazione Standard (DARE -> AVERE) ---
-        self._esegui_passata_riconciliazione(
-            dare_df, avere_df,
-            self.giorni_finestra,
-            self.max_combinazioni,
-            abbinamenti,
-            "Inizio Passata 1: Riconciliazione Standard (DARE -> AVERE)",
+        # Pass 1: DEBIT combination for CREDIT (Many Receipts -> 1 Deposit)
+        self._run_reconciliation_pass_debit(
+            self.debit_df, self.credit_df,
+            self.days_window,
+            self.max_combinations,
+            matches,
+            "Pass 1: Receipt Aggregation (Many DEBIT -> 1 CREDIT) [with Best Fit]",
+            verbose,
+            enable_best_fit=self.enable_best_fit
+        )
+
+        # Pass 2: Standard Inverse Reconciliation (1 Receipt -> Many Deposits)
+        self._run_reconciliation_pass(
+            self.debit_df, self.credit_df,
+            self.days_window,
+            self.max_combinations,
+            matches,
+            "Pass 2: Split Deposits (1 DEBIT -> Many CREDIT)",
             verbose
         )
 
-        # --- Passata 2: Riconciliazione Residui (DARE -> AVERE con finestra più ampia) ---
-        self._esegui_passata_riconciliazione(
-            dare_df, avere_df, self.giorni_finestra_residui, self.max_combinazioni, abbinamenti,
-            f"Inizio Passata 2: Analisi Residui (Finestra: {self.giorni_finestra_residui}gg)", verbose
+        # Pass 3: Residual Analysis (Enlarged Window)
+        self._run_reconciliation_pass_debit(
+            self.debit_df, self.credit_df,
+            self.residual_days_window,
+            self.max_combinations,
+            matches,
+            f"Pass 3: Residual Recovery (Extended window: {self.residual_days_window}d)",
+            verbose,
+            enable_best_fit=False
         )
 
-        # --- Passata 3: Combinazione DARE per AVERE (AVERE -> DARE) ---
-        # Eseguita come ultima risorsa per abbinare gli AVERE rimanenti.
-        self._esegui_passata_riconciliazione_dare(
-            dare_df, avere_df,
-            self.giorni_finestra,
-            self.max_combinazioni,
-            abbinamenti,
-            "Inizio Passata 3: Combinazione DARE per AVERE",
-            verbose
-        )
+        return matches
 
-        # AGGIUNTA: Aggiorna le colonne 'usato' nei DataFrame originali una sola volta alla fine
-        dare_df['usato'] = dare_df['indice_orig'].isin(self.used_dare_indices)
-        avere_df['usato'] = avere_df['indice_orig'].isin(self.used_avere_indices)
+    def _reconcile_greedy_amount_first(self, verbose=True):
+        """
+        Performs reconciliation using a greedy, amount-first strategy.
+        It sorts both debits and credits by amount (descending) and tries to match
+        the largest remaining items first.
+        """
+        if verbose:
+            print("\nStarting reconciliation with 'Greedy Amount First' algorithm...")
 
-        # Colonne attese nel DataFrame finale
+        # 1. Prepare data: Filter unused and Sort by Amount (descending)
+        df_debit_temp = self.debit_df[~self.debit_df['orig_index'].isin(self.used_debit_indices)].copy()
+        df_credit_temp = self.credit_df[~self.credit_df['orig_index'].isin(self.used_credit_indices)].copy()
+        
+        df_debit_temp.sort_values(by='Debit', ascending=False, inplace=True)
+        df_credit_temp.sort_values(by='Credit', ascending=False, inplace=True)
+
+        matches = []
+        
+        # We iterate over the largest set to ensure we try to match every large transaction
+        if len(df_debit_temp) > len(df_credit_temp):
+            # Iterate through debits and find credits
+            self._run_generic_pass(
+                df_to_process=df_debit_temp,
+                df_candidates=df_credit_temp,
+                col_to_process='Debit',
+                col_candidates='Credit',
+                used_indices_candidates=self.used_credit_indices,
+                days_window=self.days_window,
+                max_combinations=self.max_combinations,
+                matches_list=matches,
+                title="Greedy Pass (Debit -> Credit)",
+                search_direction=self.search_direction,
+                find_function=self._find_matches,
+                verbose=verbose,
+                enable_best_fit=True
+            )
+        else:
+            # Iterate through credits and find debits
+            self._run_generic_pass(
+                df_to_process=df_credit_temp,
+                df_candidates=df_debit_temp,
+                col_to_process='Credit',
+                col_candidates='Debit',
+                used_indices_candidates=self.used_debit_indices,
+                days_window=self.days_window,
+                max_combinations=self.max_combinations,
+                matches_list=matches,
+                title="Greedy Pass (Credit -> Debit)",
+                search_direction=self.search_direction,
+                find_function=self._find_debit_matches,
+                verbose=verbose,
+                enable_best_fit=True
+            )
+            
+        return matches
+
+    def _finalize_matches(self, matches):
+        """Creates the final DataFrame, generates IDs, and sorts the results."""
+        # Expected columns in the final DataFrame
         final_columns = [
-            'ID Transazione', 'dare_indices', 'dare_date', 'dare_importi', 
-            'avere_data', 'num_avere', 'avere_indices', 'avere_importi', 
-            'somma_avere', 'differenza', 'tipo_match', 'pass_name'
+            'Transaction ID', 'debit_indices', 'debit_dates', 'debit_amounts', 
+            'credit_date', 'num_credits', 'credit_indices', 'credit_amounts', 
+            'total_credit', 'difference', 'days_diff', 'match_type', 'pass_name'
         ]
 
-        # Creazione del DataFrame finale degli abbinamenti
-        if abbinamenti:
-            df_abbinamenti = pd.DataFrame(abbinamenti)
-            # Gestione colonne mancanti (es. 'somma_dare' vs 'somma_avere')
-            if 'somma_dare' in df_abbinamenti.columns and 'somma_avere' not in df_abbinamenti.columns:
-                df_abbinamenti['somma_avere'] = df_abbinamenti['somma_dare']
+        # Creation of the final matches DataFrame
+        if matches:
+            df_matches = pd.DataFrame(matches)
+            # Handling of missing columns (e.g., 'somma_dare' vs 'somma_avere')
+            if 'total_debit' in df_matches.columns and 'total_credit' not in df_matches.columns:
+                df_matches['total_credit'] = df_matches['total_debit']
             
-            # --- MODIFICA: Creazione dell'ID Transazione con nuovo formato D(..)_A(..) ---
-            df_abbinamenti['ID Transazione'] = df_abbinamenti.apply(
+            # Calculation of day difference (Credit - Debit)
+            df_matches['days_diff'] = df_matches.apply(
+                lambda row: (row['credit_date'] - min(row['debit_dates'])).days 
+                if isinstance(row['debit_dates'], list) and len(row['debit_dates']) > 0 and pd.notnull(row['credit_date']) 
+                else None, axis=1
+            )
+
+            # --- CHANGE: Creation of the Transaction ID with new format D(..)_A(..) ---
+            df_matches['Transaction ID'] = df_matches.apply(
                 lambda row: "D({})_A({})".format(
-                    ','.join(map(str, [i + 2 for i in row['dare_indices']])),
-                    ','.join(map(str, [i + 2 for i in row['avere_indices']]))
+                    ','.join(map(str, [i + 2 for i in row['debit_indices']])),
+                    ','.join(map(str, [i + 2 for i in row['credit_indices']]))
                 ), axis=1
             )
-            df_abbinamenti['sort_date'] = df_abbinamenti['dare_date'].apply(lambda x: x[0] if isinstance(x, list) else x)
-            df_abbinamenti['sort_importo'] = df_abbinamenti['dare_importi'].apply(lambda x: sum(x) if isinstance(x, list) else x)
-            df_abbinamenti = df_abbinamenti.sort_values(by=['sort_date', 'sort_importo'], ascending=[True, False]).drop(columns=['sort_date', 'sort_importo'])
-            df_abbinamenti = df_abbinamenti.reindex(columns=final_columns) # Assicura che tutte le colonne esistano
+            df_matches['sort_date'] = df_matches['debit_dates'].apply(lambda x: x[0] if isinstance(x, list) and x else pd.NaT)
+            df_matches['sort_importo'] = df_matches['debit_amounts'].apply(lambda x: sum(x) if isinstance(x, list) else 0)
+            df_matches = df_matches.sort_values(by=['sort_date', 'sort_importo'], ascending=[True, False]).drop(columns=['sort_date', 'sort_importo'])
+            df_matches = df_matches.reindex(columns=final_columns) # Ensures all columns exist
         else:
-            df_abbinamenti = pd.DataFrame(columns=final_columns)
+            df_matches = pd.DataFrame(columns=final_columns)
             
-        return dare_df, avere_df, df_abbinamenti
+        return df_matches
 
-    def _registra_abbinamento(self, match, abbinamenti_list): # Rimosso dare_df, avere_df dagli argomenti
-        """Marca gli elementi come 'usati' e registra l'abbinamento."""
-        if not match:
-            return
+    def _reconcile_progressive_balance(self, verbose=True):
+        """Performs reconciliation using the user's progressive balance algorithm.
+        
+        Logic:
+        1. Create Data_Analisi = Data_Valuta if present, else Data
+        2. Sort credits by Data_Analisi (ascending)
+        3. Process credits sequentially:
+           - Start with credit amount
+           - Find first unused debit (from current position in debit list sorted by Data_Analisi)
+           - Subtract debit from credit
+           - If debit > credit: remaining debit carries forward to next credit
+           - If credit > debit: remaining credit carries forward to next debit
+           - Mark used items
+        """
+        if verbose:
+            print("\nStarting reconciliation with 'Progressive Balance' algorithm...")
+        
+        df_debit = self.debit_df[~self.debit_df['orig_index'].isin(self.used_debit_indices)].copy()
+        df_credit = self.credit_df[~self.credit_df['orig_index'].isin(self.used_credit_indices)].copy()
+        
+        df_debit['analysis_date'] = df_debit['Date']
+        df_credit['analysis_date'] = df_credit.get('valuta_date', df_credit['Date'])
+        df_credit['analysis_date'] = df_credit['analysis_date'].combine_first(df_credit['Date'])
+        
+        df_debit = df_debit.sort_values(by=['analysis_date', 'orig_index'])
+        df_credit = df_credit.sort_values(by=['analysis_date', 'orig_index'])
+        
+        if verbose:
+            print(f"   - Processing {len(df_debit)} Debit and {len(df_credit)} Credit movements...")
+        
+        debit_rows = df_debit.to_dict('records')
+        credit_rows = df_credit.to_dict('records')
+        
+        n_debit = len(debit_rows)
+        n_credit = len(credit_rows)
+        
+        debit_remaining = {i: debit_rows[i]['Debit'] for i in range(n_debit)}
+        
+        matches = []
+        
+        debit_idx = 0
+        credit_idx = 0
+        
+        remaining_credit = 0
+        
+        current_match_debits = []
+        current_match_credits = []
+        current_debit_amounts = []
+        current_credit_amounts = []
+        
+        while credit_idx < n_credit:
+            credit_amount = credit_rows[credit_idx]['Credit']
+            credit_orig_idx = credit_rows[credit_idx]['orig_index']
+            
+            if debit_idx >= n_debit:
+                if current_match_credits or current_match_debits:
+                    match = {
+                        'debit_indices': current_match_debits.copy(),
+                        'debit_dates': [debit_rows[i]['analysis_date'] for i in range(len(debit_rows)) if debit_rows[i]['orig_index'] in current_match_debits],
+                        'debit_amounts': current_debit_amounts.copy(),
+                        'credit_indices': current_match_credits.copy(),
+                        'credit_dates': [credit_rows[i]['analysis_date'] for i in range(len(credit_rows)) if credit_rows[i]['orig_index'] in current_match_credits],
+                        'credit_amounts': current_credit_amounts.copy(),
+                        'total_credit': sum(current_credit_amounts),
+                        'difference': remaining_credit,
+                        'match_type': f'Progressive Balance (Partial - no more debits)',
+                        'pass_name': 'Progressive Balance',
+                        'is_forced': True
+                    }
+                    self._register_match(match, matches)
+                break
+            
+            remaining_credit += credit_amount
+            current_match_credits.append(credit_orig_idx)
+            current_credit_amounts.append(credit_amount)
+            
+            while remaining_credit > 0 and debit_idx < n_debit:
+                if debit_remaining[debit_idx] <= 0:
+                    debit_idx += 1
+                    continue
+                
+                debit_amount = debit_remaining[debit_idx]
+                debit_orig_idx = debit_rows[debit_idx]['orig_index']
+                
+                if debit_amount <= remaining_credit:
+                    current_match_debits.append(debit_orig_idx)
+                    current_debit_amounts.append(debit_amount)
+                    remaining_credit -= debit_amount
+                    debit_remaining[debit_idx] = 0
+                    debit_idx += 1
+                else:
+                    current_match_debits.append(debit_orig_idx)
+                    current_debit_amounts.append(remaining_credit)
+                    debit_remaining[debit_idx] = debit_amount - remaining_credit
+                    remaining_credit = 0
+            
+            if remaining_credit == 0:
+                match = {
+                    'debit_indices': current_match_debits.copy(),
+                    'debit_dates': [debit_rows[i]['analysis_date'] for i in range(len(debit_rows)) if debit_rows[i]['orig_index'] in current_match_debits],
+                    'debit_amounts': current_debit_amounts.copy(),
+                    'credit_indices': current_match_credits.copy(),
+                    'credit_dates': [credit_rows[credit_idx]['analysis_date']],
+                    'credit_amounts': current_credit_amounts.copy(),
+                    'total_credit': sum(current_credit_amounts),
+                    'difference': 0,
+                    'match_type': f'Progressive Balance (Seq. {len(current_match_debits)}D vs {len(current_match_credits)}C)',
+                    'pass_name': 'Progressive Balance'
+                }
+                self._register_match(match, matches)
+                current_match_debits = []
+                current_match_credits = []
+                current_debit_amounts = []
+                current_credit_amounts = []
+            elif debit_idx >= n_debit:
+                if current_match_credits or current_match_debits:
+                    match = {
+                        'debit_indices': current_match_debits.copy(),
+                        'debit_dates': [debit_rows[i]['analysis_date'] for i in range(len(debit_rows)) if debit_rows[i]['orig_index'] in current_match_debits],
+                        'debit_amounts': current_debit_amounts.copy(),
+                        'credit_indices': current_match_credits.copy(),
+                        'credit_dates': [credit_rows[i]['analysis_date'] for i in range(len(credit_rows)) if credit_rows[i]['orig_index'] in current_match_credits],
+                        'credit_amounts': current_credit_amounts.copy(),
+                        'total_credit': sum(current_credit_amounts),
+                        'difference': remaining_credit,
+                        'match_type': f'Progressive Balance (Partial - no more debits)',
+                        'pass_name': 'Progressive Balance',
+                        'is_forced': True
+                    }
+                    self._register_match(match, matches)
+                break
+        
+        if current_match_debits or current_match_credits:
+            match = {
+                'debit_indices': current_match_debits.copy(),
+                'debit_dates': [debit_rows[i]['analysis_date'] for i in range(len(debit_rows)) if debit_rows[i]['orig_index'] in current_match_debits],
+                'debit_amounts': current_debit_amounts.copy(),
+                'credit_indices': current_match_credits.copy(),
+                'credit_dates': [credit_rows[i]['analysis_date'] for i in range(len(credit_rows)) if credit_rows[i]['orig_index'] in current_match_credits],
+                'credit_amounts': current_credit_amounts.copy(),
+                'total_credit': sum(current_credit_amounts),
+                'difference': remaining_credit,
+                'match_type': f'Progressive Balance (Partial)',
+                'pass_name': 'Progressive Balance',
+                'is_forced': True
+            }
+            self._register_match(match, matches)
+        
+        if verbose:
+            print(f"   - Found {len(matches)} match blocks.")
+        return matches
+        
+        if current_match_debits or current_match_credits:
+            match = {
+                'debit_indices': current_match_debits.copy(),
+                'debit_dates': [debit_rows[i]['analysis_date'] for i in range(len(debit_rows)) if debit_rows[i]['orig_index'] in current_match_debits],
+                'debit_amounts': current_debit_amounts.copy(),
+                'credit_indices': current_match_credits.copy(),
+                'credit_dates': [credit_rows[i]['analysis_date'] for i in range(len(credit_rows)) if credit_rows[i]['orig_index'] in current_match_credits],
+                'credit_amounts': current_credit_amounts.copy(),
+                'total_credit': sum(current_credit_amounts),
+                'difference': remaining_credit,
+                'match_type': f'Progressive Balance (Partial)',
+                'pass_name': 'Progressive Balance',
+                'is_forced': True
+            }
+            self._register_match(match, matches)
+        
+        if verbose:
+            print(f"   - Found {len(matches)} match blocks.")
+        return matches
 
-        dare_indices_orig = match.get('dare_indices', [])
-        avere_indices_orig = match.get('avere_indices', [])
-
-        # Aggiungi gli indici ai set di indici usati
-        self.used_dare_indices.update(dare_indices_orig)
-        self.used_avere_indices.update(avere_indices_orig)
-
-        # Aggiungi ai risultati formattati
-        # Ensure 'pass_name' is included
-        avere_dates = match.get('avere_date')
-        abbinamenti_list.append({
-            'dare_indices': dare_indices_orig,
-            'dare_date': match.get('dare_date', []),
-            'dare_importi': match.get('dare_importi', []),
-            'avere_data': min(avere_dates) if avere_dates else None,
-            'num_avere': len(avere_indices_orig),
-            'avere_indices': avere_indices_orig,
-            'avere_importi': match.get('avere_importi', []),
-            'somma_avere': match.get('somma_avere', match.get('somma_dare', 0)),
-            'differenza': match.get('differenza', 0),
-            'tipo_match': match.get('tipo_match', 'N/D'),
-            'pass_name': match.get('pass_name', 'N/D')
+    def _register_match(self, match, matches_list):
+        """Marks the elements as 'used' and registers the match."""
+        if not match: return
+        debit_indices_orig = match.get('debit_indices', [])
+        credit_indices_orig = match.get('credit_indices', [])
+        self.used_debit_indices.update(debit_indices_orig)
+        self.used_credit_indices.update(credit_indices_orig)
+        credit_dates = match.get('credit_dates')
+        is_forced = match.get('is_forced', False)
+        matches_list.append({
+            'debit_indices': debit_indices_orig,
+            'debit_dates': match.get('debit_dates', []),
+            'debit_amounts': match.get('debit_amounts', []),
+            'credit_date': min(credit_dates) if credit_dates else None,
+            'num_credits': len(credit_indices_orig),
+            'credit_indices': credit_indices_orig,
+            'credit_amounts': match.get('credit_amounts', []),
+            'total_credit': match.get('total_credit', match.get('total_debit', 0)),
+            'difference': match.get('difference', 0),
+            'match_type': match.get('match_type', 'N/D'),
+            'pass_name': match.get('pass_name', 'N/D'),
+            'is_forced': is_forced
         })
 
-    def _crea_report_excel(self, output_file, original_df):
-        """Salva i risultati in un file Excel multi-foglio."""
-        # --- Foglio Originale ---
-        # Crea una copia per evitare SettingWithCopyWarning e riconverti in euro
-        df_originale_report = original_df.copy()
+    def _reconcile_residual_recovery(self, matches, verbose=True):
+        """
+        NEW: Smart Residual Recovery - tries to match differences from forced blocks
+        with unused movements using extended window.
         
-        # Riconverte gli importi da centesimi a float per la visualizzazione
-        if 'Dare' in df_originale_report.columns:
-            df_originale_report['Dare'] = df_originale_report['Dare'] / 100
-        if 'Avere' in df_originale_report.columns:
-            df_originale_report['Avere'] = df_originale_report['Avere'] / 100
-        # --- MODIFICA: Formatta la data e rimuovi la colonna indice_orig ridondante ---
-        if 'Data' in df_originale_report.columns:
-            df_originale_report['Data'] = pd.to_datetime(df_originale_report['Data']).dt.strftime('%d/%m/%Y')
-        if 'indice_orig' in df_originale_report.columns and 'usato' not in df_originale_report.columns:
-            df_originale_report.drop(columns=['indice_orig'], inplace=True)
+        This simulates human behavior: after a block fails to balance due to time window,
+        try to find additional movements that can compensate the difference.
+        """
+        if verbose:
+            print("\n[NEW] Starting Smart Residual Recovery...")
+        
+        # Get forced matches (from Progressive Balance timeout)
+        forced_matches = [m for m in matches if m.get('is_forced', False)]
+        if not forced_matches:
+            if verbose:
+                print("   - No forced blocks to recover.")
+            return matches
+        
+        # Get unused movements
+        unused_debits = self.debit_df[~self.debit_df['orig_index'].isin(self.used_debit_indices)]
+        unused_credits = self.credit_df[~self.credit_df['orig_index'].isin(self.used_credit_indices)]
+        
+        if verbose:
+            print(f"   - Analyzing {len(forced_matches)} forced blocks with {len(unused_debits)} unused debits and {len(unused_credits)} unused credits.")
+        
+        recovered_count = 0
+        
+        for match in forced_matches:
+            diff = match.get('difference', 0)
+            if diff == 0:
+                continue
+            
+            # Get the date range of the original match
+            debit_dates = match.get('debit_dates', [])
+            credit_dates = match.get('credit_dates', [])
+            if not debit_dates or not credit_dates:
+                continue
+            
+            min_date = min(min(debit_dates), min(credit_dates))
+            max_date = max(max(debit_dates), max(credit_dates))
+            
+            # Try to find movements that can compensate the difference
+            # Look for unused credits that could fill the gap (capienza)
+            for _, credit_row in unused_credits.iterrows():
+                if credit_row['Credit'] >= diff - self.tolerance:
+                    # Found a credit that can compensate!
+                    # But we need to check date compatibility - use effective_date if available
+                    effective_date = credit_row.get('effective_date', credit_row['Date'])
+                    if (effective_date - max_date).days <= self.residual_days_window:
+                        # Create a new match for the recovery
+                        recovery_match = {
+                            'debit_indices': [credit_row['orig_index']],
+                            'debit_dates': [credit_row['Date']],
+                            'debit_amounts': [credit_row['Credit']],
+                            'credit_indices': [],
+                            'credit_dates': [],
+                            'credit_amounts': [],
+                            'total_debit': credit_row['Credit'],
+                            'difference': credit_row['Credit'] - diff,
+                            'match_type': f'Residual Recovery (+{diff/100:.2f})',
+                            'pass_name': 'Residual Recovery',
+                            'is_recovery': True
+                        }
+                        self._register_match(recovery_match, matches)
+                        recovered_count += 1
+                        if verbose:
+                            print(f"   - Recovered: added credit {credit_row['orig_index']} ({credit_row['Credit']/100:.2f}€) to compensate difference {diff/100:.2f}€")
+                        break
+        
+        if verbose:
+            print(f"   - Residual recovery complete. Recovered {recovered_count} additional matches.")
+        
+        return matches
 
+    def _calculate_monthly_balance(self):
+        """Calculates aggregate statistics by month to identify periodic imbalances."""
+        if self.debit_df is None or self.credit_df is None: return pd.DataFrame()
 
-        with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-            # --- Foglio Abbinamenti ---
-            df_abbinamenti_excel = self.df_abbinamenti.copy()
-            if not df_abbinamenti_excel.empty:
-                # --- MODIFICA: Semplificata e corretta la formattazione delle liste per l'output Excel ---
-                # Funzione per formattare correttamente le liste di indici
-                def format_index_list(index_list):
-                    if not isinstance(index_list, list): return index_list
-                    # FIX: Aggiunge 2 per allineare l'indice 0-based di pandas con la riga 2 di Excel
-                    return ', '.join(map(str, [i + 2 for i in index_list]))
+        def aggregate(df, value_col):
+            if df.empty: return pd.DataFrame()
+            temp = df.copy()
+            temp['Month'] = pd.to_datetime(temp['Date']).dt.to_period('M')
+            total = temp.groupby('Month')[value_col].sum()
+            used = temp[temp['used']].groupby('Month')[value_col].sum()
+            res = pd.DataFrame({f'Total {value_col}': total, f'Used {value_col}': used})
+            return res.fillna(0)
 
-                # Funzione per formattare correttamente un singolo valore numerico (es. somma_avere, differenza)
-                def format_currency_value(value):
-                    if pd.isna(value): return ''
-                    # Divide per 100 e formatta con 2 decimali, usando la virgola come separatore
-                    return f"{value/100:.2f}".replace('.', ',')
+        stats_debit = aggregate(self.debit_df, 'Debit')
+        stats_credit = aggregate(self.credit_df, 'Credit')
+        stats = pd.merge(stats_debit, stats_credit, left_index=True, right_index=True, how='outer')
+        
+        absorbed_imbalance = pd.DataFrame()
+        if self.matches_df is not None and not self.matches_df.empty:
+            df_temp_matches = self.matches_df.copy()
+            df_temp_matches['Month'] = df_temp_matches['debit_dates'].apply(lambda x: x[0].to_period('M') if isinstance(x, list) and x else None)
+            df_temp_matches.dropna(subset=['Month'], inplace=True)
+            df_temp_matches['total_debit'] = df_temp_matches['debit_amounts'].apply(lambda x: sum(x) if isinstance(x, list) else 0)
+            df_temp_matches['block_imbalance'] = df_temp_matches['total_debit'] - df_temp_matches['total_credit']
+            absorbed_imbalance = df_temp_matches.groupby('Month')['block_imbalance'].sum().to_frame('Absorbed Imbalance (in match)')
 
-                # Funzione per formattare correttamente le liste di importi (numeri float) con virgola
-                # La funzione originale usava già i centesimi, quindi basta sostituire il punto con la virgola.
-                # Ho modificato la funzione format_list per includere la sostituzione del punto con la virgola.
-                # La divisione per 100 è già presente.
+        if not absorbed_imbalance.empty:
+            stats = pd.merge(stats, absorbed_imbalance, left_index=True, right_index=True, how='outer')
 
-                def format_list(data, is_float=False):
-                    if not isinstance(data, list): return data
-                    items = [f"{i/100:.2f}".replace('.', ',') for i in data] if is_float else data
-                    return ', '.join(map(str, items))
+        stats = stats.fillna(0)
+        stats['Unmatched DEBIT'] = stats['Total Debit'] - stats['Used Debit']
+        stats['Unmatched CREDIT'] = stats['Total Credit'] - stats['Used Credit']
+        stats['Residual Imbalance (DEBIT - CREDIT)'] = stats['Unmatched DEBIT'] - stats['Unmatched CREDIT']
+        if 'Absorbed Imbalance (in match)' not in stats.columns:
+            stats['Absorbed Imbalance (in match)'] = 0
+        stats['Final Monthly Imbalance'] = stats['Residual Imbalance (DEBIT - CREDIT)'] + stats['Absorbed Imbalance (in match)']
+        stats = stats[['Total Debit', 'Used Debit', 'Unmatched DEBIT', 'Total Credit', 'Used Credit', 'Unmatched CREDIT', 'Residual Imbalance (DEBIT - CREDIT)', 'Absorbed Imbalance (in match)', 'Final Monthly Imbalance']]
+        stats = stats.sort_index()
+        stats.index = stats.index.astype(str)
+        stats.index.name = 'Month'
+        return stats.reset_index()
 
-                for col in ['dare_indices', 'avere_indices']: df_abbinamenti_excel[col] = df_abbinamenti_excel[col].apply(format_index_list)
-                for col in ['dare_importi', 'avere_importi']: df_abbinamenti_excel[col] = df_abbinamenti_excel[col].apply(lambda x: format_list(x, is_float=True))
-                df_abbinamenti_excel['dare_date'] = df_abbinamenti_excel['dare_date'].apply(lambda x: ', '.join([d.strftime('%d/%m/%y') for d in x]) if isinstance(x, list) else x.strftime('%d/%m/%y'))
-                df_abbinamenti_excel['avere_data'] = pd.to_datetime(df_abbinamenti_excel['avere_data']).dt.strftime('%d/%m/%y')
+    def _verify_total_balance(self, tot_debit_orig, tot_credit_orig, verbose=True):
+        if self.debit_df is None or self.credit_df is None: return
+        tot_debit_final = self.debit_df['Debit'].sum()
+        tot_credit_final = self.credit_df['Credit'].sum()
+        diff_debit = tot_debit_final - tot_debit_orig
+        diff_credit = tot_credit_final - tot_credit_orig
+        if verbose:
+            print("\n🔍 Verifying Total Balances (Original vs Final):")
+            print(f"   DEBIT:  {tot_debit_orig/100:,.2f} € (Orig) vs {tot_debit_final/100:,.2f} € (Fin) -> Delta: {diff_debit/100:,.2f} €")
+            print(f"   CREDIT: {tot_credit_orig/100:,.2f} € (Orig) vs {tot_credit_final/100:,.2f} € (Fin) -> Delta: {diff_credit/100:,.2f} €")
+        if abs(diff_debit) > 1 or abs(diff_credit) > 1:
+             print(f"⚠️  WARNING: Discrepancy detected in totals! DEBIT: {diff_debit}, CREDIT: {diff_credit}", file=sys.stderr)
+        elif verbose:
+             print("   ✅ Balance confirmed: No loss of amounts during splitting.")
 
-                # Applica la formattazione per somma_avere e differenza
-                df_abbinamenti_excel['somma_avere'] = df_abbinamenti_excel['somma_avere'].apply(format_currency_value)
-                df_abbinamenti_excel['differenza'] = df_abbinamenti_excel['differenza'].apply(format_currency_value)
-
-            df_abbinamenti_excel.to_excel(writer, sheet_name='Abbinamenti', index=False)
-
-            # --- Fogli Non Riconciliati ---
-            if not self.dare_non_util.empty:
-                df_dare_report = self.dare_non_util[['indice_orig', 'Data', 'Dare']].copy()
-                # FIX: Aggiunge 2 per allineare l'indice con la riga di Excel
-                df_dare_report['indice_orig'] = df_dare_report['indice_orig'] + 2
-                df_dare_report['Data'] = pd.to_datetime(df_dare_report['Data']).dt.strftime('%d/%m/%y')
-                df_dare_report['Dare'] = df_dare_report['Dare'].apply(lambda x: f"{x/100:.2f}".replace('.', ','))
-                df_dare_report.rename(columns={'indice_orig': 'Indice Riga', 'Dare': 'Importo'}).to_excel(writer, sheet_name='DARE non utilizzati', index=False)
-            else:
-                pd.DataFrame(columns=['Indice Riga', 'Data', 'Importo']).to_excel(writer, sheet_name='DARE non utilizzati', index=False)
-            if not self.avere_non_riconc.empty:
-                df_avere_report = self.avere_non_riconc[['indice_orig', 'Data', 'Avere']].copy()
-                # FIX: Aggiunge 2 per allineare l'indice con la riga di Excel
-                df_avere_report['indice_orig'] = df_avere_report['indice_orig'] + 2
-                df_avere_report['Data'] = pd.to_datetime(df_avere_report['Data']).dt.strftime('%d/%m/%y')
-                df_avere_report['Avere'] = df_avere_report['Avere'].apply(lambda x: f"{x/100:.2f}".replace('.', ','))
-                df_avere_report.rename(columns={'indice_orig': 'Indice Riga', 'Avere': 'Importo'}).to_excel(writer, sheet_name='AVERE non riconciliati', index=False)
-            else:
-                pd.DataFrame(columns=['Indice Riga', 'Data', 'Importo']).to_excel(writer, sheet_name='AVERE non riconciliati', index=False)
-
-            # --- Foglio con i dati originali ---
-            df_originale_report.to_excel(writer, sheet_name='Originale', index=False)
-
-            # --- Foglio Statistiche ---
-            stats = self.get_stats()
-            if stats and self.dare_df is not None and self.avere_df is not None:
-                def format_eur(value): return f"{value:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
-                
-                df_incassi = pd.DataFrame({
-                    'TOT': [stats.get('Totale Incassi (DARE)'), format_eur(self.dare_df['Dare'].sum() / 100)],
-                    'USATI': [stats.get('Incassi (DARE) utilizzati'), format_eur(self.dare_df[self.dare_df['usato']]['Dare'].sum() / 100)],
-                    '% USATI': [stats.get('% Incassi (DARE) utilizzati'), f"{stats.get('_raw_perc_dare_importo', 0):.2f}%"],
-                    'Delta': [stats.get('Incassi (DARE) non utilizzati'), format_eur(stats.get('_raw_importo_dare_non_util', 0))]
-                }, index=['Numero', 'Importo'])
-
-                df_versamenti = pd.DataFrame({
-                    'TOT': [stats.get('Totale Versamenti (AVERE)'), format_eur(self.avere_df['Avere'].sum() / 100)],
-                    'USATI': [stats.get('Versamenti (AVERE) riconciliati'), format_eur(self.avere_df[self.avere_df['usato']]['Avere'].sum() / 100)],
-                    '% USATI': [stats.get('% Versamenti (AVERE) riconciliati'), f"{stats.get('_raw_perc_avere_importo', 0):.2f}%"],
-                    'Delta': [stats.get('Versamenti (AVERE) non riconciliati'), format_eur(stats.get('_raw_importo_avere_non_riconc', 0))]
-                }, index=['Numero', 'Importo'])
-
-                delta_conteggio = stats.get('Incassi (DARE) non utilizzati', 0) - stats.get('Versamenti (AVERE) non riconciliati', 0)
-                df_confronto = pd.DataFrame({
-                    'Delta Conteggio': [delta_conteggio],
-                    'Delta Importo (€)': [stats.get('Delta finale (DARE - AVERE)')]
-                }, index=['Incassi vs Versamenti'])
-
-                df_incassi.to_excel(writer, sheet_name='Statistiche', startrow=2)
-                df_versamenti.to_excel(writer, sheet_name='Statistiche', startrow=8)
-                df_confronto.to_excel(writer, sheet_name='Statistiche', startrow=14)
-
-            sheet_stats = writer.sheets['Statistiche']
-            sheet_stats.cell(row=1, column=1, value="Riepilogo Incassi (DARE)")
-            sheet_stats.cell(row=7, column=1, value="Riepilogo Versamenti (AVERE)")
-            sheet_stats.cell(row=13, column=1, value="Confronto Sbilancio Finale")
-
-            # --- AGGIUNTA: Foglio Riepilogo Parametri ---
-            params_data = {
-                "Parametro": [
-                    "Tolleranza",
-                    "Finestra Temporale (giorni)",
-                    "Max Combinazioni per Match",
-                    "Soglia Avvio Analisi Residui",
-                    "Finestra Temporale Residui (giorni)",
-                    "Strategia di Ordinamento Iniziale",
-                    "Direzione Ricerca Temporale",
-                    "Mappatura Colonne di Input"
-                ],
-                "Valore Utilizzato": [
-                    f"{self.tolleranza / 100:.2f}".replace('.', ','), # Mostra in euro
-                    self.giorni_finestra,
-                    self.max_combinazioni,
-                    f"{self.soglia_residui / 100:.2f}".replace('.', ','), # Mostra in euro
-                    self.giorni_finestra_residui,
-                    self.sorting_strategy,
-                    self.search_direction,
-                    str(self.column_mapping)
-                ]
-            }
-            df_params = pd.DataFrame(params_data)
-            df_params.to_excel(writer, sheet_name='Riepilogo Parametri', index=False)
+    def create_excel_report(self, output_file, original_df):
+        from reporting import ExcelReporter
+        reporter = ExcelReporter(self)
+        reporter.generate_report(output_file, original_df)
 
     def get_stats(self):
-        """Calcola e restituisce un dizionario completo di statistiche."""
-        if self.dare_df is None or self.avere_df is None or 'usato' not in self.dare_df.columns or 'usato' not in self.avere_df.columns: return {}
-
-        num_dare_tot = len(self.dare_df)
-        num_dare_usati = int(self.dare_df['usato'].sum()) # Ora la colonna 'usato' esiste
-        imp_dare_tot = self.dare_df['Dare'].sum() # in cents
-        imp_dare_usati = self.dare_df[self.dare_df['usato']]['Dare'].sum() # in cents
-
-        num_avere_tot = len(self.avere_df)
-        num_avere_usati = int(self.avere_df['usato'].sum()) # Ora la colonna 'usato' esiste
-        imp_avere_tot = self.avere_df['Avere'].sum() # in cents
-        imp_avere_usati = self.avere_df[self.avere_df['usato']]['Avere'].sum() # in cents
-
-        # Ricalcola dare_non_util e avere_non_riconc basandosi sulla colonna 'usato' aggiornata
-        importo_dare_non_util = (self.dare_non_util['Dare'].sum() / 100) if self.dare_non_util is not None and not self.dare_non_util.empty else 0
-        importo_avere_non_riconc = (self.avere_non_riconc['Avere'].sum() / 100) if self.avere_non_riconc is not None and not self.avere_non_riconc.empty else 0
-
+        if self.debit_df is None or self.credit_df is None or 'used' not in self.debit_df.columns or 'used' not in self.credit_df.columns: return {}
+        num_debit_tot, amt_debit_tot = len(self.debit_df), self.debit_df['Debit'].sum()
+        num_debit_used, amt_debit_used = int(self.debit_df['used'].sum()), self.debit_df[self.debit_df['used']]['Debit'].sum()
+        num_credit_tot, amt_credit_tot = len(self.credit_df), self.credit_df['Credit'].sum()
+        num_credit_used, amt_credit_used = int(self.credit_df['used'].sum()), self.credit_df[self.credit_df['used']]['Credit'].sum()
+        unused_debit_amount = (self.unused_debit_df['Debit'].sum() / 100) if self.unused_debit_df is not None and not self.unused_debit_df.empty else 0
+        unreconciled_credit_amount = (self.unreconciled_credit_df['Credit'].sum() / 100) if self.unreconciled_credit_df is not None and not self.unreconciled_credit_df.empty else 0
+        structural_imbalance = amt_debit_tot - amt_credit_tot
         return {
-            'Totale Incassi (DARE)': num_dare_tot,
-            'Incassi (DARE) utilizzati': num_dare_usati,
-            '% Incassi (DARE) utilizzati': f"{(num_dare_usati / num_dare_tot * 100) if num_dare_tot > 0 else 0:.1f}%",
-            'Incassi (DARE) non utilizzati': num_dare_tot - num_dare_usati,
-            
-            'Totale Versamenti (AVERE)': num_avere_tot,
-            'Versamenti (AVERE) riconciliati': num_avere_usati,
-            '% Versamenti (AVERE) riconciliati': f"{(num_avere_usati / num_avere_tot * 100) if num_avere_tot > 0 else 0:.1f}%",
-            'Versamenti (AVERE) non riconciliati': num_avere_tot - num_avere_usati,
-
-            'Delta finale (DARE - AVERE)': f"{(importo_dare_non_util - importo_avere_non_riconc):,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."),
-            
-            # Valori grezzi per aggregazioni e calcoli interni
-            '_raw_importo_dare_non_util': importo_dare_non_util,
-            '_raw_importo_avere_non_riconc': importo_avere_non_riconc,
-            '_raw_perc_dare_importo': (imp_dare_usati / imp_dare_tot * 100) if imp_dare_tot > 0 else 0,
-            '_raw_perc_avere_importo': (imp_avere_usati / imp_avere_tot * 100) if imp_avere_tot > 0 else 0,
+            'Total Receipts (DEBIT)': num_debit_tot, 'Used Receipts (DEBIT)': num_debit_used,
+            '% Used Receipts (DEBIT) (Num)': f"{(num_debit_used / num_debit_tot * 100) if num_debit_tot > 0 else 0:.1f}%",
+            '% Covered Receipts (DEBIT) (Vol)': f"{(amt_debit_used / amt_debit_tot * 100) if amt_debit_tot > 0 else 0:.1f}%",
+            'Unused Receipts (DEBIT)': num_debit_tot - num_debit_used,
+            'Total Deposits (CREDIT)': num_credit_tot, 'Reconciled Deposits (CREDIT)': num_credit_used,
+            '% Reconciled Deposits (CREDIT) (Num)': f"{(num_credit_used / num_credit_tot * 100) if num_credit_tot > 0 else 0:.1f}%",
+            '% Covered Deposits (CREDIT) (Vol)': f"{(amt_credit_used / amt_credit_tot * 100) if amt_credit_tot > 0 else 0:.1f}%",
+            'Unreconciled Deposits (CREDIT)': num_credit_tot - num_credit_used,
+            'Final delta (DEBIT - CREDIT)': f"{(unused_debit_amount - unreconciled_credit_amount):,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."),
+            'Structural Imbalance (Source)': f"{(structural_imbalance / 100):,.2f} €".replace(",", "X").replace(".", ",").replace("X", "."),
+            '_raw_unused_debit_amount': unused_debit_amount, '_raw_unreconciled_credit_amount': unreconciled_credit_amount,
+            '_raw_debit_amount_perc': (amt_debit_used / amt_debit_tot * 100) if amt_debit_tot > 0 else 0,
+            '_raw_credit_amount_perc': (amt_credit_used / amt_credit_tot * 100) if amt_credit_tot > 0 else 0,
         }
 
+    def _evaluate_best_configuration(self, df, verbose=True):
+        if verbose: print("\n🧠 AUTO-EVALUATION: Analyzing data to select the best strategy...")
+        
+        # If valuta_date_column is set, MUST use Subset Sum as it has valuta_date filtering
+        # Also respect user's search_direction preference
+        if self.valuta_date_column:
+            if verbose:
+                print("   ⚠️  Valuta Date column detected - using Subset Sum (required for valuta filtering)")
+            # Use user's search_direction, default to future_only if not specified
+            search_dir = self.search_direction if self.search_direction else 'future_only'
+            return {
+                'algorithm': 'subset_sum',
+                'sorting_strategy': 'date',
+                'search_direction': search_dir,
+                'days_window': max(self.days_window, 7),
+                'max_combinations': max(self.max_combinations, 10)
+            }
+        
+        # Without valuta_date, try to find best algorithm but respect user's search_direction
+        strategies = [
+            {'name': 'Progressive Balance (Strict)', 'params': {'algorithm': 'progressive_balance', 'sorting_strategy': 'date', 'search_direction': self.search_direction}},
+            {'name': 'Subset Sum (Standard)', 'params': {'algorithm': 'subset_sum', 'sorting_strategy': self.sorting_strategy, 'search_direction': self.search_direction}},
+            {'name': 'Greedy Amount First', 'params': {'algorithm': 'greedy_amount_first'}}
+        ]
+        if len(df) < 5000:
+             strategies.append({'name': 'Subset Sum (Aggressive)', 'params': {'algorithm': 'subset_sum', 'days_window': max(self.days_window, 30), 'max_combinations': max(self.max_combinations, 12), 'search_direction': self.search_direction}})
+
+        best_score, best_params = -1, {}
+        for strat in strategies:
+            if verbose: print(f"   👉 Testing: {strat['name']}...", end="")
+            cfg = { 'tolerance': self.tolerance / 100.0, 'days_window': self.days_window, 'max_combinations': self.max_combinations, 'residual_threshold': self.residual_threshold / 100.0, 'residual_days_window': self.residual_days_window, 'sorting_strategy': self.sorting_strategy, 'search_direction': self.search_direction, 'column_mapping': self.column_mapping, 'use_numba': self.use_numba, 'ignore_tolerance': self.ignore_tolerance, 'enable_best_fit': self.enable_best_fit }
+            cfg.update(strat['params'])
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                     sim_engine = ReconciliationEngine(**cfg)
+                     stats = sim_engine.run(df.copy(), output_file=None, verbose=False)
+                if stats:
+                    score = stats.get('_raw_debit_amount_perc', 0) + stats.get('_raw_credit_amount_perc', 0)
+                    if strat['params']['algorithm'] == 'progressive_balance' and score > 190: score += 5
+                    if verbose: print(f" Score: {score:.2f}")
+                    if score > best_score:
+                        best_score, best_params = score, strat['params']
+                else:
+                    if verbose: print(" Failed.")
+            except Exception as e:
+                if verbose: print(f" Error: {e}")
+        if verbose: print(f"   🏆 Selected Strategy: {best_params.get('algorithm')} (Score: {best_score:.2f})")
+        return best_params
+
     def run(self, input_file, output_file=None, verbose=True):
-        """
-        Metodo pubblico principale per eseguire l'intero processo di riconciliazione.
-        """
         if not NUMBA_AVAILABLE and verbose:
-            # Stampa un avviso se Numba non è disponibile
-            print("\n⚠️  ATTENZIONE: Libreria 'numba' non trovata. Esecuzione in modalità non ottimizzata (più lenta).")
-            print("   Per performance migliori, installala con: pip install numba\n")
+            print("\n⚠️  WARNING: 'numba' library not found. Running in non-optimized mode (slower).")
+            print("   For better performance, install it with: pip install numba\n")
         try:
-           # Reset degli indici usati per ogni esecuzione, importante per l'ottimizzatore
-            self.used_dare_indices = set()
-            self.used_avere_indices = set()
-
-            # --- MODIFICA: Gestione flessibile dell'input ---
-            # L'ottimizzatore passa un DataFrame per efficienza, main.py passa un path.
+            self.used_debit_indices, self.used_credit_indices = set(), set()
             if isinstance(input_file, pd.DataFrame):
-                if verbose: print("1. Utilizzo del DataFrame pre-caricato.")
-                # L'input è già un df processato, lo usiamo direttamente
+                if verbose: print("1. Using pre-loaded DataFrame.")
                 df = input_file
+                # Ensure required columns exist for DataFrame passed directly
+                if 'store_id' not in df.columns:
+                    df['store_id'] = None
+                # Handle valuta_date column - rename and convert to datetime
+                if self.valuta_date_column and self.valuta_date_column in df.columns:
+                    df.rename(columns={self.valuta_date_column: 'valuta_date'}, inplace=True)
+                    df['valuta_date'] = pd.to_datetime(df['valuta_date'], errors='coerce', dayfirst=True)
+                elif 'valuta_date' not in df.columns:
+                    df['valuta_date'] = pd.NaT
             else:
-                if verbose: print(f"1. Caricamento e validazione del file: {input_file}")
-                df = self.carica_file(input_file)
+                if verbose: print(f"1. Loading and validating file: {input_file}")
+                df = self.load_file(input_file)
 
-            if verbose: print("2. Separazione e ordinamento movimenti DARE/AVERE...")
-            dare_df, avere_df = self._separa_movimenti(df)
+            tot_debit_orig, tot_credit_orig = df['Debit'].sum(), df['Credit'].sum()
+            if verbose: print("2. Separating and sorting DEBIT/CREDIT movements...")
+            self._separate_movements(df)
+            if verbose: print("3. Starting reconciliation passes...")
+            all_matches = []
 
-            if verbose: print("3. Avvio passate di riconciliazione...")
-            # _riconcilia ora restituisce i DataFrame aggiornati con la colonna 'usato'
-            self.dare_df, self.avere_df, self.df_abbinamenti = self._riconcilia(dare_df, avere_df, verbose=verbose)
+            if self.algorithm == 'auto':
+                best_params = self._evaluate_best_configuration(df, verbose=verbose)
+                if best_params:
+                    if verbose: print(f"   ⚙️  Applying optimal parameters: {best_params}")
+                    for k, v in best_params.items():
+                        if hasattr(self, k): setattr(self, k, v)
+                    if verbose: print(f"   -> Proceeding with algorithm: {self.algorithm}")
 
-            # Calcola i dataframe dei non utilizzati, necessari per report e statistiche
-            self.dare_non_util = self.dare_df[~self.dare_df['usato']].copy()
-            self.avere_non_riconc = self.avere_df[~self.avere_df['usato']].copy()
+            algorithms_to_run = []
+            if self.algorithm == 'all':
+                algorithms_to_run = ['progressive_balance', 'subset_sum', 'greedy_amount_first']
+            elif self.algorithm in ['progressive_balance', 'subset_sum', 'greedy_amount_first']:
+                algorithms_to_run = [self.algorithm]
+            else: # default
+                algorithms_to_run = ['subset_sum']
 
-            if verbose: print("4. Calcolo statistiche finali...")
+            for algo in algorithms_to_run:
+                if algo == 'progressive_balance':
+                    all_matches.extend(self._reconcile_progressive_balance(verbose=verbose))
+                elif algo == 'subset_sum':
+                    all_matches.extend(self._reconcile_subset_sum(verbose=verbose))
+                elif algo == 'greedy_amount_first':
+                    all_matches.extend(self._reconcile_greedy_amount_first(verbose=verbose))
+
+            # NEW: Run residual recovery after main algorithms
+            if verbose: print("\n[NEW] Running Smart Residual Recovery...")
+            all_matches = self._reconcile_residual_recovery(all_matches, verbose=verbose)
+
+            self.debit_df['used'] = self.debit_df['orig_index'].isin(self.used_debit_indices)
+            self.credit_df['used'] = self.credit_df['orig_index'].isin(self.used_credit_indices)
+            self.matches_df = self._finalize_matches(all_matches)
+            self._verify_total_balance(tot_debit_orig, tot_credit_orig, verbose=verbose)
+
+            structural_diff = tot_debit_orig - tot_credit_orig
+            if verbose and abs(structural_diff) > 100:
+                 print(f"\n⚖️  INITIAL DATA ANALYSIS: Structural imbalance detected!")
+                 print(f"    Total DEBIT (Receipts):    {tot_debit_orig/100:,.2f} €")
+                 print(f"    Total CREDIT (Deposits): {tot_credit_orig/100:,.2f} €")
+                 print(f"    Difference at source:    {structural_diff/100:,.2f} € (This amount can never be reconciled)")
+
+            self.unused_debit_df = self.debit_df[~self.debit_df['used']].copy()
+            self.unreconciled_credit_df = self.credit_df[~self.credit_df['used']].copy()
+
+            if verbose: print("4. Calculating final statistics...")
             stats = self.get_stats()
-
-            # Se viene fornito un file di output, salva i risultati
             if output_file:
-                if verbose: print(f"5. Generazione report Excel in: {output_file}")
-                self._crea_report_excel(output_file, df)
-                if verbose: print("✓ Report Excel creato con successo.")
-
-            if verbose: print("\n🎉 Riconciliazione completata con successo!")
+                if verbose: print(f"5. Generating Excel report in: {output_file}")
+                self.create_excel_report(output_file, df)
+                if verbose: print("✓ Excel report created successfully.")
+            if verbose: print("\n🎉 Reconciliation completed successfully!")
             return stats
-
         except (FileNotFoundError, ValueError, IndexError) as e:
-            # Gestisce tutti gli errori noti (file non trovato, colonne mancanti, file corrotto)
-            print(f"\n❌ ERRORE CRITICO durante l'elaborazione di '{input_file}': {e}", file=sys.stderr)
+            print(f"\n❌ CRITICAL ERROR during processing of '{input_file}': {e}", file=sys.stderr)
             return None
         except Exception as e:
-            # Gestisce qualsiasi altro errore imprevisto
-            print(f"\n❌ ERRORE IMPREVISTO: {e}", file=sys.stderr)
+            print(f"\n❌ UNEXPECTED ERROR: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc()
             return None
 
-# --- FUNZIONE COMPILATA CON NUMBA ---
-# Questa funzione vive al di fuori della classe per essere compilata correttamente da Numba.
-# @jit è il decoratore che compila la funzione in codice macchina.
-# nopython=True assicura che non ci sia fallback all'interprete Python, garantendo massima velocità.
-@jit(nopython=True) # Questo decoratore sarà quello reale di Numba o quello fittizio
-def _numba_find_combination(target, candidati_np, max_combinazioni, tolleranza):
-    """
-    Trova una combinazione di candidati la cui somma si avvicina al target.
-    Questa versione è ottimizzata per Numba e opera su array NumPy.
-
-    Args:
-        target (int): L'importo da raggiungere.
-        candidati_np (np.array): Array 2D dove ogni riga è [importo, indice_originale].
-        max_combinazioni (int): Numero massimo di elementi nella combinazione.
-        tolleranza (int): Margine di errore accettabile per la somma.
-
-    Returns:
-        np.array: Un array degli indici originali della combinazione trovata, o un array vuoto.
-    """
-    # Stack per l'esplorazione iterativa, per evitare limiti di ricorsione di Python.
-    # Contiene tuple: (indice_partenza, somma_corrente, numero_elementi_nel_percorso)
-    stack = [(0, 0, 0)]
-    
-    # Array per tenere traccia del percorso della combinazione corrente (indici dei candidati)
-    path = np.full(max_combinazioni, -1, dtype=np.int64)
-
+# --- FUNCTION COMPILED WITH NUMBA ---
+@jit(nopython=True)
+def _numba_find_combination(target, candidates_np, max_combinations, tolerance):
+    """Finds an exact combination of candidates that sum to a target amount."""
+    stack, n_candidates = [], len(candidates_np)
+    for i in range(n_candidates - 1, -1, -1):
+        val = candidates_np[i, 0]
+        if val <= target + tolerance:
+            stack.append((i, val, 1))
+    path = np.full(max_combinations, -1, dtype=np.int64)
     while len(stack) > 0:
-        start_index, current_sum, path_len = stack.pop()
-
-        # Esplora i candidati a partire dall'indice corrente
-        for i in range(start_index, len(candidati_np)):
-            new_sum = current_sum + candidati_np[i, 0]
-            
-            # Se la somma è nel range di tolleranza e abbiamo più di un elemento, abbiamo trovato una soluzione.
-            if abs(target - new_sum) <= tolleranza and path_len + 1 > 1:
-                path[path_len] = i
-                # Estrai gli indici originali dalla combinazione trovata e restituiscili
-                result_indices = np.full(path_len + 1, 0, dtype=np.int64)
-                for k in range(path_len + 1):
-                    result_indices[k] = candidati_np[path[k], 1]
-                return result_indices
-
-            # Se non abbiamo superato il limite di combinazioni e la somma è ancora inferiore al target,
-            # aggiungi un nuovo stato allo stack per continuare l'esplorazione.
-            if path_len + 1 < max_combinazioni and new_sum < target + tolleranza:
-                path[path_len] = i
-                stack.append((i + 1, new_sum, path_len + 1))
-
-    # Se lo stack si svuota, non è stata trovata nessuna combinazione.
+        idx, current_sum, level = stack.pop()
+        path[level-1] = idx
+        if abs(target - current_sum) <= tolerance:
+             result_indices = np.full(level, 0, dtype=np.int64)
+             for k in range(level):
+                 result_indices[k] = candidates_np[path[k], 1]
+             return result_indices
+        if level >= max_combinations: continue
+        remaining_slots = max_combinations - level
+        if idx + 1 < n_candidates:
+            max_add = candidates_np[idx+1, 0] * remaining_slots
+            if current_sum + max_add < target - tolerance: continue
+        elif current_sum < target - tolerance:
+            continue
+        for i in range(n_candidates - 1, idx, -1):
+            val = candidates_np[i, 0]
+            new_sum = current_sum + val
+            if new_sum <= target + tolerance:
+                 stack.append((i, new_sum, level + 1))
     return np.empty(0, dtype=np.int64)
+
+@jit(nopython=True)
+def _numba_find_best_fit_combination(target, candidates_np, max_combinations, tolerance):
+    """Finds the best-fitting combination of candidates that maximizes the sum without exceeding the target amount."""
+    stack, n_candidates = [], len(candidates_np)
+    for i in range(n_candidates - 1, -1, -1):
+        val = candidates_np[i, 0]
+        if val <= target + tolerance:
+            stack.append((i, val, 1))
+    path = np.full(max_combinations, -1, dtype=np.int64)
+    best_sum, best_path_len = 0, 0
+    best_path = np.full(max_combinations, -1, dtype=np.int64)
+    min_fill_threshold = target * 0.01
+    while len(stack) > 0:
+        idx, current_sum, level = stack.pop()
+        path[level-1] = idx
+        if current_sum > best_sum:
+            best_sum, best_path_len = current_sum, level
+            for k in range(level): best_path[k] = path[k]
+            if abs(target - best_sum) <= tolerance: break
+        if level >= max_combinations: continue
+        remaining_slots = max_combinations - level
+        if idx + 1 < n_candidates:
+             max_potential = current_sum + candidates_np[idx+1, 0] * remaining_slots
+             if max_potential <= best_sum: continue
+        else:
+             continue
+        for i in range(n_candidates - 1, idx, -1):
+            val = candidates_np[i, 0]
+            new_sum = current_sum + val
+            if new_sum > target + tolerance: continue
+            if new_sum + (val * (remaining_slots - 1)) <= best_sum: continue
+            stack.append((i, new_sum, level + 1))
+    if best_path_len > 0 and best_sum >= min_fill_threshold:
+        result_indices = np.full(best_path_len, 0, dtype=np.int64)
+        for k in range(best_path_len):
+            result_indices[k] = candidates_np[best_path[k], 1]
+        return result_indices
+    return np.empty(0, dtype=np.int64)
+
+# Aliases
+RiconciliatoreContabile = ReconciliationEngine
+AccountingReconciler = ReconciliationEngine
