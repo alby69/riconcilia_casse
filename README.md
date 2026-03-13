@@ -80,28 +80,39 @@ Example:
 
 **Philosophy**: "Walk through chronologically like a human would"
 
-This algorithm simulates how a person would reconcile by scanning through sorted transactions:
+This algorithm processes CREDITs sequentially in chronological order, matching them with available DEBITs:
 
 ```
-Example (sorted by date):
+Logic:
+1. Create Data_Analisi = Data_Valuta (if present) else Data Registrazione
+2. Sort everything by Data_Analisi ascending
+3. Process CREDITs one by one:
+   - Take the CREDIT amount
+   - Find first unused DEBIT (sorted by Data_Analisi)
+   - Subtract DEBIT from CREDIT
+   - If DEBIT > CREDIT: remaining DEBIT carries forward to next CREDIT
+   - If CREDIT > DEBIT: remaining CREDIT continues to next DEBIT
+   - Mark used items
+4. When balance reaches zero → create a match block
+
+Example:
+Sorted by Data_Analisi:
 Jan 1:  DEBIT €100
-Jan 2:  DEBIT €200
-Jan 3:  CREDIT €150
-Jan 4:  DEBIT €50
-Jan 5:  CREDIT €200
+Jan 2:  DEBIT €200  
+Jan 3:  CREDIT €150 → remaining: 150-100=50, use DEBIT 100
+Jan 4:  DEBIT €50   → remaining: 50-50=0 ✅ MATCH: D(100+200) = C(150+50)
 
-Step-by-step:
-1. Start: cum_debit=0, cum_credit=0
-2. Add DEBIT €100 → cum_debit=100
-3. Add DEBIT €200 → cum_debit=300
-4. Add CREDIT €150 → cum_credit=150, diff=150
-5. Add DEBIT €50  → cum_debit=350, diff=200
-6. Add CREDIT €200 → cum_credit=350, diff=0 ✅ MATCH!
-
-Block: DEBITs (100+200+50) = CREDITs (150+200) = €350
+Process:
+1. Start with CREDIT €150
+2. Subtract first DEBIT €100 → remaining €50
+3. Subtract next DEBIT €50 → remaining €0
+4. Match found! Block: D(100+50) = C(150)
 ```
 
-**Key Feature - Forced Blocks**: When the time window expires before balance is reached, the algorithm **always** registers the match (forced) instead of discarding data. This prevents losing information.
+**Key Features**:
+- **Forced Blocks**: When no more DEBITs are available but CREDIT has remaining, the algorithm registers the match anyway (forced) to prevent losing data
+- **Partial Usage**: When a DEBIT is larger than needed, it's split - the used portion goes to the match, the remainder stays available for future CREDITs
+- **Data Valuta Support**: Uses Data_Valuta for CREDIT transactions to handle year-end transitions (December deposits registered in January)
 
 ### 3. Greedy Amount First Algorithm
 
