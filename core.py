@@ -1032,6 +1032,7 @@ class ReconciliationEngine:
             "debit_indices",
             "debit_dates",
             "debit_amounts",
+            "total_debit",
             "credit_date",
             "num_credits",
             "credit_indices",
@@ -1176,6 +1177,7 @@ class ReconciliationEngine:
                         "debit_indices": [],
                         "debit_dates": [],
                         "debit_amounts": [],
+                        "total_debit": 0,
                         "credit_indices": [credit_orig_idx],
                         "credit_dates": [credit_date],
                         "credit_amounts": [credit_amount],
@@ -1195,6 +1197,7 @@ class ReconciliationEngine:
                     "debit_indices": [],
                     "debit_dates": [],
                     "debit_amounts": [],
+                    "total_debit": 0,
                     "credit_indices": [credit_orig_idx],
                     "credit_dates": [credit_date],
                     "credit_amounts": [credit_amount],
@@ -1241,7 +1244,8 @@ class ReconciliationEngine:
                         for d_idx in candidate_debit_indices
                         if debit_rows[d_idx]["orig_index"] in current_match_debits
                     ],
-                    "debit_amounts": [total_debit_used],
+                    "debit_amounts": current_debit_amounts.copy(),
+                    "total_debit": total_debit_used,
                     "credit_indices": [credit_orig_idx],
                     "credit_dates": [credit_date],
                     "credit_amounts": [credit_amount],
@@ -1258,7 +1262,8 @@ class ReconciliationEngine:
                         for d_idx in candidate_debit_indices
                         if debit_rows[d_idx]["orig_index"] in current_match_debits
                     ],
-                    "debit_amounts": [total_debit_used],
+                    "debit_amounts": current_debit_amounts.copy(),
+                    "total_debit": total_debit_used,
                     "credit_indices": [credit_orig_idx],
                     "credit_dates": [credit_date],
                     "credit_amounts": [credit_amount],
@@ -1275,7 +1280,8 @@ class ReconciliationEngine:
                         for d_idx in candidate_debit_indices
                         if debit_rows[d_idx]["orig_index"] in current_match_debits
                     ],
-                    "debit_amounts": [total_debit_used],
+                    "debit_amounts": current_debit_amounts.copy(),
+                    "total_debit": total_debit_used,
                     "credit_indices": [credit_orig_idx],
                     "credit_dates": [credit_date],
                     "credit_amounts": [credit_amount],
@@ -1293,7 +1299,8 @@ class ReconciliationEngine:
                         for d_idx in candidate_debit_indices
                         if debit_rows[d_idx]["orig_index"] in current_match_debits
                     ],
-                    "debit_amounts": [total_debit_used],
+                    "debit_amounts": current_debit_amounts.copy(),
+                    "total_debit": total_debit_used,
                     "credit_indices": [credit_orig_idx],
                     "credit_dates": [credit_date],
                     "credit_amounts": [credit_amount],
@@ -1329,6 +1336,7 @@ class ReconciliationEngine:
                 "debit_indices": debit_indices_orig,
                 "debit_dates": match.get("debit_dates", []),
                 "debit_amounts": match.get("debit_amounts", []),
+                "total_debit": match.get("total_debit", 0),
                 "credit_date": min(credit_dates) if credit_dates else None,
                 "num_credits": len(credit_indices_orig),
                 "credit_indices": credit_indices_orig,
