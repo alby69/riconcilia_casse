@@ -52,12 +52,14 @@ Match: 3D vs 1C
 ```
 - **Significato**: 3 Debit abbinati a 1 Credit
 - **Interpretazione**: Abbinamento corretto
+- **Difference**: 0€
 
 ```
-Match with tolerance (+X.XX€)
+Match: 3D vs 1C (eccedenza credit: +X.XX€)
 ```
-- **Significato**: Match con differenza entro la tolleranza
-- **Interpretazione**: Abbinamento accettabile, differenza minima
+- **Significato**: Match dove la somma degli incassi supera il versamento, ma la differenza è entro la tolleranza
+- **Interpretazione**: Abbinamento accettabile - l'eccedenza verrà usata per i prossimi versamenti
+- **Difference**: X.XX€ (valore positivo)
 
 #### ⚠️ ANOMALY
 ```
@@ -65,6 +67,7 @@ ANOMALY: X.XX€ non coperti (differenza oltre tolleranza)
 ```
 - **Significato**: Il versamento aveva incassi disponibili ma la somma non copriva completamente il importo e la differenza supera la tolleranza
 - **Interpretazione**: **Irregolarità contabile** - verificare la causa (errore di registrazione, movimento mancante, ecc.)
+- **Difference**: X.XX€ (valore positivo)
 
 #### ❌ VERSAMENTO MESE PRECEDENTE
 ```
@@ -72,6 +75,7 @@ VERSAMENTO MESE PRECEDENTE: X.XX€ (non agganciato - periodo precedente)
 ```
 - **Significato**: Versamento riferito a un mese/anno precedente rispetto agli incassi disponibili
 - **Interpretazione**: Normale per inizio anno - i versamenti di dicembre sono stati registrati a gennaio
+- **Difference**: X.XX€ (l'intero importo)
 
 #### ❌ VERSAMENTO SENZA INCASSI
 ```
@@ -79,6 +83,7 @@ VERSAMENTO SENZA INCASSI: X.XX€ (mese/anno successivo o senza dati)
 ```
 - **Significato**: Non ci sono incassi disponibili nella finestra temporale (il versamento è dopo l'ultimo incasso)
 - **Interpretazione**: Versamenti di mesi futuri rispetto agli incassi caricati - sono "non agganciabili" con i dati attuali
+- **Difference**: X.XX€ (l'intero importo)
 
 ## Esempi Pratici
 
