@@ -1096,9 +1096,9 @@ class ReconciliationEngine:
         2. Sort by Data_Analisi ascending, with Dare before Avere at equal date
         3. For each Credit:
            - Search for unused Debits within ±days_window from Credit's Data_Analisi
+           - If no Debits available AND Credit is from previous month/year vs available Debits: SKIP (residue from previous period)
            - If total Debits >= Credit: create match (using partial if needed)
-           - If total Debits < Credit: create forced match with difference (anomaly)
-        4. Residue is NOT carried to next Credit - it's an anomaly
+           - If total Debits < Credit: create anomaly block (not carried forward)
         """
         if verbose:
             print("\nStarting reconciliation with 'Progressive Balance' algorithm...")
@@ -1135,6 +1135,7 @@ class ReconciliationEngine:
 
         matches = []
 
+        skipped_previous_period = 0
         credit_idx = 0
 
         while credit_idx < n_credit:
@@ -1156,6 +1157,25 @@ class ReconciliationEngine:
                         candidate_debit_indices.append(d_idx)
                         candidate_debit_amounts.append(debit_remaining[d_idx])
                         total_available += debit_remaining[d_idx]
+
+            first_available_debit_date = None
+            for d_idx in range(n_debit):
+                if debit_remaining[d_idx] > 0:
+                    first_available_debit_date = debit_dates[d_idx]
+                    break
+
+            if total_available == 0 and first_available_debit_date is not None:
+                if credit_date.year < first_available_debit_date.year or (
+                    credit_date.year == first_available_debit_date.year
+                    and credit_date.month < first_available_debit_date.month
+                ):
+                    if verbose:
+                        print(
+                            f"   - Skipping credit {credit_orig_idx} ({credit_date.date()}) - previous period residue"
+                        )
+                    skipped_previous_period += 1
+                    credit_idx += 1
+                    continue
 
             current_match_debits = []
             current_debit_amounts = []
@@ -1225,32 +1245,12 @@ class ReconciliationEngine:
             credit_idx += 1
 
         if verbose:
+            if skipped_previous_period > 0:
+                print(
+                    f"   - Skipped {skipped_previous_period} credits from previous period (no matching debits)"
+                )
             print(f"   - Found {len(matches)} match blocks.")
         return matches
-
-        if current_match_debits or current_match_credits:
-            match = {
-                "debit_indices": current_match_debits.copy(),
-                "debit_dates": [
-                    debit_rows[i]["analysis_date"]
-                    for i in range(len(debit_rows))
-                    if debit_rows[i]["orig_index"] in current_match_debits
-                ],
-                "debit_amounts": current_debit_amounts.copy(),
-                "credit_indices": current_match_credits.copy(),
-                "credit_dates": [
-                    credit_rows[i]["analysis_date"]
-                    for i in range(len(credit_rows))
-                    if credit_rows[i]["orig_index"] in current_match_credits
-                ],
-                "credit_amounts": current_credit_amounts.copy(),
-                "total_credit": sum(current_credit_amounts),
-                "difference": remaining_credit,
-                "match_type": f"Progressive Balance (Partial)",
-                "pass_name": "Progressive Balance",
-                "is_forced": True,
-            }
-            self._register_match(match, matches)
 
         if verbose:
             print(f"   - Found {len(matches)} match blocks.")
