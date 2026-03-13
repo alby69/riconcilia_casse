@@ -1093,14 +1093,15 @@ class ReconciliationEngine:
 
         Logic:
         1. Create Data_Analisi = Data_Valuta if present, else Data
-        2. Sort credits by Data_Analisi (ascending)
-        3. Process credits sequentially:
-           - Start with credit amount
-           - Find first unused debit (from current position in debit list sorted by Data_Analisi)
-           - Subtract debit from credit
-           - If debit > credit: remaining debit carries forward to next credit
-           - If credit > debit: remaining credit carries forward to next debit
+        2. Group credits by Data_Analisi (same value date = same group)
+        3. For each credit group (all credits with same date):
+           - Sum all credits in the group
+           - Find first unused debit (sorted by Data_Analisi)
+           - Subtract debit from total
+           - If debit > remaining: remaining debit carries forward
+           - If remaining > debit: continue with next debit
            - Mark used items
+        4. When total reaches zero -> create a match block
         """
         if verbose:
             print("\nStarting reconciliation with 'Progressive Balance' algorithm...")
@@ -1137,18 +1138,34 @@ class ReconciliationEngine:
         matches = []
 
         debit_idx = 0
-        credit_idx = 0
+        credit_group_idx = 0
 
-        remaining_credit = 0
+        remaining_total = 0
 
         current_match_debits = []
         current_match_credits = []
         current_debit_amounts = []
         current_credit_amounts = []
 
-        while credit_idx < n_credit:
-            credit_amount = credit_rows[credit_idx]["Credit"]
-            credit_orig_idx = credit_rows[credit_idx]["orig_index"]
+        while credit_group_idx < n_credit:
+            current_credit_date = credit_rows[credit_group_idx]["analysis_date"]
+
+            group_credit_indices = []
+            group_credit_amounts = []
+
+            while (
+                credit_group_idx < n_credit
+                and credit_rows[credit_group_idx]["analysis_date"]
+                == current_credit_date
+            ):
+                group_credit_indices.append(credit_rows[credit_group_idx]["orig_index"])
+                group_credit_amounts.append(credit_rows[credit_group_idx]["Credit"])
+                credit_group_idx += 1
+
+            group_total = sum(group_credit_amounts)
+            remaining_total += group_total
+            current_match_credits.extend(group_credit_indices)
+            current_credit_amounts.extend(group_credit_amounts)
 
             if debit_idx >= n_debit:
                 if current_match_credits or current_match_debits:
@@ -1161,14 +1178,11 @@ class ReconciliationEngine:
                         ],
                         "debit_amounts": current_debit_amounts.copy(),
                         "credit_indices": current_match_credits.copy(),
-                        "credit_dates": [
-                            credit_rows[i]["analysis_date"]
-                            for i in range(len(credit_rows))
-                            if credit_rows[i]["orig_index"] in current_match_credits
-                        ],
+                        "credit_dates": [current_credit_date]
+                        * len(group_credit_indices),
                         "credit_amounts": current_credit_amounts.copy(),
                         "total_credit": sum(current_credit_amounts),
-                        "difference": remaining_credit,
+                        "difference": remaining_total,
                         "match_type": f"Progressive Balance (Partial - no more debits)",
                         "pass_name": "Progressive Balance",
                         "is_forced": True,
@@ -1176,11 +1190,7 @@ class ReconciliationEngine:
                     self._register_match(match, matches)
                 break
 
-            remaining_credit += credit_amount
-            current_match_credits.append(credit_orig_idx)
-            current_credit_amounts.append(credit_amount)
-
-            while remaining_credit > 0 and debit_idx < n_debit:
+            while remaining_total > 0 and debit_idx < n_debit:
                 if debit_remaining[debit_idx] <= 0:
                     debit_idx += 1
                     continue
@@ -1188,19 +1198,19 @@ class ReconciliationEngine:
                 debit_amount = debit_remaining[debit_idx]
                 debit_orig_idx = debit_rows[debit_idx]["orig_index"]
 
-                if debit_amount <= remaining_credit:
+                if debit_amount <= remaining_total:
                     current_match_debits.append(debit_orig_idx)
                     current_debit_amounts.append(debit_amount)
-                    remaining_credit -= debit_amount
+                    remaining_total -= debit_amount
                     debit_remaining[debit_idx] = 0
                     debit_idx += 1
                 else:
                     current_match_debits.append(debit_orig_idx)
-                    current_debit_amounts.append(remaining_credit)
-                    debit_remaining[debit_idx] = debit_amount - remaining_credit
-                    remaining_credit = 0
+                    current_debit_amounts.append(remaining_total)
+                    debit_remaining[debit_idx] = debit_amount - remaining_total
+                    remaining_total = 0
 
-            if remaining_credit == 0:
+            if remaining_total == 0:
                 match = {
                     "debit_indices": current_match_debits.copy(),
                     "debit_dates": [
@@ -1210,7 +1220,7 @@ class ReconciliationEngine:
                     ],
                     "debit_amounts": current_debit_amounts.copy(),
                     "credit_indices": current_match_credits.copy(),
-                    "credit_dates": [credit_rows[credit_idx]["analysis_date"]],
+                    "credit_dates": [current_credit_date],
                     "credit_amounts": current_credit_amounts.copy(),
                     "total_credit": sum(current_credit_amounts),
                     "difference": 0,
@@ -1222,7 +1232,7 @@ class ReconciliationEngine:
                 current_match_credits = []
                 current_debit_amounts = []
                 current_credit_amounts = []
-                remaining_credit = 0
+                remaining_total = 0
             elif debit_idx >= n_debit:
                 if current_match_credits or current_match_debits:
                     match = {
@@ -1234,14 +1244,10 @@ class ReconciliationEngine:
                         ],
                         "debit_amounts": current_debit_amounts.copy(),
                         "credit_indices": current_match_credits.copy(),
-                        "credit_dates": [
-                            credit_rows[i]["analysis_date"]
-                            for i in range(len(credit_rows))
-                            if credit_rows[i]["orig_index"] in current_match_credits
-                        ],
+                        "credit_dates": [current_credit_date],
                         "credit_amounts": current_credit_amounts.copy(),
                         "total_credit": sum(current_credit_amounts),
-                        "difference": remaining_credit,
+                        "difference": remaining_total,
                         "match_type": f"Progressive Balance (Partial - no more debits)",
                         "pass_name": "Progressive Balance",
                         "is_forced": True,
@@ -1259,14 +1265,10 @@ class ReconciliationEngine:
                 ],
                 "debit_amounts": current_debit_amounts.copy(),
                 "credit_indices": current_match_credits.copy(),
-                "credit_dates": [
-                    credit_rows[i]["analysis_date"]
-                    for i in range(len(credit_rows))
-                    if credit_rows[i]["orig_index"] in current_match_credits
-                ],
+                "credit_dates": [current_credit_date],
                 "credit_amounts": current_credit_amounts.copy(),
                 "total_credit": sum(current_credit_amounts),
-                "difference": remaining_credit,
+                "difference": remaining_total,
                 "match_type": f"Progressive Balance (Partial)",
                 "pass_name": "Progressive Balance",
                 "is_forced": True,
