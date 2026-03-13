@@ -247,13 +247,6 @@ class ExcelReporter:
         df.to_excel(writer, sheet_name="Matches", index=False)
         ws = writer.sheets["Matches"]
 
-        # Find the column index for difference
-        diff_col_idx = None
-        for c_idx, col_name in enumerate(df.columns, 1):
-            if col_name == "difference":
-                diff_col_idx = c_idx
-                break
-
         for c_idx, col_name in enumerate(df.columns, 1):
             if col_name in [
                 "total_credit",
@@ -267,13 +260,6 @@ class ExcelReporter:
             elif col_name in ["days_diff", "num_credits"]:
                 for r_idx in range(2, len(df) + 2):
                     ws.cell(row=r_idx, column=c_idx).number_format = "0"
-
-        # Debug: print first few difference values
-        if diff_col_idx:
-            print(f"DEBUG: Difference column index: {diff_col_idx}")
-            for r_idx in range(2, min(7, len(df) + 2)):
-                val = ws.cell(row=r_idx, column=diff_col_idx).value
-                print(f"DEBUG: Row {r_idx}, difference value: {val}")
 
         fills = {
             "Pass 1": PatternFill(
