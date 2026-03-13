@@ -78,41 +78,34 @@ Example:
 
 ### 2. Progressive Balance Algorithm
 
-**Philosophy**: "Walk through chronologically like a human would"
+**Philosophy**: "Walk through chronologically with time window"
 
-This algorithm processes CREDITs sequentially in chronological order, matching them with available DEBITs:
+This algorithm processes CREDITs sequentially, matching them with DEBITs within a time window (±5 days by default):
 
 ```
 Logic:
 1. Create Data_Analisi = Data_Valuta (if present) else Data Registrazione
-2. Sort everything by Data_Analisi ascending
-3. Process CREDITs one by one:
-   - Take the CREDIT amount
-   - Find first unused DEBIT (sorted by Data_Analisi)
-   - Subtract DEBIT from CREDIT
-   - If DEBIT > CREDIT: remaining DEBIT carries forward to next CREDIT
-   - If CREDIT > DEBIT: remaining CREDIT continues to next DEBIT
-   - Mark used items
-4. When balance reaches zero → create a match block
+2. Sort by Data_Analisi ascending
+3. For each CREDIT:
+   - Search for unused DEBITs within ±days_window from CREDIT's Data_Analisi
+   - If total DEBITs >= CREDIT: create match (using partial if needed)
+   - If total DEBITs < CREDIT within tolerance: create match with tolerance
+   - If total DEBITs < CREDIT beyond tolerance: create ANOMALY block (not carried forward)
+4. Mark used items
 
 Example:
-Sorted by Data_Analisi:
-Jan 1:  DEBIT €100
-Jan 2:  DEBIT €200  
-Jan 3:  CREDIT €150 → remaining: 150-100=50, use DEBIT 100
-Jan 4:  DEBIT €50   → remaining: 50-50=0 ✅ MATCH: D(100+200) = C(150+50)
-
-Process:
-1. Start with CREDIT €150
-2. Subtract first DEBIT €100 → remaining €50
-3. Subtract next DEBIT €50 → remaining €0
-4. Match found! Block: D(100+50) = C(150)
+CREDIT €150 on Jan 10 with days_window=5:
+- Searches DEBITs from Jan 5 to Jan 15
+- Finds DEBIT €100 + €50 = €150 → MATCH ✅
+- Finds only DEBIT €80 → ANOMALY €70 (not carried forward)
 ```
 
 **Key Features**:
-- **Forced Blocks**: When no more DEBITs are available but CREDIT has remaining, the algorithm registers the match anyway (forced) to prevent losing data
-- **Partial Usage**: When a DEBIT is larger than needed, it's split - the used portion goes to the match, the remainder stays available for future CREDITs
-- **Data Valuta Support**: Uses Data_Valuta for CREDIT transactions to handle year-end transitions (December deposits registered in January)
+- **Time Window**: Searches for DEBITs within ±days_window (default: 5 days)
+- **Anomaly Detection**: When CREDIT cannot be matched within tolerance, it's flagged as anomaly (residue NOT carried to next CREDIT)
+- **Partial Usage**: When a DEBIT is larger than needed, it's split - the used portion goes to the match, the remainder stays available
+- **Data Valuta Support**: Uses Data_Valuta for CREDIT transactions to handle year-end transitions
+- **Tolerance Support**: Matches within tolerance are accepted (default: 50€)
 
 ### 3. Greedy Amount First Algorithm
 
@@ -327,14 +320,17 @@ The Excel output contains multiple sheets:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `tolerance` | 0.01 € | Maximum acceptable difference |
-| `days_window` | 7 days | Time window for matching |
-| `max_combinations` | 10 | Max elements in a combination |
-| `residual_days_window` | 30 days | Extended window for residual recovery |
-| `algorithm` | subset_sum | Algorithm to use (subset_sum, progressive_balance, greedy, auto) |
-| `search_direction` | past_only | Direction (past_only, future_only, both) |
+| `algorithm` | progressive_balance | Algorithm to use (subset_sum, progressive_balance, greedy_amount_first, auto) |
+| `tolerance` | 50.0 € | Maximum acceptable difference (for Progressive Balance) |
+| `days_window` | 5 days | Time window for matching (±5 days for Progressive Balance) |
+| `search_direction` | both | Direction (past_only, future_only, both) |
+| `max_combinations` | 10 | Max elements in a combination (for Subset Sum) |
+| `residual_threshold` | 50.0 € | Minimum amount for residual recovery |
+| `residual_days_window` | 5 days | Extended window for residual recovery |
 | `store_id_column` | None | Column name for store identification |
 | `enable_best_fit` | True | Enable partial matching |
+
+**Note**: Default parameters are optimized for Progressive Balance algorithm with ±5 days window and 50€ tolerance.
 
 ---
 
