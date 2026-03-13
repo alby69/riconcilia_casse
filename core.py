@@ -1268,7 +1268,7 @@ class ReconciliationEngine:
                     "credit_dates": [credit_date],
                     "credit_amounts": [credit_amount],
                     "total_credit": credit_amount,
-                    "difference": 0,
+                    "difference": difference,
                     "match_type": f"Match: {len(current_match_debits)}D vs 1C",
                     "pass_name": "Progressive Balance",
                 }
