@@ -11,23 +11,34 @@
     "input_folder": "input",
     "output_folder": "output",
     "file_patterns": ["*.xlsx", "*.csv"],
-    "algorithm": "auto",
-    "residual_threshold": 100.0,
-    "residual_days_window": 90
+    "algorithm": "progressive_balance",
+    "tolerance": 50.0,
+    "days_window": 5,
+    "search_direction": "both",
+    "residual_threshold": 50.0,
+    "residual_days_window": 5
   },
   "subset_sum": {
     "comment": "Parametri specifici per l'algoritmo subset_sum",
     "tolerance": 0.5,
     "days_window": 15,
-    "max_combinations": 8,
+    "max_combinations": 10,
     "search_direction": "both"
   },
   "progressive_balance": {
-    "comment": "Parametri specifici per l'algoritmo progressive_balance. Tolleranza molto bassa, solo futuro.",
-    "tolerance": 0.01,
-    "days_window": 7,
-    "search_direction": "future_only",
-    "ignore_tolerance": false
+    "comment": "Parametri specifici per l'algoritmo progressive_balance. Finestra simmetrica ±5 giorni.",
+    "tolerance": 50.0,
+    "days_window": 5,
+    "search_direction": "both",
+    "ignore_tolerance": false,
+    "residual_threshold": 50.0,
+    "residual_days_window": 5
+  },
+  "greedy_amount_first": {
+    "comment": "Parametri per l'algoritmo greedy",
+    "tolerance": 0.5,
+    "days_window": 15,
+    "search_direction": "both"
   },
   "optimizer": {
     "comment": "Impostazioni per il processo di ottimizzazione dei parametri.",
@@ -35,12 +46,14 @@
     "n_trials_first_run": 100,
     "n_trials_refinement": 50,
     "parameter_space": {
-        "algorithm": {"type": "categorical", "values": ["subset_sum", "progressive_balance"]},
+        "algorithm": {"type": "categorical", "values": ["subset_sum", "progressive_balance", "greedy_amount_first"]},
         "days_window": {"type": "numeric", "min": 1, "max": 20},
-        "tolerance": {"type": "numeric", "min": 0.01, "max": 2.0, "step": 0.01, "value_type": "float"},
-        "max_combinations": {"type": "numeric", "min": 2, "max": 10},
+        "tolerance": {"type": "numeric", "min": 0.01, "max": 100.0, "step": 0.5, "value_type": "float"},
+        "max_combinations": {"type": "numeric", "min": 2, "max": 15},
         "search_direction": {"type": "categorical", "values": ["past_only", "future_only", "both"]},
-        "sorting_strategy": {"type": "categorical", "values": ["date", "amount"]}
+        "sorting_strategy": {"type": "categorical", "values": ["date", "amount"]},
+        "residual_threshold": {"type": "numeric", "min": 0.01, "max": 100.0, "step": 0.5, "value_type": "float"},
+        "residual_days_window": {"type": "numeric", "min": 1, "max": 30}
     }
   }
 }

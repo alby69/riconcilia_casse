@@ -1089,19 +1089,16 @@ class ReconciliationEngine:
         return df_matches
 
     def _reconcile_progressive_balance(self, verbose=True):
-        """Performs reconciliation using the user's progressive balance algorithm.
+        """Performs reconciliation using the progressive balance algorithm.
 
         Logic:
-        1. Create Data_Analisi = Data_Valuta if present, else Data
-        2. Group credits by Data_Analisi (same value date = same group)
-        3. For each credit group (all credits with same date):
-           - Sum all credits in the group
-           - Find first unused debit (sorted by Data_Analisi)
-           - Subtract debit from total
-           - If debit > remaining: remaining debit carries forward
-           - If remaining > debit: continue with next debit
-           - Mark used items
-        4. When total reaches zero -> create a match block
+        1. Create Data_Analisi = Data_Valuta if present, else Data Registrazione
+        2. Sort by Data_Analisi ascending, with Dare before Avere at equal date
+        3. For each Credit:
+           - Search for unused Debits within ±days_window from Credit's Data_Analisi
+           - If total Debits >= Credit: create match (using partial if needed)
+           - If total Debits < Credit: create forced match with difference (anomaly)
+        4. Residue is NOT carried to next Credit - it's an anomaly
         """
         if verbose:
             print("\nStarting reconciliation with 'Progressive Balance' algorithm...")
@@ -1134,146 +1131,98 @@ class ReconciliationEngine:
         n_credit = len(credit_rows)
 
         debit_remaining = {i: debit_rows[i]["Debit"] for i in range(n_debit)}
+        debit_dates = {i: debit_rows[i]["analysis_date"] for i in range(n_debit)}
 
         matches = []
 
-        debit_idx = 0
-        credit_group_idx = 0
+        credit_idx = 0
 
-        remaining_total = 0
+        while credit_idx < n_credit:
+            credit_amount = credit_rows[credit_idx]["Credit"]
+            credit_orig_idx = credit_rows[credit_idx]["orig_index"]
+            credit_date = credit_rows[credit_idx]["analysis_date"]
 
-        current_match_debits = []
-        current_match_credits = []
-        current_debit_amounts = []
-        current_credit_amounts = []
+            min_date = credit_date - pd.Timedelta(days=self.days_window)
+            max_date = credit_date + pd.Timedelta(days=self.days_window)
 
-        while credit_group_idx < n_credit:
-            current_credit_date = credit_rows[credit_group_idx]["analysis_date"]
+            candidate_debit_indices = []
+            candidate_debit_amounts = []
+            total_available = 0
 
-            group_credit_indices = []
-            group_credit_amounts = []
+            for d_idx in range(n_debit):
+                if debit_remaining[d_idx] > 0:
+                    d_date = debit_dates[d_idx]
+                    if min_date <= d_date <= max_date:
+                        candidate_debit_indices.append(d_idx)
+                        candidate_debit_amounts.append(debit_remaining[d_idx])
+                        total_available += debit_remaining[d_idx]
 
-            while (
-                credit_group_idx < n_credit
-                and credit_rows[credit_group_idx]["analysis_date"]
-                == current_credit_date
-            ):
-                group_credit_indices.append(credit_rows[credit_group_idx]["orig_index"])
-                group_credit_amounts.append(credit_rows[credit_group_idx]["Credit"])
-                credit_group_idx += 1
+            current_match_debits = []
+            current_debit_amounts = []
+            remaining_credit = credit_amount
 
-            group_total = sum(group_credit_amounts)
-            remaining_total += group_total
-            current_match_credits.extend(group_credit_indices)
-            current_credit_amounts.extend(group_credit_amounts)
+            for d_idx in candidate_debit_indices:
+                if remaining_credit <= 0:
+                    break
 
-            if debit_idx >= n_debit:
-                if current_match_credits or current_match_debits:
-                    match = {
-                        "debit_indices": current_match_debits.copy(),
-                        "debit_dates": [
-                            debit_rows[i]["analysis_date"]
-                            for i in range(len(debit_rows))
-                            if debit_rows[i]["orig_index"] in current_match_debits
-                        ],
-                        "debit_amounts": current_debit_amounts.copy(),
-                        "credit_indices": current_match_credits.copy(),
-                        "credit_dates": [current_credit_date]
-                        * len(group_credit_indices),
-                        "credit_amounts": current_credit_amounts.copy(),
-                        "total_credit": sum(current_credit_amounts),
-                        "difference": remaining_total,
-                        "match_type": f"Progressive Balance (Partial - no more debits)",
-                        "pass_name": "Progressive Balance",
-                        "is_forced": True,
-                    }
-                    self._register_match(match, matches)
-                break
+                d_amount = debit_remaining[d_idx]
+                d_orig_idx = debit_rows[d_idx]["orig_index"]
 
-            while remaining_total > 0 and debit_idx < n_debit:
-                if debit_remaining[debit_idx] <= 0:
-                    debit_idx += 1
-                    continue
-
-                debit_amount = debit_remaining[debit_idx]
-                debit_orig_idx = debit_rows[debit_idx]["orig_index"]
-
-                if debit_amount <= remaining_total:
-                    current_match_debits.append(debit_orig_idx)
-                    current_debit_amounts.append(debit_amount)
-                    remaining_total -= debit_amount
-                    debit_remaining[debit_idx] = 0
-                    debit_idx += 1
+                if d_amount <= remaining_credit:
+                    current_match_debits.append(d_orig_idx)
+                    current_debit_amounts.append(d_amount)
+                    remaining_credit -= d_amount
+                    debit_remaining[d_idx] = 0
                 else:
-                    current_match_debits.append(debit_orig_idx)
-                    current_debit_amounts.append(remaining_total)
-                    debit_remaining[debit_idx] = debit_amount - remaining_total
-                    remaining_total = 0
+                    current_match_debits.append(d_orig_idx)
+                    current_debit_amounts.append(remaining_credit)
+                    debit_remaining[d_idx] = d_amount - remaining_credit
+                    remaining_credit = 0
 
-            if remaining_total == 0:
+            if remaining_credit <= self.tolerance:
                 match = {
                     "debit_indices": current_match_debits.copy(),
                     "debit_dates": [
-                        debit_rows[i]["analysis_date"]
-                        for i in range(len(debit_rows))
-                        if debit_rows[i]["orig_index"] in current_match_debits
+                        debit_rows[d_idx]["analysis_date"]
+                        for d_idx in candidate_debit_indices[
+                            : len(current_match_debits)
+                        ]
+                        if debit_rows[d_idx]["orig_index"] in current_match_debits
                     ],
                     "debit_amounts": current_debit_amounts.copy(),
-                    "credit_indices": current_match_credits.copy(),
-                    "credit_dates": [current_credit_date],
-                    "credit_amounts": current_credit_amounts.copy(),
-                    "total_credit": sum(current_credit_amounts),
-                    "difference": 0,
-                    "match_type": f"Progressive Balance (Seq. {len(current_match_debits)}D vs {len(current_match_credits)}C)",
+                    "credit_indices": [credit_orig_idx],
+                    "credit_dates": [credit_date],
+                    "credit_amounts": [credit_amount],
+                    "total_credit": credit_amount,
+                    "difference": remaining_credit,
+                    "match_type": f"Progressive Balance (Match: {len(current_match_debits)}D vs 1C)",
                     "pass_name": "Progressive Balance",
                 }
-                self._register_match(match, matches)
-                current_match_debits = []
-                current_match_credits = []
-                current_debit_amounts = []
-                current_credit_amounts = []
-                remaining_total = 0
-            elif debit_idx >= n_debit:
-                if current_match_credits or current_match_debits:
-                    match = {
-                        "debit_indices": current_match_debits.copy(),
-                        "debit_dates": [
-                            debit_rows[i]["analysis_date"]
-                            for i in range(len(debit_rows))
-                            if debit_rows[i]["orig_index"] in current_match_debits
-                        ],
-                        "debit_amounts": current_debit_amounts.copy(),
-                        "credit_indices": current_match_credits.copy(),
-                        "credit_dates": [current_credit_date],
-                        "credit_amounts": current_credit_amounts.copy(),
-                        "total_credit": sum(current_credit_amounts),
-                        "difference": remaining_total,
-                        "match_type": f"Progressive Balance (Partial - no more debits)",
-                        "pass_name": "Progressive Balance",
-                        "is_forced": True,
-                    }
-                    self._register_match(match, matches)
-                break
+                if remaining_credit > 0:
+                    match["match_type"] = (
+                        f"Progressive Balance (Match with tolerance: {remaining_credit / 100:.2f}€)"
+                    )
+            else:
+                match = {
+                    "debit_indices": current_match_debits.copy(),
+                    "debit_dates": [
+                        debit_rows[d_idx]["analysis_date"]
+                        for d_idx in candidate_debit_indices
+                        if debit_rows[d_idx]["orig_index"] in current_match_debits
+                    ],
+                    "debit_amounts": current_debit_amounts.copy(),
+                    "credit_indices": [credit_orig_idx],
+                    "credit_dates": [credit_date],
+                    "credit_amounts": [credit_amount],
+                    "total_credit": credit_amount,
+                    "difference": remaining_credit,
+                    "match_type": f"Progressive Balance (ANOMALY: {remaining_credit / 100:.2f}€ not covered)",
+                    "pass_name": "Progressive Balance",
+                    "is_forced": True,
+                }
 
-        if current_match_debits or current_match_credits:
-            match = {
-                "debit_indices": current_match_debits.copy(),
-                "debit_dates": [
-                    debit_rows[i]["analysis_date"]
-                    for i in range(len(debit_rows))
-                    if debit_rows[i]["orig_index"] in current_match_debits
-                ],
-                "debit_amounts": current_debit_amounts.copy(),
-                "credit_indices": current_match_credits.copy(),
-                "credit_dates": [current_credit_date],
-                "credit_amounts": current_credit_amounts.copy(),
-                "total_credit": sum(current_credit_amounts),
-                "difference": remaining_total,
-                "match_type": f"Progressive Balance (Partial)",
-                "pass_name": "Progressive Balance",
-                "is_forced": True,
-            }
             self._register_match(match, matches)
+            credit_idx += 1
 
         if verbose:
             print(f"   - Found {len(matches)} match blocks.")
@@ -1384,7 +1333,7 @@ class ReconciliationEngine:
             # Try to find movements that can compensate the difference
             # Look for unused credits that could fill the gap (capienza)
             for _, credit_row in unused_credits.iterrows():
-                if credit_row["Credit"] >= diff - self.tolerance:
+                if credit_row["Credit"] >= diff - self.residual_threshold:
                     # Found a credit that can compensate!
                     # But we need to check date compatibility - use effective_date if available
                     effective_date = credit_row.get(

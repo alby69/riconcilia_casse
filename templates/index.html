@@ -187,6 +187,9 @@
                     <button type="submit" class="btn btn-process px-5" id="btnSubmit">
                         <i class="fas fa-magic me-2"></i>Elabora File
                     </button>
+                    <button type="button" class="btn btn-outline-primary px-4 ms-2" id="btnOptimize">
+                        <i class="fas fa-cogs me-2"></i>Ottimizza Parametri
+                    </button>
                 </div>
             </form>
 
@@ -267,9 +270,18 @@
         if (fileInput.files.length > 0) {
             fileNameDisplay.textContent = fileInput.files[0].name;
             dropZone.style.borderColor = "#198754";
-            runOptimization();
+            // NOT auto-start optimization anymore - user must click the button
         }
     }
+
+    // Optimizzazione button handler
+    document.getElementById('btnOptimize').addEventListener('click', function() {
+        if (!fileInput.files.length) {
+            alert("Per favore, seleziona un file prima di ottimizzare.");
+            return;
+        }
+        runOptimization();
+    });
 
     function toggleSettings() {
         const section = document.getElementById('advancedSettings');
