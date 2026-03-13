@@ -1230,26 +1230,10 @@ class ReconciliationEngine:
                     debit_remaining[d_idx] = d_amount - remaining_credit
                     remaining_credit = 0
 
-            if remaining_credit <= self.tolerance and remaining_credit > 0:
-                match = {
-                    "debit_indices": current_match_debits.copy(),
-                    "debit_dates": [
-                        debit_rows[d_idx]["analysis_date"]
-                        for d_idx in candidate_debit_indices[
-                            : len(current_match_debits)
-                        ]
-                        if debit_rows[d_idx]["orig_index"] in current_match_debits
-                    ],
-                    "debit_amounts": current_debit_amounts.copy(),
-                    "credit_indices": [credit_orig_idx],
-                    "credit_dates": [credit_date],
-                    "credit_amounts": [credit_amount],
-                    "total_credit": credit_amount,
-                    "difference": remaining_credit,
-                    "match_type": f"Match: {len(current_match_debits)}D vs 1C (eccedenza credit: +{remaining_credit / 100:.2f}€)",
-                    "pass_name": "Progressive Balance",
-                }
-            elif remaining_credit == 0:
+            total_debit_used = sum(current_debit_amounts)
+            difference = credit_amount - total_debit_used
+
+            if abs(difference) <= self.tolerance and difference > 0:
                 match = {
                     "debit_indices": current_match_debits.copy(),
                     "debit_dates": [
@@ -1257,7 +1241,24 @@ class ReconciliationEngine:
                         for d_idx in candidate_debit_indices
                         if debit_rows[d_idx]["orig_index"] in current_match_debits
                     ],
-                    "debit_amounts": current_debit_amounts.copy(),
+                    "debit_amounts": [total_debit_used],
+                    "credit_indices": [credit_orig_idx],
+                    "credit_dates": [credit_date],
+                    "credit_amounts": [credit_amount],
+                    "total_credit": credit_amount,
+                    "difference": difference,
+                    "match_type": f"Match: {len(current_match_debits)}D vs 1C (eccedenza versamento: +{difference / 100:.2f}€)",
+                    "pass_name": "Progressive Balance",
+                }
+            elif difference == 0:
+                match = {
+                    "debit_indices": current_match_debits.copy(),
+                    "debit_dates": [
+                        debit_rows[d_idx]["analysis_date"]
+                        for d_idx in candidate_debit_indices
+                        if debit_rows[d_idx]["orig_index"] in current_match_debits
+                    ],
+                    "debit_amounts": [total_debit_used],
                     "credit_indices": [credit_orig_idx],
                     "credit_dates": [credit_date],
                     "credit_amounts": [credit_amount],
@@ -1265,6 +1266,24 @@ class ReconciliationEngine:
                     "difference": 0,
                     "match_type": f"Match: {len(current_match_debits)}D vs 1C",
                     "pass_name": "Progressive Balance",
+                }
+            elif difference > 0:
+                match = {
+                    "debit_indices": current_match_debits.copy(),
+                    "debit_dates": [
+                        debit_rows[d_idx]["analysis_date"]
+                        for d_idx in candidate_debit_indices
+                        if debit_rows[d_idx]["orig_index"] in current_match_debits
+                    ],
+                    "debit_amounts": [total_debit_used],
+                    "credit_indices": [credit_orig_idx],
+                    "credit_dates": [credit_date],
+                    "credit_amounts": [credit_amount],
+                    "total_credit": credit_amount,
+                    "difference": difference,
+                    "match_type": f"ANOMALY: {difference / 100:.2f}€ non coperti (differenza oltre tolleranza)",
+                    "pass_name": "Progressive Balance",
+                    "is_forced": True,
                 }
             else:
                 match = {
@@ -1274,15 +1293,14 @@ class ReconciliationEngine:
                         for d_idx in candidate_debit_indices
                         if debit_rows[d_idx]["orig_index"] in current_match_debits
                     ],
-                    "debit_amounts": current_debit_amounts.copy(),
+                    "debit_amounts": [total_debit_used],
                     "credit_indices": [credit_orig_idx],
                     "credit_dates": [credit_date],
                     "credit_amounts": [credit_amount],
                     "total_credit": credit_amount,
-                    "difference": remaining_credit,
-                    "match_type": f"ANOMALY: {remaining_credit / 100:.2f}€ non coperti (differenza oltre tolleranza)",
+                    "difference": difference,
+                    "match_type": f"Match: {len(current_match_debits)}D vs 1C (eccedenza incasso: {difference / 100:.2f}€)",
                     "pass_name": "Progressive Balance",
-                    "is_forced": True,
                 }
 
             self._register_match(match, matches)
