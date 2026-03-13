@@ -1172,10 +1172,20 @@ class ReconciliationEngine:
                     credit_date.year == first_candidate_date.year
                     and credit_date.month < first_candidate_date.month
                 ):
-                    if verbose:
-                        print(
-                            f"   - Skipping credit {credit_orig_idx} ({credit_date.date()}) - different month/year than available debits"
-                        )
+                    match = {
+                        "debit_indices": [],
+                        "debit_dates": [],
+                        "debit_amounts": [],
+                        "credit_indices": [credit_orig_idx],
+                        "credit_dates": [credit_date],
+                        "credit_amounts": [credit_amount],
+                        "total_credit": credit_amount,
+                        "difference": credit_amount,
+                        "match_type": f"VERSAMENTO MESE PRECEDENTE: {credit_amount / 100:.2f}€ (non agganciato - periodo precedente)",
+                        "pass_name": "Progressive Balance",
+                        "is_forced": True,
+                    }
+                    self._register_match(match, matches)
                     skipped_previous_period += 1
                     credit_idx += 1
                     continue
@@ -1190,7 +1200,7 @@ class ReconciliationEngine:
                     "credit_amounts": [credit_amount],
                     "total_credit": credit_amount,
                     "difference": credit_amount,
-                    "match_type": f"Progressive Balance (NO DEBITS: {credit_amount / 100:.2f}€ not covered)",
+                    "match_type": f"VERSAMENTO SENZA INCASSI: {credit_amount / 100:.2f}€ (mese/anno successivo o senza dati)",
                     "pass_name": "Progressive Balance",
                     "is_forced": True,
                 }
@@ -1236,12 +1246,12 @@ class ReconciliationEngine:
                     "credit_amounts": [credit_amount],
                     "total_credit": credit_amount,
                     "difference": remaining_credit,
-                    "match_type": f"Progressive Balance (Match: {len(current_match_debits)}D vs 1C)",
+                    "match_type": f"Match: {len(current_match_debits)}D vs 1C",
                     "pass_name": "Progressive Balance",
                 }
                 if remaining_credit > 0:
                     match["match_type"] = (
-                        f"Progressive Balance (Match with tolerance: {remaining_credit / 100:.2f}€)"
+                        f"Match with tolerance (+{remaining_credit / 100:.2f}€)"
                     )
             else:
                 match = {
@@ -1257,7 +1267,7 @@ class ReconciliationEngine:
                     "credit_amounts": [credit_amount],
                     "total_credit": credit_amount,
                     "difference": remaining_credit,
-                    "match_type": f"Progressive Balance (ANOMALY: {remaining_credit / 100:.2f}€ not covered)",
+                    "match_type": f"ANOMALY: {remaining_credit / 100:.2f}€ non coperti (differenza oltre tolleranza)",
                     "pass_name": "Progressive Balance",
                     "is_forced": True,
                 }
@@ -1270,10 +1280,6 @@ class ReconciliationEngine:
                 print(
                     f"   - Skipped {skipped_previous_period} credits from previous period (no matching debits)"
                 )
-            print(f"   - Found {len(matches)} match blocks.")
-        return matches
-
-        if verbose:
             print(f"   - Found {len(matches)} match blocks.")
         return matches
 

@@ -2,6 +2,13 @@
 
 This project provides a powerful and flexible accounting reconciliation service, accessible via a web interface or as a batch processing script. It allows users to upload financial data, apply sophisticated matching algorithms, and generate detailed reports.
 
+## 📖 Documentation
+
+- **[Progressive Balance Algorithm](./docs/PROGRESSIVE_BALANCE.md)** - Detailed explanation of the main algorithm, parameters, and how to interpret results
+- **[Developer Manual](./docs/DEVELOPER_MANUAL.md)** - Technical documentation for developers
+- **[Git Tutorial](./docs/GIT_TUTORIAL.md)** - Git workflow guide
+- **[Cloudflare Tunnel](./docs/CLOUDFLARE_TUNNEL_TUTORIAL.md)** - Deployment guide
+
 ## ✨ Key Features
 
 - **Intuitive Web Interface**: A clean, tab-organized UI for uploading files and customizing processing settings.
