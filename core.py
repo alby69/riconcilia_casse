@@ -1158,24 +1158,45 @@ class ReconciliationEngine:
                         candidate_debit_amounts.append(debit_remaining[d_idx])
                         total_available += debit_remaining[d_idx]
 
-            first_available_debit_date = None
-            for d_idx in range(n_debit):
-                if debit_remaining[d_idx] > 0:
-                    first_available_debit_date = debit_dates[d_idx]
-                    break
+            if candidate_debit_indices:
+                first_candidate_date = debit_dates[candidate_debit_indices[0]]
+                same_month = (
+                    credit_date.year == first_candidate_date.year
+                    and credit_date.month == first_candidate_date.month
+                )
+            else:
+                same_month = False
 
-            if total_available == 0 and first_available_debit_date is not None:
-                if credit_date.year < first_available_debit_date.year or (
-                    credit_date.year == first_available_debit_date.year
-                    and credit_date.month < first_available_debit_date.month
+            if not same_month and candidate_debit_indices:
+                if credit_date.year < first_candidate_date.year or (
+                    credit_date.year == first_candidate_date.year
+                    and credit_date.month < first_candidate_date.month
                 ):
                     if verbose:
                         print(
-                            f"   - Skipping credit {credit_orig_idx} ({credit_date.date()}) - previous period residue"
+                            f"   - Skipping credit {credit_orig_idx} ({credit_date.date()}) - different month/year than available debits"
                         )
                     skipped_previous_period += 1
                     credit_idx += 1
                     continue
+
+            if not candidate_debit_indices:
+                match = {
+                    "debit_indices": [],
+                    "debit_dates": [],
+                    "debit_amounts": [],
+                    "credit_indices": [credit_orig_idx],
+                    "credit_dates": [credit_date],
+                    "credit_amounts": [credit_amount],
+                    "total_credit": credit_amount,
+                    "difference": credit_amount,
+                    "match_type": f"Progressive Balance (NO DEBITS: {credit_amount / 100:.2f}€ not covered)",
+                    "pass_name": "Progressive Balance",
+                    "is_forced": True,
+                }
+                self._register_match(match, matches)
+                credit_idx += 1
+                continue
 
             current_match_debits = []
             current_debit_amounts = []
