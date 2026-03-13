@@ -1230,7 +1230,7 @@ class ReconciliationEngine:
                     debit_remaining[d_idx] = d_amount - remaining_credit
                     remaining_credit = 0
 
-            if remaining_credit <= self.tolerance:
+            if remaining_credit <= self.tolerance and remaining_credit > 0:
                 match = {
                     "debit_indices": current_match_debits.copy(),
                     "debit_dates": [
@@ -1246,13 +1246,26 @@ class ReconciliationEngine:
                     "credit_amounts": [credit_amount],
                     "total_credit": credit_amount,
                     "difference": remaining_credit,
+                    "match_type": f"Match: {len(current_match_debits)}D vs 1C (eccedenza credit: +{remaining_credit / 100:.2f}€)",
+                    "pass_name": "Progressive Balance",
+                }
+            elif remaining_credit == 0:
+                match = {
+                    "debit_indices": current_match_debits.copy(),
+                    "debit_dates": [
+                        debit_rows[d_idx]["analysis_date"]
+                        for d_idx in candidate_debit_indices
+                        if debit_rows[d_idx]["orig_index"] in current_match_debits
+                    ],
+                    "debit_amounts": current_debit_amounts.copy(),
+                    "credit_indices": [credit_orig_idx],
+                    "credit_dates": [credit_date],
+                    "credit_amounts": [credit_amount],
+                    "total_credit": credit_amount,
+                    "difference": 0,
                     "match_type": f"Match: {len(current_match_debits)}D vs 1C",
                     "pass_name": "Progressive Balance",
                 }
-                if remaining_credit > 0:
-                    match["match_type"] = (
-                        f"Match with tolerance (+{remaining_credit / 100:.2f}€)"
-                    )
             else:
                 match = {
                     "debit_indices": current_match_debits.copy(),
