@@ -112,6 +112,37 @@
 
                 <!-- Advanced Settings Section -->
                 <div class="advanced-section" id="advancedSettings">
+                    <!-- Column Mapping -->
+                    <div class="mb-4">
+                        <h6 class="fw-bold text-primary mb-3"><i class="fas fa-columns me-2"></i>Mappatura Colonne File</h6>
+                        <p class="small text-muted mb-3">Inserisci i nomi delle colonne presenti nel tuo file Excel</p>
+                        <div class="row g-2">
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small">Data</label>
+                                <input type="text" class="form-control form-control-sm" name="col_date" placeholder="es: Data" value="Data">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small">Dare (Incassi)</label>
+                                <input type="text" class="form-control form-control-sm" name="col_debit" placeholder="es: Dare" value="Dare">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small">Avere (Versamenti)</label>
+                                <input type="text" class="form-control form-control-sm" name="col_credit" placeholder="es: Avere" value="Avere">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small">Codice Negozio</label>
+                                <input type="text" class="form-control form-control-sm" name="col_store_id" placeholder="opzionale">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small">Data Valuta</label>
+                                <input type="text" class="form-control form-control-sm" name="col_valuta_date" placeholder="es: Data Valuta" value="Data Valuta">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <hr>
+                    
+                    <!-- Algorithm Parameters -->
                     <div class="row g-3">
                         <div class="col-md-6">
                             <label class="form-label small fw-bold">Algoritmo</label>
@@ -123,8 +154,8 @@
                         <div class="col-md-6">
                             <label class="form-label small fw-bold">Direzione Ricerca</label>
                             <select class="form-select form-select-sm" name="search_direction">
-                                <option value="past_only">Solo Passato</option>
                                 <option value="future_only">Solo Futuro</option>
+                                <option value="past_only">Solo Passato</option>
                                 <option value="both">Entrambi</option>
                             </select>
                         </div>
@@ -173,6 +204,9 @@
                     <a id="downloadLink" href="#" class="btn btn-success fw-bold">
                         <i class="fas fa-download me-2"></i>Scarica il Report Excel
                     </a>
+                    <button class="btn btn-outline-primary fw-bold ms-2" id="btnNewFile">
+                        <i class="fas fa-plus me-2"></i>Nuovo File
+                    </button>
                 </div>
                 <button class="btn btn-outline-secondary btn-sm mt-2" onclick="toggleLog()">Mostra/Nascondi Log Tecnico</button>
             </div>
@@ -180,7 +214,7 @@
             <div class="log-container shadow-inner" id="logOutput"></div>
         </div>
     </div>
-    <div class="text-center text-muted small mb-4">v4.0 - Ottimizzazione Automatica</div>
+    <div class="text-center text-muted small mb-4">v5.0 - Data Valuta & Column Mapping</div>
 </div>
 
 <script>
@@ -328,7 +362,7 @@
         log.style.display = 'none';
         log.textContent = '';
 
-        fetch('/processa', { method: 'POST', body: formData })
+            fetch('/processa', { method: 'POST', body: formData })
             .then(response => response.json())
             .then(data => {
                 progress.classList.add('d-none');
@@ -340,6 +374,10 @@
                     result.classList.remove('d-none');
                     document.getElementById('downloadLink').href = data.download_url;
                     log.textContent = data.log_content;
+                    
+                    // NOTE: Don't auto-reset - user needs time to download the file
+                    // User can manually click "Nuovo File" button when ready
+                    console.log('Processing complete - user can download and then click Nuovo File to reset');
                 }
             })
             .catch(error => {
@@ -351,6 +389,34 @@
 
     // --- Initial setup ---
     document.addEventListener('DOMContentLoaded', initializeForm);
+
+    // --- Reset Form Function ---
+    function resetForm() {
+        const result = document.getElementById('resultContainer');
+        const log = document.getElementById('logOutput');
+        
+        // Reset file input
+        fileInput.value = '';
+        fileNameDisplay.textContent = '';
+        fileNameDisplay.classList.remove('text-success');
+        dropZone.style.borderColor = '';
+        
+        // Hide result and log
+        result.classList.add('d-none');
+        log.style.display = 'none';
+        log.textContent = '';
+        
+        // Reset form fields to defaults
+        document.getElementById('uploadForm').reset();
+        
+        // Repopulate default values from config
+        populateForm(CONFIG.common);
+        
+        console.log('Form manually reset - ready for next file');
+    }
+
+    // Add click handler for "Nuovo File" button
+    document.getElementById('btnNewFile')?.addEventListener('click', resetForm);
 
 </script>
 </body>

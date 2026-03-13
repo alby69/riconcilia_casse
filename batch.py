@@ -92,7 +92,9 @@ def main():
                 max_combinations=config['algorithm']['max_combinations'],
                 residual_threshold=config['residuals']['amount_threshold'],
                 residual_days_window=config['residuals']['days_window'],
-                column_mapping=config.get('column_mapping')
+                column_mapping=config.get('column_mapping'),
+                store_id_column=config.get('store_id_column'),
+                valuta_date_column=config.get('valuta_date_column')
             )
 
             output_file = output_folder / f"result_{file_path.stem}.xlsx"

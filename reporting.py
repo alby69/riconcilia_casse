@@ -174,16 +174,21 @@ class ExcelReporter:
         ws = writer.sheets['Matches']
 
         for c_idx, col_name in enumerate(df.columns, 1):
-            if 'credit' in col_name or 'diff' in col_name:
+            if col_name in ['total_credit', 'difference', 'debit_amounts', 'credit_amounts']:
                 for r_idx in range(2, len(df) + 2):
                     ws.cell(row=r_idx, column=c_idx).style = self.currency_style
+            elif col_name in ['days_diff', 'num_credits']:
+                for r_idx in range(2, len(df) + 2):
+                    ws.cell(row=r_idx, column=c_idx).number_format = '0'
 
         fills = {
             "Pass 1": PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
             "Pass 2": PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid"),
             "Pass 3": PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"),
             "Progressive": PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid"),
-            "Greedy": PatternFill(start_color="E9D8F5", end_color="E9D8F5", fill_type="solid")
+            "Greedy": PatternFill(start_color="E9D8F5", end_color="E9D8F5", fill_type="solid"),
+            "Forced": PatternFill(start_color="FF6B6B", end_color="FF6B6B", fill_type="solid"),
+            "Residual Recovery": PatternFill(start_color="4ECDC4", end_color="4ECDC4", fill_type="solid")
         }
         if 'pass_name' in df.columns:
             for i, row in df.iterrows():

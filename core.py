@@ -49,7 +49,7 @@ def _robust_currency_parser(value):
 class ReconciliationEngine:
     """Contains the business logic for reconciliation."""
 
-    def __init__(self, tolerance=0.01, days_window=7, max_combinations=10, residual_threshold=100.0, residual_days_window=30, sorting_strategy="date", search_direction="past_only", column_mapping=None, algorithm="subset_sum", use_numba=True, ignore_tolerance=False, enable_best_fit=True):
+    def __init__(self, tolerance=0.01, days_window=7, max_combinations=10, residual_threshold=100.0, residual_days_window=30, sorting_strategy="date", search_direction="past_only", column_mapping=None, algorithm="subset_sum", use_numba=True, ignore_tolerance=False, enable_best_fit=True, store_id_column=None, valuta_date_column=None):
         """Initializes the ReconciliationEngine with its configuration.
 
         This constructor sets up the core parameters that govern the reconciliation
@@ -98,6 +98,15 @@ class ReconciliationEngine:
                 found, the algorithm will try to find a combination of smaller
                 transactions that partially "fills" it, leaving the rest as a
                 residual. Default is True.
+            store_id_column (str, optional): Column name in the input file
+                containing the store/branch identifier. If provided, matching
+                will prioritize transactions from the same store. Default is None.
+            valuta_date_column (str, optional): Column name for the "valuta date"
+                (value date) of CREDIT transactions. This is the date the deposit
+                refers to, not the registration date. If provided, matching will
+                use this date instead of the registration date for CREDIT movements.
+                This is crucial for year-end reconciliations where deposits in early
+                January may have valuta date in December. Default is None.
         """
         # FIX: Converts values from euros (float) to cents (int) for internal consistency
         self.tolerance = int(tolerance * 100)
@@ -120,6 +129,13 @@ class ReconciliationEngine:
 
         # ADDITION: Flag to enable best-fit logic (splitting)
         self.enable_best_fit = enable_best_fit
+
+        # Store ID column for multi-store matching
+        self.store_id_column = store_id_column
+
+        # Valuta date column - for CREDIT transactions, this is the "value date"
+        # that indicates the period the deposit refers to (not the registration date)
+        self.valuta_date_column = valuta_date_column
 
         # Internal state that will be populated during execution
         self.debit_df = self.credit_df = self.matches_df = None
@@ -194,6 +210,22 @@ class ReconciliationEngine:
         # Rename the DataFrame columns using the mapping to standardize them to internal names ('Date', 'Debit', 'Credit')
         df.rename(columns=self.column_mapping, inplace=True)
 
+        # Handle optional store_id column
+        if self.store_id_column and self.store_id_column in df.columns:
+            df.rename(columns={self.store_id_column: 'store_id'}, inplace=True)
+        elif self.store_id_column:
+            df['store_id'] = None
+        else:
+            df['store_id'] = None
+        
+        # Handle optional valuta_date column (value date for CREDIT transactions)
+        # This is the date the deposit refers to, not the registration date
+        if self.valuta_date_column and self.valuta_date_column in df.columns:
+            df.rename(columns={self.valuta_date_column: 'valuta_date'}, inplace=True)
+            df['valuta_date'] = pd.to_datetime(df['valuta_date'], errors='coerce', dayfirst=True)
+        else:
+            df['valuta_date'] = None
+        
         # After reading, ensure 'Date' is datetime and 'Debit'/'Credit' are numeric.
         # This is a fallback in case the reading parameters were not sufficient
         # or if the DataFrame comes from an already pre-loaded source (e.g., from the optimizer).
@@ -229,18 +261,48 @@ class ReconciliationEngine:
         return df
 
     def _separate_movements(self, df):
-        """Separates the DataFrame into DEBIT and CREDIT movements."""
-        self.debit_df = df[df['Debit'] != 0][['orig_index', 'Date', 'Debit']].copy()
-        self.credit_df = df[df['Credit'] != 0][['orig_index', 'Date', 'Credit']].copy()
+        """Separates the DataFrame into DEBIT and CREDIT movements.
+        
+        For CREDIT movements, uses 'valuta_date' if available, otherwise falls back to 'Date'.
+        The valuta_date is the "value date" that indicates the period the deposit refers to.
+        """
+        # For DEBIT movements, we always use the registration Date
+        debit_cols = ['orig_index', 'Date', 'Debit']
+        if 'store_id' in df.columns:
+            debit_cols.append('store_id')
+        self.debit_df = df[df['Debit'] != 0][debit_cols].copy()
+        
+        # For CREDIT movements, we include valuta_date if available
+        credit_cols = ['orig_index', 'Date', 'Credit']
+        if 'store_id' in df.columns:
+            credit_cols.append('store_id')
+        if 'valuta_date' in df.columns:
+            credit_cols.append('valuta_date')
+        
+        self.credit_df = df[df['Credit'] != 0][credit_cols].copy()
+        
+        # Create effective_date column: use valuta_date if available, otherwise Date
+        if 'valuta_date' in self.credit_df.columns:
+            self.credit_df['effective_date'] = self.credit_df['valuta_date'].combine_first(self.credit_df['Date'])
+        else:
+            self.credit_df['effective_date'] = self.credit_df['Date']
+        
+        # Create analysis_date column: Data Analisi = Data Valuta if present, otherwise Data
+        # This is used for sorting and display purposes
+        if 'valuta_date' in self.credit_df.columns:
+            self.credit_df['analysis_date'] = self.credit_df['valuta_date'].combine_first(self.credit_df['Date'])
+        else:
+            self.credit_df['analysis_date'] = self.credit_df['Date']
        
         if self.sorting_strategy == "date":
             self.debit_df = self.debit_df.sort_values('Date', ascending=True)
-            self.credit_df = self.credit_df.sort_values('Date', ascending=True)
+            # Sort CREDIT by analysis_date (Data Analisi = Data Valuta if present, otherwise Data)
+            self.credit_df = self.credit_df.sort_values('analysis_date', ascending=True)
         elif self.sorting_strategy == "amount":
             self.debit_df = self.debit_df.sort_values('Debit', ascending=False)
             self.credit_df = self.credit_df.sort_values('Credit', ascending=False)
         else:
-            raise ValueError(f"Invalid sorting strategy: '{self.sorting_strategy}'. Use 'date' or 'amount'.")
+            raise ValueError(f"Invalid sorting strategy: '{self.sorting_strategy}'. Use 'date' or 'amount.")
             
         return self.debit_df, self.credit_df
 
@@ -297,6 +359,14 @@ class ReconciliationEngine:
                 for c in match: c['Credit'] = c.pop('Debit') # Restore
 
         if match:
+            total_credit = sum(m['Credit'] for m in match)
+            
+            # Capienza logic: debits can be >= credits (reverse capienza)
+            if debit_amount >= total_credit:
+                difference = debit_amount - total_credit
+            else:
+                difference = total_credit - debit_amount
+            
             return {
                 'debit_indices': [debit_row['orig_index']],
                 'debit_dates': [debit_date],
@@ -304,8 +374,8 @@ class ReconciliationEngine:
                 'credit_indices': [m['orig_index'] for m in match],
                 'credit_dates': [m['Date'] for m in match],
                 'credit_amounts': [m['Credit'] for m in match],
-                'total_credit': sum(m['Credit'] for m in match),
-                'difference': abs(debit_amount - sum(m['Credit'] for m in match)),
+                'total_credit': total_credit,
+                'difference': difference,
                 'match_type': f'Combination {len(match)}'
             }
         
@@ -386,11 +456,26 @@ class ReconciliationEngine:
 
         if match:
             total_debit = sum(m['Debit'] for m in match)
-            difference = abs(credit_amount - total_debit)
+            
+            # Capienza logic: credit >= debits is acceptable (GDO behavior)
+            # If credit > debits, difference is positive (credit has excess)
+            # If debits > credit, difference is negative but we still accept within tolerance
+            if credit_amount >= total_debit:
+                # Capienza: credit can be greater than or equal to debits
+                difference = credit_amount - total_debit
+                is_capienza = True
+            else:
+                # Debits exceed credit - check if within tolerance
+                difference = total_debit - credit_amount
+                is_capienza = False
+            
+            # Accept match if difference is within tolerance
+            if difference > self.tolerance:
+                return None
             
             # If it's a partial best fit, we calculate the residual
             residual = 0
-            if is_partial and difference > self.tolerance:
+            if is_capienza and difference > 0:
                 residual = difference
             
             return {
@@ -402,7 +487,7 @@ class ReconciliationEngine:
                 'credit_amounts': [credit_amount],
                 'total_debit': total_debit,
                 'difference': difference,
-                'match_type': f'DEBIT Combination {len(match)}' + (' (Best Fit)' if is_partial else ''),
+                'match_type': f'DEBIT Combination {len(match)}' + (' (Best Fit)' if is_partial else '') + (' (Capienza)' if is_capienza and difference > 0 else ''),
                 'residual': residual if is_partial else 0
             }
         return None
@@ -476,12 +561,67 @@ class ReconciliationEngine:
                 sys.stdout.flush()
 
             # Pre-filter candidates by time window
-            min_date, max_date = self._calculate_time_window(record_row['Date'], days_window, search_direction)
+            # For CREDIT transactions, use effective_date (valuta_date if available) instead of registration Date
+            if col_to_process == 'Credit' and 'effective_date' in record_row:
+                reference_date = record_row.get('effective_date', record_row['Date'])
+            else:
+                reference_date = record_row['Date']
             
-            candidates_prefiltered = [
-                c for c in records_candidates
-                if min_date <= c['Date'] <= max_date and c['orig_index'] not in used_indices_candidates
-            ]
+            # When processing CREDIT with valuta_date, use a symmetric window but filter by month/year
+            # This ensures deposits with December valuta don't match January receipts
+            effective_search_direction = search_direction
+            if col_to_process == 'Credit' and 'effective_date' in record_row:
+                # Use symmetric window for valuta_date-based matching (covers days before and after valuta)
+                effective_search_direction = 'both'
+            
+            min_date, max_date = self._calculate_time_window(reference_date, days_window, effective_search_direction)
+            
+            # Filter candidates also by their effective_date if available
+            if col_to_process == 'Credit':
+                candidates_prefiltered = []
+                valuta_date = record_row.get('effective_date')
+                for c in records_candidates:
+                    if c['orig_index'] in used_indices_candidates:
+                        continue
+                    
+                    # For DEBIT candidates, use Date (not effective_date which doesn't exist for DEBITs)
+                    # effective_date is only for CREDIT transactions
+                    candidate_date = c['Date']
+                    
+                    # If CREDIT has valuta_date, filter candidates to same month/year
+                    # This prevents December valuta from matching January DEBITs
+                    if valuta_date is not None:
+                        # Skip DEBITs from year AFTER valuta year
+                        if candidate_date.year > valuta_date.year:
+                            continue
+                        # Skip DEBITs from month AFTER valuta month (in same year)
+                        if candidate_date.year == valuta_date.year and candidate_date.month > valuta_date.month:
+                            continue
+                    
+                    if min_date <= candidate_date <= max_date:
+                        candidates_prefiltered.append(c)
+            else:
+                # Pass 2: DEBIT -> CREDIT
+                # Filter candidates (CREDIT) to prevent matching with credits from wrong period
+                candidates_prefiltered = []
+                debit_date = record_row['Date']
+                for c in records_candidates:
+                    if c['orig_index'] in used_indices_candidates:
+                        continue
+                    
+                    # For CREDIT candidates, use effective_date (valuta_date if available)
+                    # If CREDIT has valuta_date, filter to same month/year as DEBIT
+                    credit_effective_date = c.get('effective_date', c['Date'])
+                    
+                    # Skip CREDITs from year AFTER debit year
+                    if credit_effective_date.year > debit_date.year:
+                        continue
+                    # Skip CREDITs from month AFTER debit month (in same year)
+                    if credit_effective_date.year == debit_date.year and credit_effective_date.month > debit_date.month:
+                        continue
+                    
+                    if min_date <= c['Date'] <= max_date:
+                        candidates_prefiltered.append(c)
 
             if candidates_prefiltered:
                 match = find_function(record_row, candidates_prefiltered, None, days_window, max_combinations, enable_best_fit=enable_best_fit)
@@ -726,109 +866,175 @@ class ReconciliationEngine:
         return df_matches
 
     def _reconcile_progressive_balance(self, verbose=True):
-        """Performs reconciliation using a sequential progressive balance algorithm."""
-        from datetime import timedelta # Make sure it's imported
-        if verbose:
-            print("\nStarting reconciliation with 'Progressive Balance' algorithm (Sequential)...")
-
-        # 1. Prepare data: Filter unused and Sort by Date
-        df_debit_temp = self.debit_df[~self.debit_df['orig_index'].isin(self.used_debit_indices)].copy()
-        df_credit_temp = self.credit_df[~self.credit_df['orig_index'].isin(self.used_credit_indices)].copy()
+        """Performs reconciliation using the user's progressive balance algorithm.
         
-        df_debit_temp.sort_values(by=['Date', 'orig_index'], inplace=True)
-        df_credit_temp.sort_values(by=['Date', 'orig_index'], inplace=True)
-
-        debit_rows = df_debit_temp.to_dict('records')
-        credit_rows = df_credit_temp.to_dict('records')
+        Logic:
+        1. Create Data_Analisi = Data_Valuta if present, else Data
+        2. Sort credits by Data_Analisi (ascending)
+        3. Process credits sequentially:
+           - Start with credit amount
+           - Find first unused debit (from current position in debit list sorted by Data_Analisi)
+           - Subtract debit from credit
+           - If debit > credit: remaining debit carries forward to next credit
+           - If credit > debit: remaining credit carries forward to next debit
+           - Mark used items
+        """
+        if verbose:
+            print("\nStarting reconciliation with 'Progressive Balance' algorithm...")
+        
+        df_debit = self.debit_df[~self.debit_df['orig_index'].isin(self.used_debit_indices)].copy()
+        df_credit = self.credit_df[~self.credit_df['orig_index'].isin(self.used_credit_indices)].copy()
+        
+        df_debit['analysis_date'] = df_debit['Date']
+        df_credit['analysis_date'] = df_credit.get('valuta_date', df_credit['Date'])
+        df_credit['analysis_date'] = df_credit['analysis_date'].combine_first(df_credit['Date'])
+        
+        df_debit = df_debit.sort_values(by=['analysis_date', 'orig_index'])
+        df_credit = df_credit.sort_values(by=['analysis_date', 'orig_index'])
+        
+        if verbose:
+            print(f"   - Processing {len(df_debit)} Debit and {len(df_credit)} Credit movements...")
+        
+        debit_rows = df_debit.to_dict('records')
+        credit_rows = df_credit.to_dict('records')
         
         n_debit = len(debit_rows)
         n_credit = len(credit_rows)
         
-        i = j = start_i = start_j = cum_debit = cum_credit = 0
+        debit_remaining = {i: debit_rows[i]['Debit'] for i in range(n_debit)}
+        
         matches = []
         
-        if verbose:
-            print(f"   - Sequential analysis on {n_debit} Debit movements and {n_credit} Credit movements...")
-
-        while i < n_debit or j < n_credit:
-            diff = cum_debit - cum_credit
+        debit_idx = 0
+        credit_idx = 0
+        
+        remaining_credit = 0
+        
+        current_match_debits = []
+        current_match_credits = []
+        current_debit_amounts = []
+        current_credit_amounts = []
+        
+        while credit_idx < n_credit:
+            credit_amount = credit_rows[credit_idx]['Credit']
+            credit_orig_idx = credit_rows[credit_idx]['orig_index']
             
-            start_date_debit = debit_rows[start_i]['Date'] if start_i < n_debit else None
-            start_date_credit = credit_rows[start_j]['Date'] if start_j < n_credit else None
-            curr_date_debit = debit_rows[i]['Date'] if i < n_debit else (debit_rows[i-1]['Date'] if i > 0 else None)
-            curr_date_credit = credit_rows[j]['Date'] if j < n_credit else (credit_rows[j-1]['Date'] if j > 0 else None)
-            
-            valid_starts = [d for d in [start_date_debit, start_date_credit] if d is not None]
-            valid_ends = [d for d in [curr_date_debit, curr_date_credit] if d is not None]
-            
-            should_reset = False
-            if valid_starts and valid_ends:
-                block_duration = (max(valid_ends) - min(valid_starts)).days
-                if block_duration > self.days_window and (cum_debit > 0 or cum_credit > 0):
-                    should_reset = True
-
-            if should_reset:
-                if self.ignore_tolerance:
-                    block_debit = debit_rows[start_i:i]
-                    block_credit = credit_rows[start_j:j]
+            if debit_idx >= n_debit:
+                if current_match_credits or current_match_debits:
                     match = {
-                        'debit_indices': [r['orig_index'] for r in block_debit],
-                        'debit_dates': [r['Date'] for r in block_debit],
-                        'debit_amounts': [r['Debit'] for r in block_debit],
-                        'credit_indices': [r['orig_index'] for r in block_credit],
-                        'credit_dates': [r['Date'] for r in block_credit],
-                        'credit_amounts': [r['Credit'] for r in block_credit],
-                        'total_credit': cum_credit,
-                        'difference': abs(diff),
-                        'match_type': f'Forced (Timeout {self.days_window}d)',
-                        'pass_name': 'Progressive Balance (Forced)'
+                        'debit_indices': current_match_debits.copy(),
+                        'debit_dates': [debit_rows[i]['analysis_date'] for i in range(len(debit_rows)) if debit_rows[i]['orig_index'] in current_match_debits],
+                        'debit_amounts': current_debit_amounts.copy(),
+                        'credit_indices': current_match_credits.copy(),
+                        'credit_dates': [credit_rows[i]['analysis_date'] for i in range(len(credit_rows)) if credit_rows[i]['orig_index'] in current_match_credits],
+                        'credit_amounts': current_credit_amounts.copy(),
+                        'total_credit': sum(current_credit_amounts),
+                        'difference': remaining_credit,
+                        'match_type': f'Progressive Balance (Partial - no more debits)',
+                        'pass_name': 'Progressive Balance',
+                        'is_forced': True
                     }
                     self._register_match(match, matches)
-                    start_i, start_j, cum_debit, cum_credit = i, j, 0, 0
-                else:
-                    start_i, start_j, cum_debit, cum_credit = i, j, 0, 0
+                break
             
-            if abs(diff) <= self.tolerance and (i > start_i or j > start_j):
-                block_debit = debit_rows[start_i:i]
-                block_credit = credit_rows[start_j:j]
+            remaining_credit += credit_amount
+            current_match_credits.append(credit_orig_idx)
+            current_credit_amounts.append(credit_amount)
+            
+            while remaining_credit > 0 and debit_idx < n_debit:
+                if debit_remaining[debit_idx] <= 0:
+                    debit_idx += 1
+                    continue
+                
+                debit_amount = debit_remaining[debit_idx]
+                debit_orig_idx = debit_rows[debit_idx]['orig_index']
+                
+                if debit_amount <= remaining_credit:
+                    current_match_debits.append(debit_orig_idx)
+                    current_debit_amounts.append(debit_amount)
+                    remaining_credit -= debit_amount
+                    debit_remaining[debit_idx] = 0
+                    debit_idx += 1
+                else:
+                    current_match_debits.append(debit_orig_idx)
+                    current_debit_amounts.append(remaining_credit)
+                    debit_remaining[debit_idx] = debit_amount - remaining_credit
+                    remaining_credit = 0
+            
+            if remaining_credit == 0:
                 match = {
-                    'debit_indices': [r['orig_index'] for r in block_debit],
-                    'debit_dates': [r['Date'] for r in block_debit],
-                    'debit_amounts': [r['Debit'] for r in block_debit],
-                    'credit_indices': [r['orig_index'] for r in block_credit],
-                    'credit_dates': [r['Date'] for r in block_credit],
-                    'credit_amounts': [r['Credit'] for r in block_credit],
-                    'total_credit': cum_credit,
-                    'difference': abs(diff),
-                    'match_type': f'Progressive Balance (Seq. {len(block_debit)}D vs {len(block_credit)}C)',
+                    'debit_indices': current_match_debits.copy(),
+                    'debit_dates': [debit_rows[i]['analysis_date'] for i in range(len(debit_rows)) if debit_rows[i]['orig_index'] in current_match_debits],
+                    'debit_amounts': current_debit_amounts.copy(),
+                    'credit_indices': current_match_credits.copy(),
+                    'credit_dates': [credit_rows[credit_idx]['analysis_date']],
+                    'credit_amounts': current_credit_amounts.copy(),
+                    'total_credit': sum(current_credit_amounts),
+                    'difference': 0,
+                    'match_type': f'Progressive Balance (Seq. {len(current_match_debits)}D vs {len(current_match_credits)}C)',
                     'pass_name': 'Progressive Balance'
                 }
                 self._register_match(match, matches)
-                start_i, start_j, cum_debit, cum_credit = i, j, 0, 0
-                if i == n_debit and j == n_credit: break
-            
-            can_advance_debit = i < n_debit
-            can_advance_credit = j < n_credit
-            
-            if can_advance_debit and can_advance_credit:
-                if cum_debit < cum_credit:
-                    cum_debit += debit_rows[i]['Debit']; i += 1
-                elif cum_credit < cum_debit:
-                    cum_credit += credit_rows[j]['Credit']; j += 1
-                else:
-                    if debit_rows[i]['Date'] <= credit_rows[j]['Date']:
-                        cum_debit += debit_rows[i]['Debit']; i += 1
-                    else:
-                        cum_credit += credit_rows[j]['Credit']; j += 1
-            elif can_advance_debit:
-                cum_debit += debit_rows[i]['Debit']; i += 1
-            elif can_advance_credit:
-                cum_credit += credit_rows[j]['Credit']; j += 1
-            else:
+                current_match_debits = []
+                current_match_credits = []
+                current_debit_amounts = []
+                current_credit_amounts = []
+            elif debit_idx >= n_debit:
+                if current_match_credits or current_match_debits:
+                    match = {
+                        'debit_indices': current_match_debits.copy(),
+                        'debit_dates': [debit_rows[i]['analysis_date'] for i in range(len(debit_rows)) if debit_rows[i]['orig_index'] in current_match_debits],
+                        'debit_amounts': current_debit_amounts.copy(),
+                        'credit_indices': current_match_credits.copy(),
+                        'credit_dates': [credit_rows[i]['analysis_date'] for i in range(len(credit_rows)) if credit_rows[i]['orig_index'] in current_match_credits],
+                        'credit_amounts': current_credit_amounts.copy(),
+                        'total_credit': sum(current_credit_amounts),
+                        'difference': remaining_credit,
+                        'match_type': f'Progressive Balance (Partial - no more debits)',
+                        'pass_name': 'Progressive Balance',
+                        'is_forced': True
+                    }
+                    self._register_match(match, matches)
                 break
-
+        
+        if current_match_debits or current_match_credits:
+            match = {
+                'debit_indices': current_match_debits.copy(),
+                'debit_dates': [debit_rows[i]['analysis_date'] for i in range(len(debit_rows)) if debit_rows[i]['orig_index'] in current_match_debits],
+                'debit_amounts': current_debit_amounts.copy(),
+                'credit_indices': current_match_credits.copy(),
+                'credit_dates': [credit_rows[i]['analysis_date'] for i in range(len(credit_rows)) if credit_rows[i]['orig_index'] in current_match_credits],
+                'credit_amounts': current_credit_amounts.copy(),
+                'total_credit': sum(current_credit_amounts),
+                'difference': remaining_credit,
+                'match_type': f'Progressive Balance (Partial)',
+                'pass_name': 'Progressive Balance',
+                'is_forced': True
+            }
+            self._register_match(match, matches)
+        
         if verbose:
-            print(f"   - Found {len(matches)} balanced blocks.")
+            print(f"   - Found {len(matches)} match blocks.")
+        return matches
+        
+        if current_match_debits or current_match_credits:
+            match = {
+                'debit_indices': current_match_debits.copy(),
+                'debit_dates': [debit_rows[i]['analysis_date'] for i in range(len(debit_rows)) if debit_rows[i]['orig_index'] in current_match_debits],
+                'debit_amounts': current_debit_amounts.copy(),
+                'credit_indices': current_match_credits.copy(),
+                'credit_dates': [credit_rows[i]['analysis_date'] for i in range(len(credit_rows)) if credit_rows[i]['orig_index'] in current_match_credits],
+                'credit_amounts': current_credit_amounts.copy(),
+                'total_credit': sum(current_credit_amounts),
+                'difference': remaining_credit,
+                'match_type': f'Progressive Balance (Partial)',
+                'pass_name': 'Progressive Balance',
+                'is_forced': True
+            }
+            self._register_match(match, matches)
+        
+        if verbose:
+            print(f"   - Found {len(matches)} match blocks.")
         return matches
 
     def _register_match(self, match, matches_list):
@@ -839,6 +1045,7 @@ class ReconciliationEngine:
         self.used_debit_indices.update(debit_indices_orig)
         self.used_credit_indices.update(credit_indices_orig)
         credit_dates = match.get('credit_dates')
+        is_forced = match.get('is_forced', False)
         matches_list.append({
             'debit_indices': debit_indices_orig,
             'debit_dates': match.get('debit_dates', []),
@@ -850,8 +1057,83 @@ class ReconciliationEngine:
             'total_credit': match.get('total_credit', match.get('total_debit', 0)),
             'difference': match.get('difference', 0),
             'match_type': match.get('match_type', 'N/D'),
-            'pass_name': match.get('pass_name', 'N/D')
+            'pass_name': match.get('pass_name', 'N/D'),
+            'is_forced': is_forced
         })
+
+    def _reconcile_residual_recovery(self, matches, verbose=True):
+        """
+        NEW: Smart Residual Recovery - tries to match differences from forced blocks
+        with unused movements using extended window.
+        
+        This simulates human behavior: after a block fails to balance due to time window,
+        try to find additional movements that can compensate the difference.
+        """
+        if verbose:
+            print("\n[NEW] Starting Smart Residual Recovery...")
+        
+        # Get forced matches (from Progressive Balance timeout)
+        forced_matches = [m for m in matches if m.get('is_forced', False)]
+        if not forced_matches:
+            if verbose:
+                print("   - No forced blocks to recover.")
+            return matches
+        
+        # Get unused movements
+        unused_debits = self.debit_df[~self.debit_df['orig_index'].isin(self.used_debit_indices)]
+        unused_credits = self.credit_df[~self.credit_df['orig_index'].isin(self.used_credit_indices)]
+        
+        if verbose:
+            print(f"   - Analyzing {len(forced_matches)} forced blocks with {len(unused_debits)} unused debits and {len(unused_credits)} unused credits.")
+        
+        recovered_count = 0
+        
+        for match in forced_matches:
+            diff = match.get('difference', 0)
+            if diff == 0:
+                continue
+            
+            # Get the date range of the original match
+            debit_dates = match.get('debit_dates', [])
+            credit_dates = match.get('credit_dates', [])
+            if not debit_dates or not credit_dates:
+                continue
+            
+            min_date = min(min(debit_dates), min(credit_dates))
+            max_date = max(max(debit_dates), max(credit_dates))
+            
+            # Try to find movements that can compensate the difference
+            # Look for unused credits that could fill the gap (capienza)
+            for _, credit_row in unused_credits.iterrows():
+                if credit_row['Credit'] >= diff - self.tolerance:
+                    # Found a credit that can compensate!
+                    # But we need to check date compatibility - use effective_date if available
+                    effective_date = credit_row.get('effective_date', credit_row['Date'])
+                    if (effective_date - max_date).days <= self.residual_days_window:
+                        # Create a new match for the recovery
+                        recovery_match = {
+                            'debit_indices': [credit_row['orig_index']],
+                            'debit_dates': [credit_row['Date']],
+                            'debit_amounts': [credit_row['Credit']],
+                            'credit_indices': [],
+                            'credit_dates': [],
+                            'credit_amounts': [],
+                            'total_debit': credit_row['Credit'],
+                            'difference': credit_row['Credit'] - diff,
+                            'match_type': f'Residual Recovery (+{diff/100:.2f})',
+                            'pass_name': 'Residual Recovery',
+                            'is_recovery': True
+                        }
+                        self._register_match(recovery_match, matches)
+                        recovered_count += 1
+                        if verbose:
+                            print(f"   - Recovered: added credit {credit_row['orig_index']} ({credit_row['Credit']/100:.2f}€) to compensate difference {diff/100:.2f}€")
+                        break
+        
+        if verbose:
+            print(f"   - Residual recovery complete. Recovered {recovered_count} additional matches.")
+        
+        return matches
 
     def _calculate_monthly_balance(self):
         """Calculates aggregate statistics by month to identify periodic imbalances."""
@@ -942,13 +1224,30 @@ class ReconciliationEngine:
 
     def _evaluate_best_configuration(self, df, verbose=True):
         if verbose: print("\n🧠 AUTO-EVALUATION: Analyzing data to select the best strategy...")
+        
+        # If valuta_date_column is set, MUST use Subset Sum as it has valuta_date filtering
+        # Also respect user's search_direction preference
+        if self.valuta_date_column:
+            if verbose:
+                print("   ⚠️  Valuta Date column detected - using Subset Sum (required for valuta filtering)")
+            # Use user's search_direction, default to future_only if not specified
+            search_dir = self.search_direction if self.search_direction else 'future_only'
+            return {
+                'algorithm': 'subset_sum',
+                'sorting_strategy': 'date',
+                'search_direction': search_dir,
+                'days_window': max(self.days_window, 7),
+                'max_combinations': max(self.max_combinations, 10)
+            }
+        
+        # Without valuta_date, try to find best algorithm but respect user's search_direction
         strategies = [
-            {'name': 'Progressive Balance (Strict)', 'params': {'algorithm': 'progressive_balance', 'sorting_strategy': 'date', 'search_direction': 'past_only'}},
+            {'name': 'Progressive Balance (Strict)', 'params': {'algorithm': 'progressive_balance', 'sorting_strategy': 'date', 'search_direction': self.search_direction}},
             {'name': 'Subset Sum (Standard)', 'params': {'algorithm': 'subset_sum', 'sorting_strategy': self.sorting_strategy, 'search_direction': self.search_direction}},
             {'name': 'Greedy Amount First', 'params': {'algorithm': 'greedy_amount_first'}}
         ]
         if len(df) < 5000:
-             strategies.append({'name': 'Subset Sum (Aggressive)', 'params': {'algorithm': 'subset_sum', 'days_window': max(self.days_window, 30), 'max_combinations': max(self.max_combinations, 12)}})
+             strategies.append({'name': 'Subset Sum (Aggressive)', 'params': {'algorithm': 'subset_sum', 'days_window': max(self.days_window, 30), 'max_combinations': max(self.max_combinations, 12), 'search_direction': self.search_direction}})
 
         best_score, best_params = -1, {}
         for strat in strategies:
@@ -981,6 +1280,15 @@ class ReconciliationEngine:
             if isinstance(input_file, pd.DataFrame):
                 if verbose: print("1. Using pre-loaded DataFrame.")
                 df = input_file
+                # Ensure required columns exist for DataFrame passed directly
+                if 'store_id' not in df.columns:
+                    df['store_id'] = None
+                # Handle valuta_date column - rename and convert to datetime
+                if self.valuta_date_column and self.valuta_date_column in df.columns:
+                    df.rename(columns={self.valuta_date_column: 'valuta_date'}, inplace=True)
+                    df['valuta_date'] = pd.to_datetime(df['valuta_date'], errors='coerce', dayfirst=True)
+                elif 'valuta_date' not in df.columns:
+                    df['valuta_date'] = pd.NaT
             else:
                 if verbose: print(f"1. Loading and validating file: {input_file}")
                 df = self.load_file(input_file)
@@ -1014,6 +1322,10 @@ class ReconciliationEngine:
                     all_matches.extend(self._reconcile_subset_sum(verbose=verbose))
                 elif algo == 'greedy_amount_first':
                     all_matches.extend(self._reconcile_greedy_amount_first(verbose=verbose))
+
+            # NEW: Run residual recovery after main algorithms
+            if verbose: print("\n[NEW] Running Smart Residual Recovery...")
+            all_matches = self._reconcile_residual_recovery(all_matches, verbose=verbose)
 
             self.debit_df['used'] = self.debit_df['orig_index'].isin(self.used_debit_indices)
             self.credit_df['used'] = self.credit_df['orig_index'].isin(self.used_credit_indices)

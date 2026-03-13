@@ -118,6 +118,24 @@ def processa_file():
 
     try:
         form_data = request.form.to_dict()
+        
+        # Build column mapping from form inputs
+        col_date = form_data.get('col_date', 'Data')
+        col_debit = form_data.get('col_debit', 'Dare')
+        col_credit = form_data.get('col_credit', 'Avere')
+        col_store_id = form_data.get('col_store_id')
+        col_valuta_date = form_data.get('col_valuta_date')
+        
+        # Only use valuta_date if explicitly provided and not empty
+        valuta_date_col = col_valuta_date if col_valuta_date and col_valuta_date.strip() else None
+        
+        # Build column mapping dict (source -> internal)
+        column_mapping = {
+            col_date: 'Date',
+            col_debit: 'Debit',
+            col_credit: 'Credit'
+        }
+        
         engine_params = {
             'tolerance': float(form_data.get('tolerance', 0.01)),
             'days_window': int(form_data.get('days_window', 7)),
@@ -126,7 +144,10 @@ def processa_file():
             'residual_days_window': int(form_data.get('residual_days_window', 30)),
             'search_direction': form_data.get('search_direction', 'past_only'),
             'algorithm': form_data.get('algorithm', 'auto'),
-            'ignore_tolerance': form_data.get('ignore_tolerance') == 'true'
+            'ignore_tolerance': form_data.get('ignore_tolerance') == 'true',
+            'store_id_column': col_store_id if col_store_id and col_store_id.strip() else None,
+            'valuta_date_column': valuta_date_col,
+            'column_mapping': column_mapping
         }
         
         file.stream.seek(0)

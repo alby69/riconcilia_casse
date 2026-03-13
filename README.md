@@ -5,320 +5,381 @@ This project provides a powerful and flexible accounting reconciliation service,
 ## ✨ Key Features
 
 - **Intuitive Web Interface**: A clean, tab-organized UI for uploading files and customizing processing settings.
-- **Multiple Algorithms**: Supports various reconciliation algorithms, including "Simple" (1-to-1) and "Subset Sum" (N-to-1), selectable by the user.
-- **Dynamic Configuration**: Allows real-time modification of key parameters like tolerance, time windows, and search strategies directly from the browser.
-- **Secure In-Memory Processing**: Files are processed in memory to ensure speed and data privacy, without permanently storing sensitive data.
-- **Detailed Excel Reports**: The output is a multi-sheet Excel file that includes:
-  - A **Summary** sheet with parameters and high-level results.
-  - A sheet with all **Matches** found.
-  - Sheets for **Unreconciled Debit** and **Unreconciled Credit** transactions.
-  - Detailed processing **Statistics**.
-  - A **Monthly Balance** analysis with a visual chart.
-- **Batch Processing**: A command-line script (`batch.py`) to process multiple files automatically.
-- **Parameter Optimizer**: A script (`optimizer.py`) to find the optimal reconciliation parameters for a given dataset.
-- **Production & Docker Ready**: Containerized with Docker and ready for production deployment using a Gunicorn WSGI server.
-- **Modular Architecture**: Core logic separated from reporting and UI for better maintainability.
+- **Multiple Algorithms**: Supports various reconciliation algorithms, including "Subset Sum", "Progressive Balance", and "Greedy Amount First".
+- **Smart Residual Recovery**: Automatically recovers differences from forced blocks.
+- **Capienza Logic**: Supports GDO-style matching where credit >= debits (anticipi, incassi extra).
+- **Multi-Store Support**: Optional store ID column for prioritized matching within the same store.
+- **Data Valuta**: Handles year-end transitions where January deposits may refer to December.
+- **Flexible Column Mapping**: Map any Excel column names to the internal format via web UI.
+- **Dynamic Configuration**: Allows real-time modification of key parameters like tolerance, time windows, and search strategies.
+- **Secure In-Memory Processing**: Files are processed in memory to ensure speed and data privacy.
+- **Detailed Excel Reports**: Multi-sheet output with Summary, Matches, Unreconciled items, and Monthly Balance charts.
+- **Batch Processing**: Command-line script (`batch.py`) for automatic multiple file processing.
+- **Parameter Optimizer**: Script (`optimizer.py`) to find optimal reconciliation parameters.
+
+---
+
+## 📚 How the Algorithms Work
+
+This section explains each reconciliation algorithm with simple examples.
+
+### Basic Concepts
+
+Before diving into algorithms, let's clarify the terminology:
+
+- **DEBIT (Dare)**: Money received from sales (cash register receipts)
+- **CREDIT (Avere)**: Money deposited in bank (versamenti)
+- **Match**: An association between one or more DEBIT movements and one or more CREDIT movements
+- **Tolerance**: Maximum acceptable difference (in euros) to consider a match valid
+
+### 1. Subset Sum Algorithm
+
+**Philosophy**: "Find combinations that add up to the target"
+
+This is the most powerful algorithm. It runs in **3 passes**:
+
+#### Pass 1: Receipt Aggregation (Many DEBIT → 1 CREDIT)
+```
+Example:
+- CREDIT: €300 deposited on Jan 5
+- DEBITs: €100 + €150 + €50 from Jan 1-4
+- Result: Match! (100 + 150 + 50 = 300)
+```
+
+The algorithm searches for combinations of DEBITs that sum to match a CREDIT within the time window.
+
+#### Pass 2: Split Deposits (1 DEBIT → Many CREDIT)
+```
+Example:
+- DEBIT: €500 from sales on Jan 3
+- CREDITs: €200 + €300 deposited on Jan 5 and Jan 6
+- Result: Match! (200 + 300 = 500)
+```
+
+Inverse of Pass 1: splits one large DEBIT into multiple CREDITs.
+
+#### Pass 3: Residual Recovery (Extended Window)
+```
+Same as Pass 1 but with a larger time window (default 30 days)
+to catch difficult matches that were missed in earlier passes.
+```
+
+#### Best Fit (Partial Match)
+
+When exact match is impossible, Best Fit finds the combination that best fills the target without exceeding it:
+
+```
+Example:
+- CREDIT: €300 deposited on Jan 5
+- DEBITs: €100 + €150 + €80 from previous days
+- Best Fit: Uses €100 + €150 = €250
+- Residual: €50 left unmatched (will be processed in next passes)
+```
+
+### 2. Progressive Balance Algorithm
+
+**Philosophy**: "Walk through chronologically like a human would"
+
+This algorithm simulates how a person would reconcile by scanning through sorted transactions:
+
+```
+Example (sorted by date):
+Jan 1:  DEBIT €100
+Jan 2:  DEBIT €200
+Jan 3:  CREDIT €150
+Jan 4:  DEBIT €50
+Jan 5:  CREDIT €200
+
+Step-by-step:
+1. Start: cum_debit=0, cum_credit=0
+2. Add DEBIT €100 → cum_debit=100
+3. Add DEBIT €200 → cum_debit=300
+4. Add CREDIT €150 → cum_credit=150, diff=150
+5. Add DEBIT €50  → cum_debit=350, diff=200
+6. Add CREDIT €200 → cum_credit=350, diff=0 ✅ MATCH!
+
+Block: DEBITs (100+200+50) = CREDITs (150+200) = €350
+```
+
+**Key Feature - Forced Blocks**: When the time window expires before balance is reached, the algorithm **always** registers the match (forced) instead of discarding data. This prevents losing information.
+
+### 3. Greedy Amount First Algorithm
+
+**Philosophy**: "Match largest amounts first"
+
+Instead of sorting by date, this algorithm sorts by amount and processes the largest transactions first:
+
+```
+Example:
+- All DEBITs sorted descending: €500, €300, €200, €100...
+- All CREDITs sorted descending: €450, €350, €200...
+
+Process:
+1. Try to match €500 (largest DEBIT)
+2. Search for CREDITs that sum to €500
+3. Continue with next largest...
+```
+
+This is useful when large transactions are the most important to reconcile.
+
+---
+
+## 🆕 New Features (v5.0)
+
+### Data Valuta (Value Date)
+
+In GDO (Grande Distribuzione) retail, it's common for the bank deposit to be **greater than** the cash receipts (due to anticipi, extra income, rounding adjustments).
+
+```
+Traditional: CREDIT must equal DEBIT ± tolerance
+Capienza:     CREDIT can be >= DEBIT (credit has excess)
+
+Example:
+- DEBITs (receipts): €100 + €150 = €250
+- CREDIT (deposit):  €300
+- Result: MATCH with Capienza! (300 - 250 = €50 excess)
+```
+
+### Smart Residual Recovery
+
+After main algorithms complete, this new phase tries to recover unmatched differences:
+
+1. Takes all "forced" blocks (from Progressive Balance timeout)
+2. Analyzes the difference for each block
+3. Searches for unused movements that can compensate the difference
+4. Creates new matches to recover residual amounts
+
+```
+Example:
+- Forced block: DEBITs €500, CREDIT €450, difference €50
+- Unused credit: €60 from nearby date
+- Recovery: Match the €60 to compensate the €50 difference
+```
+
+### Multi-Store Support
+
+Optional store ID column enables:
+
+1. **Priority matching**: First try to match within the same store
+2. **Cross-store matching**: If no match found, try other stores
+3. **Store-level reporting**: Statistics per store
+
+```
+Configuration:
+store_id_column: "CodiceNegozio"  # or any column name
+
+Example data:
+| Date       | Debit | Credit | CodiceNegozio |
+|------------|-------|--------|---------------|
+| 2025-01-01 | 100   | 0      | STORE_01      |
+| 2025-01-02 | 200   | 0      | STORE_01      |
+| 2025-01-03 | 0     | 300    | STORE_01      |  ← Match: 100+200 = 300
+
+| 2025-01-01 | 150   | 0      | STORE_02      |
+| 2025-01-03 | 0     | 150    | STORE_02      |  ← Match: same store
+```
+
+### Data Valuta (Value Date)
+
+The "Data Valuta" feature handles **year-end transitions** common in GDO retail:
+
+- **Problem**: Deposits made in early January may actually belong to December (or previous year)
+- **Solution**: Use "Data Valuta" to specify the actual reference period
+
+```
+Example:
+| Data Registrazione | Dare | Avere | Data Valuta |
+|-------------------|------|-------|-------------|
+| 2025-01-02        | 100  | 0     | (none)      |  ← Incasso gen
+| 2025-01-02        | 200  | 0     | (none)      |  ← Incasso gen  
+| 2025-01-03        | 0    | 300   | 2024-12-31  |  ← Versamento di gen, ma riferito a dic!
+
+Matching Logic:
+- CREDIT with valuta Dec 31 → matches only with DEBITs from December
+- CREDIT with valuta Jan 1 → matches only with DEBITs from January
+- CREDIT without valuta → uses registration Date (backward compatible)
+```
+
+### Data Analisi (Analysis Date)
+
+For better chronological ordering, the system creates an internal **Data Analisi** column:
+
+- **Data Analisi = Data Valuta** if present
+- **Data Analisi = Data** (registration) if no valuta
+
+This ensures deposits with December valuta are processed BEFORE January transactions, even if registered in January.
+
+---
 
 ## ⚙️ Installation
 
-1.  **Prerequisites**: Python 3.9+ and Git.
+1. **Prerequisites**: Python 3.9+ and Git.
 
-2.  **Clone the Repository**:
+2. **Clone the Repository**:
     ```bash
     git clone <YOUR_REPOSITORY_URL>
     cd accounting-reconciliation
     ```
 
-3.  **Create and Activate a Virtual Environment**:
+3. **Create and Activate a Virtual Environment**:
     ```bash
     python -m venv .venv
-    source .venv/bin/activate  # On Windows, use: .venv\Scripts\activate
+    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
     ```
 
-4.  **Install Dependencies**:
+4. **Install Dependencies**:
     ```bash
     pip install -r requirements.txt
     ```
 
-## 🐳 Usage with Docker
+---
 
-The recommended way to run the application is with Docker Compose, which simplifies building the image and managing containers.
+## 🚀 Usage
 
-### Using Docker Compose
+### Command Line (Single File)
 
-1.  **Build and Start the Service**:
-    ```bash
-    docker compose up -d --build
-    ```
-    The application will be accessible at `http://localhost:5000`.
-
-2.  **View Logs**:
-    ```bash
-    docker compose logs -f
-    ```
-
-3.  **Stop the Service**:
-    ```bash
-    docker compose down
-    ```
-
-## 🚀 How to Use the Web Application
-
-The primary way to use the application is through the web interface, which is started using Docker Compose as described above.
-
-The service runs on a Gunicorn WSGI server, configured for production use. The configuration is handled automatically by the `start.sh` script inside the Docker container:
-- **Workers**: The number of worker processes is set dynamically to `(2 * CPU cores) + 1` for optimal performance.
-- **Timeout**: A timeout of 300 seconds is configured to allow for long-running optimization and processing tasks without interruptions.
-
-### Output Generato
-
-Per ogni file elaborato:
-```
-output/
-├── risultato_supermercato_A.xlsx  ← Foglio Excel completo
-├── risultato_supermercato_B.xlsx
-└── logs/
-    ├── batch_log_[timestamp].json     ← Log dettagliato JSON
-    └── riepilogo_[timestamp].csv      ← Tabella riepilogo
-```
-
-### Esempio Output Console
-
-```
-╔════════════════════════════════════════════════════════════╗
-║          BATCH PROCESSOR - ELABORAZIONE MULTIPLA           ║
-╚════════════════════════════════════════════════════════════╝
-
-🔍 Ricerca file in: input
-✓ Trovati 3 file da elaborare
-
-⚙️  CONFIGURAZIONE:
-   - Tolleranza: €0.01
-   - Finestra temporale: ±30 giorni
-   - Max combinazioni: 6
-   - Output: output/
-
-[1/3] ============================================================
-📂 Elaborazione: supermercato_A.xlsx
-============================================================
-  ⏳ Caricamento dati...
-  ✓ Caricati 850 movimenti
-  Movimenti DARE: 320, AVERE: 530
-  ⏳ Riconciliazione in corso...
-
-  ✅ COMPLETATO
-  📊 DARE riconciliati: 305/320 (95.3%)
-  📊 AVERE utilizzati: 498/530 (94.0%)
-  💾 Salvato in: risultato_supermercato_A.xlsx
-
-[2/3] ============================================================
-...
-
-============================================================
-📊 RIEPILOGO GLOBALE
-============================================================
-✓ File elaborati con successo: 3/3
-✗ File con errori: 0
-⏱  Tempo totale: 45.3 secondi (0.8 minuti)
-
-📈 STATISTICHE AGGREGATE:
-   - Totale movimenti DARE: 1,240
-   - DARE riconciliati: 1,180 (95.2%)
-
-💾 Log salvato in: output/logs/
-============================================================
-```
-
-### File Log JSON
-
-Il file `batch_log_[timestamp].json` contiene:
-
-```json
-{
-  "timestamp": "2025-01-15T14:30:22",
-  "configurazione": {
-    "tolleranza": 0.01,
-    "giorni_finestra": 30,
-    "max_combinazioni": 6
-  },
-  "risultati": [
-    {
-      "file": "supermercato_A.xlsx",
-      "successo": true,
-      "statistiche": {
-        "totale_dare": 320,
-        "dare_riconciliati": 305,
-        "percentuale_dare": 95.3,
-        "output_file": "output/risultato_supermercato_A.xlsx"
-      }
-    }
-  ]
-}
-```
-
-### File Riepilogo CSV
-
-Tabella analisi rapida per Excel/analisi:
-
-| File | Successo | totale_dare | dare_riconciliati | percentuale_dare |
-|------|----------|-------------|-------------------|------------------|
-| supermercato_A.xlsx | True | 320 | 305 | 95.3 |
-| supermercato_B.xlsx | True | 450 | 430 | 95.6 |
-| supermercato_C.xlsx | True | 470 | 445 | 94.7 |
-
-### Pattern Avanzati
-
-**Elabora solo file specifici:**
-```python
-'pattern': 'supermercato_*.xlsx'  # Solo file che iniziano con "supermercato_"
-'pattern': '*_gennaio_2025.xlsx'  # Solo file di gennaio
-'pattern': 'store_[0-9]*.xlsx'    # Solo store con numero
-```
-
-**Cartelle separate per periodo:**
-```python
-config = {
-    'cartella_input': 'dati/gennaio_2025',
-    'cartella_output': 'risultati/gennaio_2025',
-}
-```
-
-### Automazione con Cron/Task Scheduler
-
-**Linux/Mac (cron):**
 ```bash
-# Esegui ogni giorno alle 2:00 AM
-0 2 * * * cd /percorso/progetto && python batch_processor.py >> batch.log 2>&1
+python main.py --input input/myfile.xlsx --output output/result.xlsx
 ```
 
-**Windows (Task Scheduler):**
-```
-Azione: Avvia programma
-Programma: python.exe
-Argomenti: batch_processor.py
-Cartella di avvio: C:\percorso\progetto
-```
+### Web Interface
 
-### Gestione Errori
-
-Se alcuni file falliscono, il batch continua con gli altri:
-
-```
-[2/5] ============================================================
-📂 Elaborazione: file_con_colonne_errate.xlsx
-============================================================
-  ❌ ERRORE: Il file deve contenere le colonne: Data, Dare, Avere
-
-[3/5] ============================================================
-📂 Elaborazione: file_ok.xlsx
-============================================================
-  ✅ COMPLETATO
-...
-
-⚠️  FILE CON ERRORI:
-   - file_con_colonne_errate.xlsx: Nome colonna 'Incasso' non trovato. Controllare il file di configurazione.
+```bash
+docker compose up -d
+# Access at http://localhost:5000
 ```
 
-### Integrazione con Script Esterni
+### Batch Processing
 
-**Esportare solo statistiche:**
-```python
-from batch_processor import BatchProcessor
-
-processor = BatchProcessor(config)
-processor.elabora_tutti()
-
-# Accedi a statistiche
-for stat in processor.stats_globali:
-    print(f"{stat['file']}: {stat['statistiche']['percentuale_dare']}%")
-```
-
-**Callback personalizzati:**
-```python
-class BatchProcessorCustom(BatchProcessor):
-    def elabora_file(self, file_path):
-        risultato = super().elabora_file(file_path)
-        
-        # Invia email se errori
-        if not risultato['successo']:
-            self.invia_alert(risultato['file'], risultato['errore'])
-        
-        return risultato
-```
-
----
-
-## ⚙️ Configurazione via File JSON (Consigliato)
-
-Per una maggiore flessibilità, è possibile gestire tutti i parametri tramite un file esterno `config.json` senza modificare il codice Python.
-
-**1. Crea un file `config.json`** nella stessa cartella degli script con questo contenuto:
-
+Configure `config.json`:
 ```json
 {
-  "tolleranza": 0.01,
-  "giorni_finestra": 30,
-  "max_combinazioni": 6,
-  "cartella_input": "input",
-  "cartella_output": "output",
-  "pattern": [
-    "*.xlsx",
-    "*.csv"
-  ]
+  "tolerance": 0.01,
+  "days_window": 7,
+  "max_combinations": 10,
+  "residual_days_window": 30,
+  "store_id_column": "CodiceNegozio",
+  "valuta_date_column": "Data Valuta",
+  "column_mapping": {
+    "Data": "Date",
+    "Dare": "Debit", 
+    "Avere": "Credit"
+  }
 }
 ```
 
-**2. Esegui lo script `batch.py`**: Lo script rileverà automaticamente il file `config.json` e utilizzerà i valori specificati. Se il file non viene trovato, verranno utilizzati i parametri di default.
+### Column Mapping
+
+The system can map **any column names** from your Excel file to the internal format. This is useful if your files use different naming conventions.
+
+**Via Web Interface:**
+In the "Impostazioni Avanzate" section, fill in the column names from your Excel file:
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| Data | Date column | Data |
+| Dare (Incassi) | Receipts (cash in) | Dare |
+| Avere (Versamenti) | Deposits (cash out) | Avere |
+| Codice Negozio | Store ID (optional) | - |
+| Data Valuta | Value date (optional) | - |
+
+**Example:** If your Excel has:
+- `DataMovimento` instead of `Data`
+- `Incassi` instead of `Dare`
+- `Versamenti` instead of `Avere`
+- `DataRif` for value date
+
+Just enter these names in the mapping fields!
+
+Then run:
+```bash
+python batch.py
+```
 
 ---
 
-## 📞 Supporto
+## 📊 Output Example
 
-Per domande o problemi, contatta: [tua-email@esempio.com]
+The Excel output contains multiple sheets:
+
+| Sheet | Description |
+|-------|-------------|
+| **Summary** | KPIs, top unreconciled items, automated analysis |
+| **Matches** | All found matches with dates, amounts, types |
+| **Unused DEBIT** | Unmatched receipt transactions |
+| **Unreconciled CREDIT** | Unmatched deposit transactions |
+| **Monthly Balance** | Monthly aggregation with charts |
 
 ---
 
-## 📂 Project Structure & File Explanation
+## 🔧 Configuration Parameters
 
-Here is an overview of the key files in the project and how they interact:
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `tolerance` | 0.01 € | Maximum acceptable difference |
+| `days_window` | 7 days | Time window for matching |
+| `max_combinations` | 10 | Max elements in a combination |
+| `residual_days_window` | 30 days | Extended window for residual recovery |
+| `algorithm` | subset_sum | Algorithm to use (subset_sum, progressive_balance, greedy, auto) |
+| `search_direction` | past_only | Direction (past_only, future_only, both) |
+| `store_id_column` | None | Column name for store identification |
+| `enable_best_fit` | True | Enable partial matching |
 
-### Core Logic
-- **`core.py`**: The heart of the application. Contains the `ReconciliationEngine` class which implements the reconciliation algorithms (Subset Sum, Progressive Balance) and manages the data flow.
-- **`reporting.py`**: Handles the generation of the multi-sheet Excel report. It extracts data from the engine and formats it into a user-friendly Excel file with charts and statistics, adhering to the Single Responsibility Principle.
-- **`config.json`**: The central configuration file. Defines parameters like tolerance, column mapping, and algorithm choice.
+---
 
-### Interfaces
-- **`app.py`**: The Flask web application. Manages the web interface, file uploads, and API endpoints. It instantiates `ReconciliationEngine` to process uploaded files.
-- **`riconciliazione.py`**: The batch processing script. It reads all files in the `input/` folder and processes them sequentially using the settings in `config.json`. Ideal for bulk processing.
-- **`main.py`**: A command-line wrapper for single-file execution. Useful for integration with other tools or specific one-off runs.
-- **`optimizer.py`**: An advanced script using `Optuna` to automatically find the best parameters (tolerance, window, etc.) for a specific dataset to maximize the reconciliation rate.
+## 🐳 Docker Usage
 
-### Infrastructure & Docs
-- **`docker-compose.yml`**: Defines the Docker service configuration, including volume mounts for live code updates.
-- **`templates/index.html`**: The frontend HTML/JS for the web interface.
-- **`doc/`**: Folder containing documentation and tutorials (e.g., Git guide).
+```bash
+# Build and start
+docker compose up -d --build
 
-### How they connect
-1.  **User Input**: The user interacts via Web (`app.py`) or Batch Script (`riconciliazione.py`).
-2.  **Configuration**: Both interfaces load settings from `config.json`.
-3.  **Processing**: The input data is passed to `core.py` (`ReconciliationEngine`).
-4.  **Reporting**: Once processed, `core.py` delegates the creation of the Excel file to `reporting.py`.
+# View logs
+docker compose logs -f
+
+# Stop
+docker compose down
+```
+
+---
+
+## 📂 Project Structure
+
+```
+├── core.py              # ReconciliationEngine (algorithms + logic)
+├── reporting.py         # Excel report generation
+├── app.py              # Flask web interface
+├── main.py             # CLI for single file
+├── batch.py            # Batch processing
+├── optimizer.py         # Parameter optimization
+├── config.json         # Configuration file
+├── tests/              # Unit tests
+└── tools/              # Utility scripts
+```
 
 ---
 
 ## 📜 Changelog
 
-### v3.1.0 (Febbraio 2026)
-- **Optimizer**: Aggiunta la `sorting_strategy` allo spazio di ricerca per testare diverse strategie di ordinamento.
-- **Gunicorn**: Ottimizzato l'avvio in Docker con worker dinamici (`(2 * core) + 1`) e timeout aumentato per gestire elaborazioni lunghe.
-- **Multiprocessing**: Reso stabile il parallelismo di Optuna in Docker tramite l'uso di uno storage SQLite temporaneo.
-- **Reporting**: Migliorata la leggibilità del grafico "Monthly Performance" con colori distinti per i volumi totali e utilizzati.
-- **Bug Fixes**: Corretti diversi errori relativi all'importazione, alla gestione dei parametri e all'esecuzione dell'ottimizzatore.
+### v5.0 (March 2026)
+- **Data Valuta**: New field for "value date" - handles year-end transitions where January deposits refer to December
+- **Data Analisi**: Auto-calculated column that uses valuta_date if present, otherwise registration date
+- **Column Mapping**: Full support for custom column names via web interface
+- **Smart Filtering**: Deposits with December valuta won't match January receipts (and vice versa)
 
-### v3.0.0 (Versione Corrente)
-- **Docker**: Aggiunto supporto ufficiale con `Dockerfile` e `.dockerignore`.
-- **Core Engine**: Riscrittura completa del motore (`core.py`) utilizzando **Pandas DataFrame** per performance elevate.
-- **Testing**: Nuova suite di test in `tests/` con script di automazione `run_tests.sh`.
-- **Refactoring**: Spostamento utility in `tools/` e pulizia del codice.
-- **Logging**: Controllo granulare sul salvataggio dei log (parametro `save_log`).
-- **Best Fit**: Migliorata la logica di abbinamento parziale con opzione per disabilitarla.
+### v4.0 (March 2026)
+- **Smart Residual Recovery**: New phase that recovers differences from forced blocks
+- **Capienza Logic**: Support for GDO-style matching (credit >= debits)
+- **Forced Blocks**: Progressive Balance now always registers matches on timeout (never loses data)
+- **Multi-Store Support**: New `store_id_column` parameter for store-level matching
+- **Better Excel Formatting**: Fixed currency/integer formatting for all columns
+- **New Match Types**: Added "Forced", "Residual Recovery", "Capienza" indicators
+
+### v3.1.0 (February 2026)
+- Optimizer with sorting_strategy
+- Docker Gunicorn optimization
+- Monthly Performance chart improvements
+
+### v3.0.0
+- Complete rewrite with Pandas
+- Best Fit logic
+- Docker support
