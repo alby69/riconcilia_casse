@@ -16,6 +16,28 @@ import uuid
 from core import ReconciliationEngine
 from optimizer import find_best_parameters
 
+
+# --- Helper Functions for Form Parsing ---
+def _get_float(value, default):
+    """Safely convert form value to float, returning default if empty or None."""
+    if value is None or value == '':
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def _get_int(value, default):
+    """Safely convert form value to int, returning default if empty or None."""
+    if value is None or value == '':
+        return default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
 # --- Flask App Configuration ---
 app = Flask(__name__)
 app.secret_key = "supersecretkey_dev"  # Change in production
@@ -160,11 +182,11 @@ def processa_file():
         column_mapping = {col_date: "Date", col_debit: "Debit", col_credit: "Credit"}
 
         engine_params = {
-            "tolerance": float(form_data.get("tolerance") or 50.0),
-            "days_window": int(form_data.get("days_window") or 5),
-            "max_combinations": int(form_data.get("max_combinations") or 10),
-            "residual_threshold": float(form_data.get("residual_threshold") or 50.0),
-            "residual_days_window": int(form_data.get("residual_days_window") or 5),
+            "tolerance": _get_float(form_data.get("tolerance"), 50.0),
+            "days_window": _get_int(form_data.get("days_window"), 5),
+            "max_combinations": _get_int(form_data.get("max_combinations"), 10),
+            "residual_threshold": _get_float(form_data.get("residual_threshold"), 50.0),
+            "residual_days_window": _get_int(form_data.get("residual_days_window"), 5),
             "search_direction": form_data.get("search_direction") or "both",
             "algorithm": form_data.get("algorithm") or "progressive_balance",
             "ignore_tolerance": form_data.get("ignore_tolerance") == "true",
