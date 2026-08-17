@@ -139,22 +139,40 @@ def robust_currency_parser(value):
     return cleaned_str
 
 
-def prepare_dataframe(file_stream):
-    """Reads an Excel file from a stream and prepares the DataFrame for the engine."""
+def prepare_dataframe(file_stream, column_mapping=None):
+    """Reads an Excel file from a stream and prepares the DataFrame for the engine.
+
+    Args:
+        file_stream: The uploaded file stream.
+        column_mapping (dict, optional): Mapping { "Nome Colonna File": "Nome Interno" }
+            built from the form fields. Merged on top of the config mapping; the form
+            values take priority. Source columns not present in the file are skipped.
+    """
     df = pd.read_excel(io.BytesIO(file_stream.read()))
     df.columns = df.columns.str.strip()
 
     config = load_config()
-    mapping_conf = config.get("common", {}).get("column_mapping", {})
+    config_mapping = config.get("common", {}).get("column_mapping", {})
 
-    # Apply renaming based on config { "Nome Colonna File": "Nome Interno" }
-    df.rename(columns=mapping_conf, inplace=True)
+    # Merge config mapping with the form mapping (form wins).
+    # Skip empty source column names, i.e. mapping fields left blank.
+    effective_mapping = dict(config_mapping)
+    if column_mapping:
+        effective_mapping.update(
+            {k: v for k, v in column_mapping.items() if k and str(k).strip()}
+        )
+
+    # Apply renaming. df.rename silently ignores source columns not in the file,
+    # so unmapped/absent columns are simply skipped.
+    df.rename(columns=effective_mapping, inplace=True)
 
     required_columns = ["Date", "Debit", "Credit"]
     missing = [col for col in required_columns if col not in df.columns]
     if missing:
         raise ValueError(
-            f"Colonne mancanti dopo il mapping: {', '.join(missing)}. Colonne trovate: {df.columns.tolist()}"
+            f"Colonne mancanti dopo il mapping: {', '.join(missing)}. "
+            f"Colonne trovate: {df.columns.tolist()}. "
+            f"Mappatura applicata: {effective_mapping}"
         )
 
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
@@ -243,8 +261,14 @@ def processa_file():
             col_valuta_date if col_valuta_date and col_valuta_date.strip() else None
         )
 
-        # Build column mapping dict (source -> internal)
-        column_mapping = {col_date: "Date", col_debit: "Debit", col_credit: "Credit"}
+        # Build column mapping dict (source -> internal), skipping empty fields
+        column_mapping = {}
+        if col_date and col_date.strip():
+            column_mapping[col_date] = "Date"
+        if col_debit and col_debit.strip():
+            column_mapping[col_debit] = "Debit"
+        if col_credit and col_credit.strip():
+            column_mapping[col_credit] = "Credit"
 
         config = load_config()
         common_cfg = config.get("common", {})
@@ -266,7 +290,7 @@ def processa_file():
         }
 
         file.stream.seek(0)
-        df_input = prepare_dataframe(file.stream)
+        df_input = prepare_dataframe(file.stream, column_mapping)
 
         # Cleanup old output/log files
         cleanup_old_files(app.config["OUTPUT_FOLDER"])
