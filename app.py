@@ -40,17 +40,64 @@ def _get_int(value, default):
 
 # --- Flask App Configuration ---
 app = Flask(__name__)
-app.secret_key = "supersecretkey_dev"  # Change in production
+app.secret_key = os.environ.get("SECRET_KEY", "default_secret_key_change_in_prod")
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB upload limit
 
 # --- Folder Configuration ---
 LOG_FOLDER = "log"
 OUTPUT_FOLDER = "output"
 app.config["OUTPUT_FOLDER"] = OUTPUT_FOLDER
 CONFIG_FILE_PATH = "config.json"
+PROFILES_FILE_PATH = "profiles.json"
+
+
+def cleanup_old_files(folder_path, max_age_seconds=86400):
+    """Deletes files in folder_path older than max_age_seconds (default 24h)."""
+    if not os.path.exists(folder_path):
+        return
+    now = datetime.now().timestamp()
+    for filename in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, filename)
+        if os.path.isfile(file_path):
+            try:
+                if now - os.path.getmtime(file_path) > max_age_seconds:
+                    os.remove(file_path)
+            except Exception as e:
+                print(f"Error cleaning up file {file_path}: {e}")
 
 # Ensure folders exist on startup
 os.makedirs(LOG_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+DEFAULT_PROFILES = {
+    "Operatore Punto Vendita (Default)": {
+        "algorithm": "progressive_balance",
+        "days_window": 5,
+        "tolerance": 50.0,
+        "search_direction": "past_only",
+        "max_combinations": 10,
+        "residual_threshold": 50.0,
+        "residual_days_window": 5
+    },
+    "Riconciliazione Mensile Fine Anno": {
+        "algorithm": "subset_sum",
+        "days_window": 15,
+        "tolerance": 1.0,
+        "search_direction": "both",
+        "max_combinations": 10,
+        "residual_threshold": 50.0,
+        "residual_days_window": 30
+    },
+    "Greedy Importi Elevati": {
+        "algorithm": "greedy_amount_first",
+        "days_window": 15,
+        "tolerance": 50.0,
+        "search_direction": "both",
+        "max_combinations": 10,
+        "residual_threshold": 50.0,
+        "residual_days_window": 5
+    }
+}
 
 
 # --- Helper Functions ---
@@ -58,6 +105,24 @@ def load_config():
     """Loads the configuration from config.json."""
     with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_profiles():
+    """Loads profiles from profiles.json or initializes default ones."""
+    if not os.path.exists(PROFILES_FILE_PATH):
+        save_profiles(DEFAULT_PROFILES)
+        return DEFAULT_PROFILES
+    try:
+        with open(PROFILES_FILE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return DEFAULT_PROFILES
+
+
+def save_profiles(profiles_data):
+    """Saves profiles to profiles.json."""
+    with open(PROFILES_FILE_PATH, "w", encoding="utf-8") as f:
+        json.dump(profiles_data, f, indent=2, ensure_ascii=False)
 
 
 def robust_currency_parser(value):
@@ -181,24 +246,31 @@ def processa_file():
         # Build column mapping dict (source -> internal)
         column_mapping = {col_date: "Date", col_debit: "Debit", col_credit: "Credit"}
 
+        config = load_config()
+        common_cfg = config.get("common", {})
+
         engine_params = {
-            "tolerance": _get_float(form_data.get("tolerance"), 50.0),
-            "days_window": _get_int(form_data.get("days_window"), 5),
-            "max_combinations": _get_int(form_data.get("max_combinations"), 10),
-            "residual_threshold": _get_float(form_data.get("residual_threshold"), 50.0),
-            "residual_days_window": _get_int(form_data.get("residual_days_window"), 5),
-            "search_direction": form_data.get("search_direction") or "both",
-            "algorithm": form_data.get("algorithm") or "progressive_balance",
+            "tolerance": _get_float(form_data.get("tolerance"), common_cfg.get("tolerance", 50.0)),
+            "days_window": _get_int(form_data.get("days_window"), common_cfg.get("days_window", 5)),
+            "max_combinations": _get_int(form_data.get("max_combinations"), common_cfg.get("max_combinations", 10)),
+            "residual_threshold": _get_float(form_data.get("residual_threshold"), common_cfg.get("residual_threshold", 50.0)),
+            "residual_days_window": _get_int(form_data.get("residual_days_window"), common_cfg.get("residual_days_window", 5)),
+            "search_direction": form_data.get("search_direction") or common_cfg.get("search_direction", "past_only"),
+            "algorithm": form_data.get("algorithm") or common_cfg.get("algorithm", "progressive_balance"),
             "ignore_tolerance": form_data.get("ignore_tolerance") == "true",
             "store_id_column": col_store_id
             if col_store_id and col_store_id.strip()
-            else None,
-            "valuta_date_column": valuta_date_col,
+            else common_cfg.get("store_id_column"),
+            "valuta_date_column": valuta_date_col or common_cfg.get("valuta_date_column"),
             "column_mapping": column_mapping,
         }
 
         file.stream.seek(0)
         df_input = prepare_dataframe(file.stream)
+
+        # Cleanup old output/log files
+        cleanup_old_files(app.config["OUTPUT_FOLDER"])
+        cleanup_old_files(LOG_FOLDER)
 
         # The engine receives the dataframe with amounts already in cents
         engine = ReconciliationEngine(**engine_params)
@@ -254,5 +326,52 @@ def download_file(filename):
     )
 
 
+# --- API Routes for Configuration & Profile Management ---
+@app.route("/api/config", methods=["GET", "POST"])
+def api_config():
+    """Gets or updates the global configuration in config.json."""
+    if request.method == "POST":
+        new_config = request.get_json()
+        if not new_config:
+            return jsonify({"error": "Dati configurazione non validi."}), 400
+        try:
+            with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
+                json.dump(new_config, f, indent=2, ensure_ascii=False)
+            return jsonify({"status": "ok", "message": "Configurazione salvata con successo."})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    return jsonify(load_config())
+
+
+@app.route("/api/profiles", methods=["GET", "POST"])
+def api_profiles():
+    """Gets or saves named configuration profiles."""
+    if request.method == "POST":
+        data = request.get_json() or {}
+        name = data.get("name")
+        params = data.get("params")
+        if not name or not params:
+            return jsonify({"error": "Nome profilo e parametri obbligatori."}), 400
+        profiles = load_profiles()
+        profiles[name] = params
+        save_profiles(profiles)
+        return jsonify({"status": "ok", "profiles": profiles})
+    return jsonify(load_profiles())
+
+
+@app.route("/api/profiles/<profile_name>", methods=["DELETE"])
+def delete_profile(profile_name):
+    """Deletes a saved profile."""
+    profiles = load_profiles()
+    if profile_name in profiles:
+        del profiles[profile_name]
+        save_profiles(profiles)
+        return jsonify({"status": "ok", "profiles": profiles})
+    return jsonify({"error": "Profilo non trovato."}), 404
+
+
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5001)
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", 5001))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug, host=host, port=port)

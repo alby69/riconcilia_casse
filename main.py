@@ -47,15 +47,15 @@ if __name__ == "__main__":
 
     # Instantiate the reconciler with parameters from the configuration
     engine = ReconciliationEngine(
-        tolerance=config.get('tolerance', 0.01),
-        days_window=config.get('days_window', 30),
-        max_combinations=config.get('max_combinations', 6),
-        residual_threshold=config.get('residual_threshold', 100),
-        residual_days_window=config.get('residual_days_window', 60),
+        tolerance=config.get('tolerance', 50.0),
+        days_window=config.get('days_window', 5),
+        max_combinations=config.get('max_combinations', 10),
+        residual_threshold=config.get('residual_threshold', 50.0),
+        residual_days_window=config.get('residual_days_window', 5),
         sorting_strategy=config.get('sorting_strategy', 'date'),
-        search_direction=config.get('search_direction', 'both'),
+        search_direction=config.get('search_direction', 'past_only'),
         column_mapping=config.get('column_mapping', None),
-        algorithm=config.get('algorithm', 'subset_sum'),
+        algorithm=config.get('algorithm', 'progressive_balance'),
         use_numba=config.get('use_numba', True),
         ignore_tolerance=config.get('ignore_tolerance', False),
         store_id_column=config.get('store_id_column', None),
@@ -63,11 +63,9 @@ if __name__ == "__main__":
     )
 
     # Run the entire process
-    stats = engine.run(input_file, output_file, verbose=False) # Forza verbose=False
+    stats = engine.run(input_file, output_file, verbose=False)
 
     if args.silent and stats:
-        # --- ADDITION: Include the parameters used in the JSON report ---
-        # Define the parameters of interest to display in the final summary.
         parameters_to_include = [
             'days_window', 
             'max_combinations', 
@@ -76,7 +74,6 @@ if __name__ == "__main__":
             'sorting_strategy', 
             'search_direction'
         ]
-        # Add the parameters found in the configuration file to the statistics dictionary.
         stats['optimal_parameters'] = {key: config.get(key) for key in parameters_to_include}
 
-        print(json.dumps(stats)) # Print statistics in JSON for the parent process
+        print(json.dumps(stats))

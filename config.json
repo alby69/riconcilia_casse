@@ -1,6 +1,6 @@
 {
   "common": {
-    "comment": "Parametri comuni a tutti gli algoritmi",
+    "comment": "Parametri comuni a tutti gli algoritmi (Profilo predefinito: Operatore Punto Vendita)",
     "column_mapping": {
       "Data": "Date",
       "Dare": "Debit",
@@ -14,7 +14,7 @@
     "algorithm": "progressive_balance",
     "tolerance": 50.0,
     "days_window": 5,
-    "search_direction": "both",
+    "search_direction": "past_only",
     "residual_threshold": 50.0,
     "residual_days_window": 5
   },
@@ -26,10 +26,10 @@
     "search_direction": "both"
   },
   "progressive_balance": {
-    "comment": "Parametri specifici per l'algoritmo progressive_balance. Finestra simmetrica ±5 giorni.",
+    "comment": "Parametri specifici per l'algoritmo progressive_balance. Profilo operatore cassa: finestra max 5 giorni nel passato.",
     "tolerance": 50.0,
     "days_window": 5,
-    "search_direction": "both",
+    "search_direction": "past_only",
     "ignore_tolerance": false,
     "residual_threshold": 50.0,
     "residual_days_window": 5

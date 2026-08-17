@@ -63,15 +63,15 @@ class ReconciliationEngine:
 
     def __init__(
         self,
-        tolerance=0.01,
-        days_window=7,
+        tolerance=50.0,
+        days_window=5,
         max_combinations=10,
-        residual_threshold=100.0,
-        residual_days_window=30,
+        residual_threshold=50.0,
+        residual_days_window=5,
         sorting_strategy="date",
         search_direction="past_only",
         column_mapping=None,
-        algorithm="subset_sum",
+        algorithm="progressive_balance",
         use_numba=True,
         ignore_tolerance=False,
         enable_best_fit=True,
@@ -87,33 +87,29 @@ class ReconciliationEngine:
         Args:
             tolerance (float): The maximum acceptable difference between the sum of
                 a set of transactions and a target amount to be considered a match.
-                Default is 0.01.
+                Default is 50.0.
             days_window (int): The primary time window (in days) to search for
-                matching transactions. The search can be forward, backward, or
-                in both directions from the transaction date. Default is 7.
+                matching transactions. Default is 5.
             max_combinations (int): The maximum number of individual transactions
                 that can be combined to form a match. Higher numbers increase
                 computation time. Default is 10.
             residual_threshold (float): During the residual analysis pass, only
                 unmatched transactions with an amount greater than this threshold
-                will be considered. Default is 100.0.
+                will be considered. Default is 50.0.
             residual_days_window (int): An extended time window (in days) used
-                during the final residual reconciliation pass to catch more
-                difficult matches. Default is 30.
+                during the final residual reconciliation pass. Default is 5.
             sorting_strategy (str): The strategy for sorting transactions before
                 processing. Can be 'date' (chronological) or 'amount'
                 (descending). Default is 'date'.
             search_direction (str): The temporal direction for the search.
-                Can be 'past_only', 'future_only', or 'both'. This determines
-                the date range relative to the transaction being matched.
-                Default is 'past_only'.
+                Can be 'past_only', 'future_only', or 'both'. Default is 'past_only'.
             column_mapping (dict, optional): A dictionary to map custom column
                 names from the input file to the internal standard names
                 ('Date', 'Debit', 'Credit'). Defaults to a standard mapping.
             algorithm (str): The reconciliation algorithm to use. Can be
                 'subset_sum' (a complex combination-finding algorithm),
                 'progressive_balance' (a faster, sequential algorithm),
-                or 'auto' to let the engine choose the best one. Default is 'subset_sum'.
+                or 'auto' to let the engine choose the best one. Default is 'progressive_balance'.
             use_numba (bool): If True, the engine will leverage the Numba JIT
                 compiler for performance-critical calculations, if Numba is
                 installed. Default is True.
@@ -383,7 +379,14 @@ class ReconciliationEngine:
             if abs(c["Credit"] - debit_amount) <= self.tolerance
         ]
         if exact_match_list:
-            best_match = exact_match_list[0]  # Takes the first exact match found
+            # Select candidate closest in date to debit_date (and then smallest diff)
+            best_match = min(
+                exact_match_list,
+                key=lambda c: (
+                    abs((debit_date - c["Date"]).total_seconds()),
+                    abs(debit_amount - c["Credit"])
+                )
+            )
             return {
                 "debit_indices": [debit_row["orig_index"]],
                 "debit_dates": [debit_date],
@@ -421,14 +424,14 @@ class ReconciliationEngine:
                 ]
         else:
             # --- FALLBACK TO PURE PYTHON ---
-            for c in credit_candidates:
-                c["Debit"] = c.pop("Credit")  # Adapt for generic function
-            match = self._find_combinations_recursive_py(
-                debit_amount, credit_candidates, max_combinations, self.tolerance
+            # Create shallow copies to prevent mutating shared candidate dictionaries
+            adapted_candidates = [dict(c, Debit=c["Credit"]) for c in credit_candidates]
+            match_adapted = self._find_combinations_recursive_py(
+                debit_amount, adapted_candidates, max_combinations, self.tolerance
             )
-            if match:
-                for c in match:
-                    c["Credit"] = c.pop("Debit")  # Restore
+            if match_adapted:
+                match_indices_set = {m["orig_index"] for m in match_adapted}
+                match = [c for c in credit_candidates if c["orig_index"] in match_indices_set]
 
         if match:
             total_credit = sum(m["Credit"] for m in match)
@@ -712,8 +715,8 @@ class ReconciliationEngine:
             # When processing CREDIT with valuta_date, use a symmetric window but filter by month/year
             # This ensures deposits with December valuta don't match January receipts
             effective_search_direction = search_direction
-            if col_to_process == "Credit" and "effective_date" in record_row:
-                # Use symmetric window for valuta_date-based matching (covers days before and after valuta)
+            if col_to_process == "Credit" and record_row.get("valuta_date") is not None and pd.notnull(record_row.get("valuta_date")):
+                # Use symmetric window for valuta_date-based matching
                 effective_search_direction = "both"
 
             min_date, max_date = self._calculate_time_window(
@@ -1236,8 +1239,9 @@ class ReconciliationEngine:
 
             total_debit_used = sum(current_debit_amounts)
             difference = credit_amount - total_debit_used
+            abs_diff = abs(difference)
 
-            if abs(difference) <= self.tolerance and difference > 0:
+            if abs_diff <= self.tolerance and difference > 0:
                 match = {
                     "debit_indices": current_match_debits.copy(),
                     "debit_dates": [
@@ -1251,7 +1255,7 @@ class ReconciliationEngine:
                     "credit_dates": [credit_date],
                     "credit_amounts": [credit_amount],
                     "total_credit": credit_amount,
-                    "difference": difference,
+                    "difference": abs_diff,
                     "match_type": f"Match: {len(current_match_debits)}D vs 1C (eccedenza versamento: +{difference / 100:.2f}€)",
                     "pass_name": "Progressive Balance",
                 }
@@ -1269,7 +1273,7 @@ class ReconciliationEngine:
                     "credit_dates": [credit_date],
                     "credit_amounts": [credit_amount],
                     "total_credit": credit_amount,
-                    "difference": difference,
+                    "difference": 0,
                     "match_type": f"Match: {len(current_match_debits)}D vs 1C",
                     "pass_name": "Progressive Balance",
                 }
@@ -1287,7 +1291,7 @@ class ReconciliationEngine:
                     "credit_dates": [credit_date],
                     "credit_amounts": [credit_amount],
                     "total_credit": credit_amount,
-                    "difference": difference,
+                    "difference": abs_diff,
                     "match_type": f"ANOMALY: {difference / 100:.2f}€ non coperti (differenza oltre tolleranza)",
                     "pass_name": "Progressive Balance",
                     "is_forced": True,
@@ -1306,7 +1310,7 @@ class ReconciliationEngine:
                     "credit_dates": [credit_date],
                     "credit_amounts": [credit_amount],
                     "total_credit": credit_amount,
-                    "difference": difference,
+                    "difference": abs_diff,
                     "match_type": f"Match: {len(current_match_debits)}D vs 1C (eccedenza incasso: {difference / 100:.2f}€)",
                     "pass_name": "Progressive Balance",
                 }
@@ -1725,10 +1729,24 @@ class ReconciliationEngine:
             if isinstance(input_file, pd.DataFrame):
                 if verbose:
                     print("1. Using pre-loaded DataFrame.")
-                df = input_file
-                # Ensure required columns exist for DataFrame passed directly
+                df = input_file.copy()
+
+                # Apply column mapping if mapped columns exist in df
+                source_col_names = self.column_mapping.keys()
+                if set(source_col_names).issubset(df.columns):
+                    df.rename(columns=self.column_mapping, inplace=True)
+
+                # Ensure required standard columns exist
+                for c in ["Debit", "Credit"]:
+                    if c not in df.columns:
+                        df[c] = 0
+
+                if "orig_index" not in df.columns:
+                    df["orig_index"] = df.index
+
                 if "store_id" not in df.columns:
                     df["store_id"] = None
+
                 # Handle valuta_date column - rename and convert to datetime
                 if self.valuta_date_column and self.valuta_date_column in df.columns:
                     df.rename(
@@ -1739,6 +1757,14 @@ class ReconciliationEngine:
                     )
                 elif "valuta_date" not in df.columns:
                     df["valuta_date"] = pd.NaT
+
+                df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
+                df.dropna(subset=["Date"], inplace=True)
+
+                # Convert float amounts to integer cents if needed
+                if df["Debit"].dtype == float or df["Credit"].dtype == float:
+                    df["Debit"] = (df["Debit"].fillna(0) * 100).round().astype(int)
+                    df["Credit"] = (df["Credit"].fillna(0) * 100).round().astype(int)
             else:
                 if verbose:
                     print(f"1. Loading and validating file: {input_file}")
@@ -1777,7 +1803,7 @@ class ReconciliationEngine:
             ]:
                 algorithms_to_run = [self.algorithm]
             else:  # default
-                algorithms_to_run = ["subset_sum"]
+                algorithms_to_run = ["progressive_balance"]
 
             for algo in algorithms_to_run:
                 if algo == "progressive_balance":

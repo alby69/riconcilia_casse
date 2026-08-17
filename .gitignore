@@ -1,16 +1,27 @@
-# Cartelle di Input e Output
-input/
-output/
+# Input and Output
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+log/*
+!log/.gitkeep
 
-# File di log specifici non versionati
-*.log
+# Environment variables & secrets
+.env
 
-# File temporanei di Python
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.pytest_cache/
 
-# Ambiente virtuale (se ne usi uno)
+# Virtual Environment
+.venv/
 /venv/
 /env/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/

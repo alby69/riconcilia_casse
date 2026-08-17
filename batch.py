@@ -23,44 +23,18 @@ from pathlib import Path
 import json
 import sys
 from tqdm import tqdm
-from core import ReconciliationEngine  # Assuming core.py is refactored
+from core import ReconciliationEngine
 
 def load_config():
-    """Loads configuration from config.json or uses default values."""
+    """Loads configuration from config.json."""
     config_file = Path('config.json')
-    default_config = {
-        "tolerance": 0.01,
-        "days_window": 10,
-        "input_folder": "input",
-        "output_folder": "output",
-        "file_patterns": ["*.xlsx", "*.csv"],
-        "column_mapping": {
-            "Date": "date",
-            "Debit": "debit",
-            "Credit": "credit"
-        },
-        "algorithm": {
-            "name": "subset_sum",
-            "max_combinations": 6
-        },
-        "residuals": {
-            "enabled": True,
-            "amount_threshold": 100,
-            "days_window": 90
-        }
-    }
-    
     if not config_file.exists():
-        print(f"⚠️  '{config_file}' not found. Using default configuration.")
-        return default_config
-    
+        print(f"⚠️  '{config_file}' not found.")
+        return {}
     try:
         with open(config_file, 'r', encoding='utf-8') as f:
             print(f"📄 Loading configuration from '{config_file}'...")
-            user_config = json.load(f)
-            default_config.update(user_config)
-            print("✓ Configuration loaded successfully.")
-            return default_config
+            return json.load(f)
     except json.JSONDecodeError as e:
         print(f"❌ ERROR: Invalid JSON format in '{config_file}': {e}", file=sys.stderr)
         sys.exit(1)
@@ -68,11 +42,12 @@ def load_config():
 def main():
     """Main function"""
     config = load_config()
-    input_folder = Path(config['input_folder'])
-    output_folder = Path(config['output_folder'])
+    common_params = config.get('common', {})
+    input_folder = Path(common_params.get('input_folder', 'input'))
+    output_folder = Path(common_params.get('output_folder', 'output'))
     output_folder.mkdir(exist_ok=True)
 
-    patterns = config.get('file_patterns', ['*.xlsx', '*.csv'])
+    patterns = common_params.get('file_patterns', ['*.xlsx', '*.csv'])
     files_to_process = []
     for p in patterns:
         files_to_process.extend(input_folder.glob(p))
@@ -83,18 +58,26 @@ def main():
 
     print(f"Found {len(files_to_process)} files to process.")
 
+    algorithm_name = common_params.get('algorithm', 'progressive_balance')
+    engine_params = common_params.copy()
+    if algorithm_name in config:
+        engine_params.update(config[algorithm_name])
+
     for file_path in tqdm(files_to_process, desc="Processing files"):
         print(f"\n{'='*20} Processing: {file_path.name} {'='*20}")
         try:
             engine = ReconciliationEngine(
-                tolerance=config['tolerance'],
-                days_window=config['days_window'],
-                max_combinations=config['algorithm']['max_combinations'],
-                residual_threshold=config['residuals']['amount_threshold'],
-                residual_days_window=config['residuals']['days_window'],
-                column_mapping=config.get('column_mapping'),
-                store_id_column=config.get('store_id_column'),
-                valuta_date_column=config.get('valuta_date_column')
+                tolerance=engine_params.get('tolerance', 50.0),
+                days_window=engine_params.get('days_window', 5),
+                max_combinations=engine_params.get('max_combinations', 10),
+                residual_threshold=engine_params.get('residual_threshold', 50.0),
+                residual_days_window=engine_params.get('residual_days_window', 5),
+                sorting_strategy=engine_params.get('sorting_strategy', 'date'),
+                search_direction=engine_params.get('search_direction', 'past_only'),
+                column_mapping=engine_params.get('column_mapping'),
+                algorithm=algorithm_name,
+                store_id_column=engine_params.get('store_id_column'),
+                valuta_date_column=engine_params.get('valuta_date_column')
             )
 
             output_file = output_folder / f"result_{file_path.stem}.xlsx"
