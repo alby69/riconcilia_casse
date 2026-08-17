@@ -343,8 +343,9 @@ class ExcelReporter:
             df["Debit"] = df["Debit"] / 100
         if "Credit" in df.columns:
             df["Credit"] = df["Credit"] / 100
-        if "Date" in df.columns:
-            df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%d/%m/%Y")
+        # Format every datetime column (Date, Data Val., valuta_date, ...) as GG/MM/AAAA
+        for col in df.select_dtypes(include=["datetime64"]).columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%d/%m/%Y")
         if "orig_index" in df.columns:
             df.drop(columns=["orig_index"], inplace=True)
         df.to_excel(writer, sheet_name="Original", index=False)
