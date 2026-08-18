@@ -1552,7 +1552,12 @@ class ReconciliationEngine:
             print("   ✅ Balance confirmed: No loss of amounts during splitting.")
 
     def create_excel_report(self, output_file, original_df):
+        import os
         from reporting import ExcelReporter
+
+        out_dir = os.path.dirname(os.path.abspath(output_file))
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
 
         reporter = ExcelReporter(self)
         reporter.generate_report(output_file, original_df)
