@@ -204,6 +204,7 @@ class ExcelReporter:
             self._create_summary_sheet(writer)
             self._create_manual_sheet(writer)
             self._create_matches_sheet(writer)
+            self._create_anomalies_sheet(writer)
             self._create_unreconciled_sheets(writer)
             self._create_original_sheet(writer, original_df)
             self._create_monthly_balance_sheet(writer)
@@ -511,6 +512,109 @@ class ExcelReporter:
                         for col in range(1, len(df.columns) + 1):
                             ws.cell(row=i + 2, column=col).fill = fill
                         break
+
+    def _create_anomalies_sheet(self, writer):
+        """Exports only the ANOMALY matches to a dedicated 'Anomalie' sheet.
+
+        Columns mirror the 'Matches' sheet (with the split-sheet row numbers)
+        plus the uncovered amount, so every disallineamento can be verified.
+        """
+        if self.engine.matches_df is None or self.engine.matches_df.empty:
+            return
+        m = self.engine.matches_df.copy()
+        if "match_type" not in m.columns:
+            return
+        anom = m[m["match_type"].astype(str).str.startswith("ANOMALY")].copy()
+        if anom.empty:
+            return
+
+        if "debit_display" in anom.columns:
+            anom["debit_indices"] = anom["debit_display"]
+        if "credit_display" in anom.columns:
+            anom["credit_indices"] = anom["credit_display"]
+        anom.drop(
+            columns=["debit_display", "credit_display"], errors="ignore", inplace=True
+        )
+
+        def format_list(data, is_float=False):
+            if not isinstance(data, list):
+                return data
+            items = [
+                f"{i / 100:.2f}".replace(".", ",") if is_float else str(i)
+                for i in data
+            ]
+            return ", ".join(items)
+
+        anom["debit_indices"] = anom["debit_indices"].apply(format_list)
+        anom["credit_indices"] = anom["credit_indices"].apply(format_list)
+        anom["debit_amounts"] = anom["debit_amounts"].apply(
+            lambda x: format_list(x, is_float=True)
+        )
+        anom["credit_amounts"] = anom["credit_amounts"].apply(
+            lambda x: format_list(x, is_float=True)
+        )
+        anom["total_debit"] = anom["total_debit"].fillna(0) / 100
+        anom["debit_dates"] = anom["debit_dates"].apply(
+            lambda x: ", ".join([d.strftime("%d/%m/%y") for d in x])
+            if isinstance(x, list) and x
+            else (x.strftime("%d/%m/%y") if pd.notna(x) else "")
+        )
+        anom["credit_date"] = pd.to_datetime(anom["credit_date"]).dt.strftime("%d/%m/%y")
+        anom["total_credit"] = anom["total_credit"] / 100
+        anom["difference"] = anom["difference"].fillna(0).astype(float) / 100
+        anom["uncovered"] = anom["difference"]
+
+        keep = [
+            "Transaction ID",
+            "credit_date",
+            "total_credit",
+            "debit_indices",
+            "debit_dates",
+            "debit_amounts",
+            "total_debit",
+            "uncovered",
+            "match_type",
+        ]
+        anom = anom[[c for c in keep if c in anom.columns]]
+
+        anom.to_excel(writer, sheet_name="Anomalie", index=False)
+        ws = writer.sheets["Anomalie"]
+
+        for c_idx, col_name in enumerate(anom.columns, 1):
+            if col_name in ["total_credit", "total_debit", "uncovered", "debit_amounts"]:
+                for r_idx in range(2, len(anom) + 2):
+                    ws.cell(row=r_idx, column=c_idx).style = self.currency_style
+
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(
+            start_color="C00000", end_color="C00000", fill_type="solid"
+        )
+        for c_idx in range(1, len(anom.columns) + 1):
+            cell = ws.cell(row=1, column=c_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+
+        for row in ws.iter_rows(min_row=2, min_col=1, max_col=len(anom.columns)):
+            for cell in row:
+                cell.fill = PatternFill(
+                    start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"
+                )
+
+        widths = {
+            "Transaction ID": 22,
+            "credit_date": 12,
+            "total_credit": 14,
+            "debit_indices": 24,
+            "debit_dates": 28,
+            "debit_amounts": 30,
+            "total_debit": 14,
+            "uncovered": 14,
+            "match_type": 48,
+        }
+        for c_idx, col_name in enumerate(anom.columns, 1):
+            ws.column_dimensions[
+                ws.cell(row=1, column=c_idx).column_letter
+            ].width = widths.get(col_name, 16)
 
     def _create_unreconciled_sheets(self, writer):
         # ... identical logic to before, just applying currency style

@@ -397,6 +397,42 @@ class TestReportingVisualization(unittest.TestCase):
         self.assertEqual(analysis["inconsistent_rows"], 1)
         self.assertIn("Saldo incoerente", analysis["check_map"][1])
 
+    def test_anomalies_sheet_exports_only_anomalies(self):
+        """The 'Anomalie' sheet contains only ANOMALY matches, with the split-sheet
+        row numbers and the uncovered amount."""
+        import tempfile
+        from openpyxl import load_workbook
+
+        # deposit of 200 matched to a single 100 receipt (past_only, same day)
+        # -> difference 100 > tolerance 50 -> ANOMALY
+        rows = [
+            {"Date": datetime(2025, 5, 5), "Debit": 100.0, "Credit": 0.0},
+            {"Date": datetime(2025, 5, 5), "Debit": 0.0, "Credit": 200.0},
+        ]
+        df = pd.DataFrame(rows)
+        engine = ReconciliationEngine(
+            algorithm="progressive_balance",
+            days_window=5,
+            tolerance=50.0,
+            search_direction="past_only",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "report.xlsx")
+            engine.run(df, output_file=out, verbose=False)
+            wb = load_workbook(out)
+            self.assertIn("Anomalie", wb.sheetnames)
+            ws = wb["Anomalie"]
+            headers = [c.value for c in ws[1]]
+            self.assertIn("uncovered", headers)
+            self.assertIn("Transaction ID", headers)
+            self.assertEqual(ws.max_row, 2, "Exactly one anomalous match expected.")
+            row = {c.value: ws.cell(row=2, column=i + 1).value
+                   for i, c in enumerate(ws[1])}
+            self.assertEqual(row["uncovered"], 100.0)
+            # the debit is on split-sheet row 2 (header on row 1)
+            self.assertEqual(row["debit_indices"], "2")
+            self.assertTrue(row["match_type"].startswith("ANOMALY"))
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
