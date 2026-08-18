@@ -6,6 +6,7 @@ This project provides a powerful and flexible accounting reconciliation service,
 
 - **[Roadmap](./ROADMAP.md)** - Improvement phases and implementation status
 - **[Progressive Balance Algorithm](./docs/PROGRESSIVE_BALANCE.md)** - Detailed explanation of the main algorithm, parameters, and how to interpret results
+- **[User Manual](./docs/MANUALE_UTENTE.md)** - Simple guide for day-to-day operators (in Italian); integrated as in-app help in both the web UI and the standalone app
 - **[Developer Manual](./docs/DEVELOPER_MANUAL.md)** - Technical documentation for developers
 - **[Git Tutorial](./docs/GIT_TUTORIAL.md)** - Git workflow guide
 - **[Cloudflare Tunnel](./docs/CLOUDFLARE_TUNNEL_TUTORIAL.md)** - Deployment guide
