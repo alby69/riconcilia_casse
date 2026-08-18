@@ -1194,6 +1194,8 @@
             ws.getCell("A3").value = "Key Performance Indicators";
             ws.getCell("A3").font = { bold: true, size: 12, color: { argb: "1F4E78" } };
 
+            const fmtEur = (v) => v.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+
             const kpis = [
                 ["Debit Coverage (Volume)", `${stats._raw_debit_amount_perc.toFixed(2)}%`],
                 ["Credit Coverage (Volume)", `${stats._raw_credit_amount_perc.toFixed(2)}%`],
@@ -1202,6 +1204,16 @@
                 ["Final Delta", stats["Final delta (DEBIT - CREDIT)"]]
             ];
 
+            // --- Saldo Prog. (cash balance) KPIs: useful for the quadratura ---
+            const saldo = this.analyzeSaldoProg();
+            if (saldo.present) {
+                kpis.push(["Saldo Prog. Iniziale (Cassa)", fmtEur(saldo.opening)]);
+                kpis.push(["Saldo Prog. Finale (Cassa)", fmtEur(saldo.closing)]);
+                kpis.push(["Variazione Cassa (Dare - Avere)", fmtEur(saldo.closing - saldo.opening)]);
+                if (saldo.negative_rows > 0) kpis.push(["⚠ Righe con Saldo Negativo", saldo.negative_rows]);
+                if (saldo.inconsistent_rows > 0) kpis.push(["⚠ Righe Saldo Incoerenti", saldo.inconsistent_rows]);
+            }
+
             kpis.forEach(([label, val], idx) => {
                 const r = idx + 4;
                 ws.getCell(`A${r}`).value = label;
@@ -1209,8 +1221,69 @@
                 ws.getCell(`B${r}`).value = val;
             });
 
+            const cursor = 4 + kpis.length + 1;
+            ws.getCell(`A${cursor}`).value = "Automated Analysis";
+            ws.getCell(`A${cursor}`).font = { bold: true, size: 12, color: { argb: "1F4E78" } };
+
+            let summaryText = `Reconciliation resulted in ${stats._raw_debit_amount_perc.toFixed(1)}% of debit volume and ${stats._raw_credit_amount_perc.toFixed(1)}% of credit volume being matched. `;
+            if (saldo.present) {
+                summaryText += `Cash balance (Saldo Prog.): ${fmtEur(saldo.opening)} at start, ${fmtEur(saldo.closing)} at end. `;
+                if (saldo.inconsistent_rows > 0) {
+                    summaryText += `WARNING: ${saldo.inconsistent_rows} rows show an inconsistent progressive balance. `;
+                } else if (saldo.negative_rows > 0) {
+                    summaryText += `WARNING: ${saldo.negative_rows} rows show a negative cash balance. `;
+                }
+            }
+            if (stats._raw_debit_amount_perc > 95 && stats._raw_credit_amount_perc > 95) {
+                summaryText += "This is a great result, with very few items left to check.";
+            }
+            ws.getCell(`A${cursor + 1}`).value = summaryText;
+
             ws.getColumn("A").width = 30;
             ws.getColumn("B").width = 20;
+        }
+
+        analyzeSaldoProg() {
+            /* Port of reporting.py _analyze_saldo_prog: validates that the
+               declared 'Saldo Prog.' (running cash balance, in €) matches the
+               theoretical cash position opening + cumsum(Dare - Avere). */
+            const rows = this.originalRows || [];
+            const result = { present: false };
+            if (rows.length === 0 || !("Saldo Prog." in rows[0])) return result;
+
+            const saldos = rows.map(r => {
+                const v = r["Saldo Prog."];
+                return (v === undefined || v === null || v === "") ? NaN : Number(v);
+            });
+            if (saldos.every(s => isNaN(s)) || isNaN(saldos[0])) return result;
+
+            const saldoCents = saldos.map(s => Math.round(s * 100));
+            const first = rows[0];
+            const opening = saldoCents[0] - (first.Debit - first.Credit);
+            const checkMap = {};
+            let acc = opening;
+            let inconsistentRows = 0;
+            let negativeRows = 0;
+            rows.forEach((r, i) => {
+                acc += (r.Debit - r.Credit);
+                const mismatch = Math.abs(acc - saldoCents[i]);
+                if (saldos[i] < 0) negativeRows++;
+                if (mismatch > 1) {
+                    inconsistentRows++;
+                    checkMap[r.orig_index] = `⚠️ Saldo incoerente (Δ ${(mismatch / 100).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €)`;
+                } else {
+                    checkMap[r.orig_index] = "";
+                }
+            });
+
+            result.present = true;
+            result.opening = opening / 100;
+            result.closing = saldoCents[saldoCents.length - 1] / 100;
+            result.min = Math.min(...saldos.filter(s => !isNaN(s)));
+            result.negative_rows = negativeRows;
+            result.inconsistent_rows = inconsistentRows;
+            result.check_map = checkMap;
+            return result;
         }
 
         createManualSheet(workbook) {
@@ -1347,6 +1420,30 @@
                     if (m.difference > 0) diffCell.font = { bold: true, color: { argb: "C00000" } };
                 }
             });
+
+            this.createOriginalLegend(ws, expanded.length);
+        }
+
+        createOriginalLegend(ws, nRows) {
+            /* Port of reporting.py _add_original_legend. */
+            const groupNames = ["Blu", "Verde", "Arancione"];
+            const groupFills = ["DDEBF7", "C6EFCE", "FFD966"];
+            let row = nRows + 3;
+
+            ws.getCell(`A${row}`).value = "Legenda: le celle Debit/Credit con lo stesso colore appartengono allo stesso gruppo di abbinamento (vedi foglio 'Matches'). Il colore si ripete ogni 3 gruppi.";
+            ws.getCell(`A${row}`).font = { bold: true, color: { argb: "1F4E78" } };
+            row += 1;
+
+            groupFills.forEach((fill, idx) => {
+                const cell = ws.getCell(`${String.fromCharCode(65 + idx)}${row}`);
+                cell.value = `Gruppo ${idx + 1} (mod 3) - ${groupNames[idx]}`;
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+            });
+            row += 2;
+
+            ws.getCell(`A${row}`).value = "Colonna 'Difference': Δ in € del gruppo (0 = gruppo quadrato; > 0 = differenza/residuo da verificare).";
+            row += 1;
+            ws.getCell(`A${row}`).value = "Righe inserite: se un incasso (Debit) è ripartito su più versamenti, la riga originale mostra la quota consumata dal PRIMO versamento (in ordine del foglio 'Matches'); sotto di essa viene inserita una nuova riga (stessa data) per ogni quota residua, ciascuna con il colore del proprio gruppo.";
         }
 
         createMonthlyBalanceSheet(workbook) {

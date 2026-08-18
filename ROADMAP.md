@@ -55,6 +55,7 @@ Questo documento descrive la roadmap strategica ed esecutiva per l'evoluzione e 
 - [x] Inserimento delle librerie `SheetJS` e `ExcelJS` da CDN per la lettura/scrittura dei file Excel direttamente nel browser client-side.
 - [x] Replicazione del motore di riconciliazione (`JSReconciliationEngine`) con aritmica in centesimi, algoritmi `progressive_balance`, `subset_sum`, `greedy_amount_first`, supporto `valuta_date`, `past_only` window e `smart residual recovery`.
 - [x] Generazione completa dei report Excel multi-foglio (`Summary`, `MANUAL`, `Matches`, `Anomalie`, `Unused DEBIT`, `Unreconciled CREDIT`, `Original` con colorazione a 3 gruppi, split righe e subtotali mensili, `Monthly Balance`).
+- [x] Allineamento all'evoluzione del progetto: Transaction ID nel foglio `Original` identici al foglio `Matches` (rimappatura post-split con posizione della porzione per gli incassi sdoppiati), `Monthly Balance` completo (Monthly Difference, Residual/Absorbed/Final Imbalance), analisi `Saldo Prog.` (KPI iniziale/finale/variazione, righe negative/incoerenti, warning nel testo) e legenda esplicativa nel foglio `Original`.
 - [x] Gestione profili e configurazioni salvate in `LocalStorage`.
 
 ### Fase 7: Quadratura Visiva nel foglio Original (Color Grouping & Delta)
