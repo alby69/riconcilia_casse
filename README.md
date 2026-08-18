@@ -13,6 +13,7 @@ This project provides a powerful and flexible accounting reconciliation service,
 ## ✨ Key Features
 
 - **Intuitive Web Interface**: Clean UI for uploading files, managing profiles, and customizing processing settings.
+- **Standalone HTML/JS App (`app/cashrec.html`)**: Complete single-file offline web app running entirely in the browser without server dependencies or installation.
 - **POS Operator Profile Default**: Pre-configured defaults optimized for POS operators (deposits matching cash receipts 1-5 days prior with `past_only` search direction and 5-day window).
 - **Single Source of Truth (SSOT)**: Centralized configuration in `config.json` shared across CLI, Web UI, and batch processing.
 - **Profile Management**: Save, load, and delete custom parameter profiles directly from the Web UI or via REST API.
@@ -120,12 +121,19 @@ Sorts transactions by amount descending and matches largest movements first.
 python main.py --config config.json
 ```
 
-### Web Interface
+### Web Interface (Flask Server)
 
 ```bash
 python app.py
 # Access at http://localhost:5001
 ```
+
+### Standalone Web App (100% Client-Side / Offline)
+
+Simply open `app/cashrec.html` in any web browser (Double Click or Drag & Drop into browser):
+- **No Python or server setup needed**
+- **100% Client-Side Processing**: Financial data never leaves your browser
+- **Identical Features**: Supports theme toggle, column mapping, saved profiles in `LocalStorage`, parameter optimization, and multi-sheet Excel report generation with group colors and monthly subtotals.
 
 Or using Docker:
 ```bash

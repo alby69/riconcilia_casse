@@ -49,6 +49,14 @@ Questo documento descrive la roadmap strategica ed esecutiva per l'evoluzione e 
 ### Fase 6: Documentazione
 - [x] Aggiornamento di `README.md` e delle guide in `docs/` con le nuove funzionalità dei profili e le istruzioni aggiornate.
 
+### Fase 8: App Standalone Client-Side in HTML/JS (`app/cashrec.html`)
+- [x] Creazione della cartella `app/` e realizzazione dell'applicazione web monofile standalone `cashrec.html`.
+- [x] Implementazione dell'interfaccia grafica identica (Bootstrap 5, FontAwesome, supporto tema chiaro/scuro, drag & drop, mapping colonne e profili).
+- [x] Inserimento delle librerie `SheetJS` e `ExcelJS` da CDN per la lettura/scrittura dei file Excel direttamente nel browser client-side.
+- [x] Replicazione del motore di riconciliazione (`JSReconciliationEngine`) con aritmica in centesimi, algoritmi `progressive_balance`, `subset_sum`, `greedy_amount_first`, supporto `valuta_date`, `past_only` window e `smart residual recovery`.
+- [x] Generazione completa dei report Excel multi-foglio (`Summary`, `MANUAL`, `Matches`, `Anomalie`, `Unused DEBIT`, `Unreconciled CREDIT`, `Original` con colorazione a 3 gruppi, split righe e subtotali mensili, `Monthly Balance`).
+- [x] Gestione profili e configurazioni salvate in `LocalStorage`.
+
 ### Fase 7: Quadratura Visiva nel foglio Original (Color Grouping & Delta)
 - [x] Colorazione delle celle delle colonne `Debit` e `Credit` nel foglio `Original` in base ai gruppi di abbinamento del foglio `Matches`, con ciclo di 3 colori (es. `D(3,4) A(7)` → celle dello stesso colore). **Incassi scomposti su più versamenti**: la riga originale mostra la quota consumata dal primo versamento; sotto di essa viene inserita una nuova riga (stessa data, `Saldo Prog.` vuoto) per ogni quota residua, ciascuna col colore del proprio gruppo — così ogni gruppo ha celle tutte dello stesso colore (es. cella 4 di 2777,00 → riga originale 464,50 colore 1 `D(3,4)_A(7)` + riga inserita 2312,50 colore 2 `D(4,5,6)_A(9)`). I totali Debit/Credit del foglio restano invariati.
 - [x] Aggiunta delle colonne `Gruppo` (Transaction ID es. `D(3,4)_A(7)`) e `Difference` (Δ in €) nel foglio `Original` per visualizzare il delta di ogni gruppo e ricollegarlo al foglio `Matches` (cella `Difference` colorata con tonalità più scura dello stesso gruppo, evidenziata in rosso se Δ > 0).
