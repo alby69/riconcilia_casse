@@ -1497,6 +1497,9 @@ class ReconciliationEngine:
         stats = stats.fillna(0)
         stats["Unmatched DEBIT"] = stats["Total Debit"] - stats["Used Debit"]
         stats["Unmatched CREDIT"] = stats["Total Credit"] - stats["Used Credit"]
+        stats["Monthly Difference (DEBIT - CREDIT)"] = (
+            stats["Total Debit"] - stats["Total Credit"]
+        )
         stats["Residual Imbalance (DEBIT - CREDIT)"] = (
             stats["Unmatched DEBIT"] - stats["Unmatched CREDIT"]
         )
@@ -1514,6 +1517,7 @@ class ReconciliationEngine:
                 "Total Credit",
                 "Used Credit",
                 "Unmatched CREDIT",
+                "Monthly Difference (DEBIT - CREDIT)",
                 "Residual Imbalance (DEBIT - CREDIT)",
                 "Absorbed Imbalance (in match)",
                 "Final Monthly Imbalance",
