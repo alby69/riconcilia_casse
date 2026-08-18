@@ -187,14 +187,6 @@ class ExcelReporter:
             "consumata dal PRIMO versamento (in ordine del foglio 'Matches'); sotto di essa viene inserita una nuova riga "
             "(stessa data) per ogni quota residua, ciascuna con il colore del proprio gruppo.",
         )
-        if saldo_analysis.get("present"):
-            row += 1
-            ws.cell(
-                row=row,
-                column=1,
-                value="Colonna 'Verifica Saldo Prog.': verifica la coerenza del saldo progressivo dichiarato "
-                "con la cassa teorica cumulata (Dare - Avere).",
-            )
 
     def _create_styles(self):
         """Creates named styles for reuse in the workbook."""
@@ -597,7 +589,7 @@ class ExcelReporter:
                         row = r.copy()
                         row["Debit"] = amount
                         inserted = i > 0
-                        if inserted:
+                        if inserted and "Saldo Prog." in row.index:
                             row["Saldo Prog."] = None
                         expanded.append(row)
                         meta.append(
@@ -613,20 +605,25 @@ class ExcelReporter:
 
         df_out = pd.DataFrame(expanded).reset_index(drop=True)
 
-        # Attach group / delta / saldo check to each (expanded) row
+        # Attach group / delta to each (expanded) row
         df_out["Gruppo"] = [m["group_label"] for m in meta]
         df_out["Difference"] = [
             (m["difference"] or 0) / 100.0 if m["difference"] is not None else None
             for m in meta
         ]
-        if saldo_analysis.get("present"):
-            df_out["Verifica Saldo Prog."] = [m["check"] for m in meta]
+
+        # Keep only the essential columns in the Original sheet
+        keep_cols = ["Date", "Debit", "Credit"]
+        if "Saldo Prog." in df_out.columns:
+            keep_cols.append("Saldo Prog.")
+        keep_cols += ["Gruppo", "Difference"]
+        df_out = df_out[[c for c in keep_cols if c in df_out.columns]]
 
         if "Debit" in df_out.columns:
             df_out["Debit"] = df_out["Debit"] / 100
         if "Credit" in df_out.columns:
             df_out["Credit"] = df_out["Credit"] / 100
-        # Format every datetime column (Date, Data Val., valuta_date, ...) as GG/MM/AAAA
+        # Format the Date column as GG/MM/AAAA
         for col in df_out.select_dtypes(include=["datetime64"]).columns:
             df_out[col] = pd.to_datetime(df_out[col], errors="coerce").dt.strftime(
                 "%d/%m/%Y"
