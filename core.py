@@ -1224,16 +1224,20 @@ class ReconciliationEngine:
 
                 d_amount = debit_remaining[d_idx]
                 d_orig_idx = debit_rows[d_idx]["orig_index"]
-                d_original_amount = debit_rows[d_idx]["Debit"]
 
+                # Record only the amount actually consumed from this receipt:
+                # if it was already partially used by a previous deposit, only
+                # the residual (debit_remaining) is still available.
                 if d_amount <= remaining_credit:
+                    used_amount = d_amount
                     current_match_debits.append(d_orig_idx)
-                    current_debit_amounts.append(d_original_amount)
+                    current_debit_amounts.append(used_amount)
                     remaining_credit -= d_amount
                     debit_remaining[d_idx] = 0
                 else:
+                    used_amount = remaining_credit
                     current_match_debits.append(d_orig_idx)
-                    current_debit_amounts.append(d_original_amount)
+                    current_debit_amounts.append(used_amount)
                     debit_remaining[d_idx] = d_amount - remaining_credit
                     remaining_credit = 0
 

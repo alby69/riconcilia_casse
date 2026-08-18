@@ -30,7 +30,9 @@ Per ogni **versamento (Credit)**:
    - Se la somma è insufficiente ma entro tolleranza → match con tolleranza
    - Se la somma è insufficiente e oltre tolleranza → **ANOMALY**
 
-4. **Residuo**: Il residuo **NON** viene trasferito al versamento successivo
+4. **Importi residui degli incassi**: Quando un incasso copre solo in parte un versamento, nel match viene registrato **solo l'importo effettivamente consumato** (es. incasso di 2777,00€ usato per 464,50€ → nel match compare 464,50€). Il residuo (2312,50€) resta disponibile e, se coperto da un versamento successivo, entra nel match successivo con il solo valore residuo. `total_debit` e `difference` riflettono quindi gli importi realmente assorbiti.
+
+5. **Residuo del versamento**: Il residuo del versamento **NON** viene trasferito al versamento successivo
 
 ## Parametri di Configurazione
 
