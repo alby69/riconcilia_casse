@@ -1,7 +1,15 @@
+import calendar
+
 import pandas as pd
 from openpyxl.styles import PatternFill, Alignment, Font, NamedStyle
 from openpyxl.formatting.rule import DataBarRule, ColorScaleRule
 from openpyxl.chart import BarChart, Reference, Series
+
+
+MONTH_NAMES_IT = (
+    "Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno",
+    "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre",
+)
 
 
 GROUP_FILLS = (
@@ -662,7 +670,8 @@ class ExcelReporter:
         """Builds the expanded layout of the 'Original' sheet.
 
         Returns a dict with:
-          - expanded:  list of row Series (original rows + inserted residual rows)
+          - expanded:  list of row Series (original rows + inserted residual rows
+                       + a monthly subtotal row at each month change)
           - meta:      parallel per-row metadata (color/side/difference/group...)
           - portion_rows: {orig_index: [excel data rows]} in memberships order
           - groups, saldo_analysis, n_rows
@@ -681,9 +690,58 @@ class ExcelReporter:
         portion_rows = {}
         excel_row = 1  # first data row is Excel row 2 (header is row 1)
 
+        # --- monthly subtotal tracking (inserted at each month change) ---
+        cols = list(df.columns)
+        month_key = None
+        month_deb = month_cre = 0
+        month_dates = []
+
+        def flush_month_total():
+            nonlocal excel_row, month_deb, month_cre, month_dates
+            if month_dates:
+                end = max(month_dates)
+                total_date = end.replace(
+                    day=calendar.monthrange(end.year, end.month)[1]
+                )
+                label = (
+                    "TOTALE MESE "
+                    f"{MONTH_NAMES_IT[end.month - 1]} {end.year}"
+                )
+                total_row = pd.Series([None] * len(cols), index=cols)
+                total_row["Date"] = total_date
+                total_row["Debit"] = month_deb
+                total_row["Credit"] = month_cre
+                expanded.append(total_row)
+                excel_row += 1
+                meta.append(
+                    {
+                        "month_total": True,
+                        "group_label": label,
+                        "color_idx": None,
+                        "side": None,
+                        "difference": month_deb - month_cre,
+                        "check": "",
+                        "inserted": False,
+                    }
+                )
+            month_deb = month_cre = 0
+            month_dates = []
+
         for _, r in df.iterrows():
             oi = r["orig_index"]
             key = int(oi) if pd.notna(oi) else None
+
+            date = r.get("Date")
+            if pd.notna(date):
+                d = pd.Timestamp(date)
+                cur_month = (d.year, d.month)
+                if month_key is not None and cur_month != month_key:
+                    flush_month_total()
+                month_key = cur_month
+                month_dates.append(d)
+                month_deb += int(r.get("Debit") or 0)
+                month_cre += int(r.get("Credit") or 0)
+
             info = groups.get(key)
 
             if info and info["side"] == "debit":
@@ -728,6 +786,8 @@ class ExcelReporter:
                 meta.append(self._row_meta(info, check_map.get(key, ""), False))
                 if key is not None:
                     portion_rows[key] = [excel_row]
+
+        flush_month_total()
 
         return {
             "expanded": expanded,
@@ -835,6 +895,11 @@ class ExcelReporter:
         group_col = col_map.get("Gruppo")
 
         for excel_row, m in enumerate(meta, start=2):
+            if m.get("month_total"):
+                self._style_month_total_row(
+                    ws, excel_row, df_out.columns, m
+                )
+                continue
             if m["color_idx"] is None:
                 continue
 
@@ -868,6 +933,24 @@ class ExcelReporter:
                 ws.cell(row=excel_row, column=group_col).font = font
 
         self._add_original_legend(ws, len(df_out), saldo_analysis)
+
+    @staticmethod
+    def _style_month_total_row(ws, excel_row, columns, m):
+        """Applies the subtotal style to a 'TOTALE MESE' row: bold text,
+        light gray fill across the row and currency format on the amounts."""
+        col_map = {name: idx + 1 for idx, name in enumerate(columns)}
+        fill = PatternFill(
+            start_color="E7E6E6", end_color="E7E6E6", fill_type="solid"
+        )
+        font = Font(bold=True)
+        for name in columns:
+            cell = ws.cell(row=excel_row, column=col_map[name])
+            cell.fill = fill
+            cell.font = font
+            if name in ("Debit", "Credit", "Difference"):
+                cell.number_format = "#,##0.00 €"
+        diff_cell = ws.cell(row=excel_row, column=col_map.get("Difference", 1))
+        diff_cell.font = Font(bold=True, color="C00000" if m["difference"] != 0 else "000000")
 
     @staticmethod
     def _row_meta(member, check, inserted):

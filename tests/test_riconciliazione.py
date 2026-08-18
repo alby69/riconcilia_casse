@@ -318,18 +318,37 @@ class TestReportingVisualization(unittest.TestCase):
             self.assertEqual(len(set(tids)), len(tids), "Each portion has its own group.")
             self.assertEqual(info["transaction_id"], tids[0], "Original row keeps first group.")
 
-        # check amounts are preserved in the Original sheet
+        # check amounts are preserved in the Original sheet (excluding subtotals)
         from openpyxl import load_workbook
 
         wb = load_workbook(out)
         ws = wb["Original"]
+        headers = [c.value for c in ws[1]]
+        group_col = headers.index("Gruppo") + 1
+        is_total = lambda r: isinstance(
+            ws.cell(row=r, column=group_col).value, str
+        ) and ws.cell(row=r, column=group_col).value.startswith("TOTALE MESE")
         total_debit = sum(
             v
             for r in range(2, ws.max_row + 1)
             if isinstance(v := ws.cell(row=r, column=2).value, (int, float))
+            and not is_total(r)
         )
         self.assertAlmostEqual(total_debit, 10427.50, places=2)
         self.assertGreater(ws.max_row - 1, len(df), "Inserted residual rows expected.")
+
+        # a monthly subtotal row must be present at each month change
+        totals = [
+            ws.cell(row=r, column=group_col).value
+            for r in range(2, ws.max_row + 1)
+            if is_total(r)
+        ]
+        self.assertTrue(totals, "Expected at least one TOTALE MESE row.")
+        self.assertEqual(
+            totals[0],
+            "TOTALE MESE Gennaio 2025",
+            "Subtotal labelled with month name and year.",
+        )
 
     def test_group_members_share_transaction_and_difference(self):
         """All members of a single group carry the same Transaction ID and delta."""
