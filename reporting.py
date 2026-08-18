@@ -195,6 +195,8 @@ class ExcelReporter:
 
     def generate_report(self, output_file, original_df):
         self.original_df = original_df
+        # Remap Transaction IDs / displayed indices to the split Original rows
+        self._remap_matches_to_sheet_rows(original_df)
         with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
             # Register styles
             writer.book.add_named_style(self.currency_style)
@@ -423,11 +425,19 @@ class ExcelReporter:
             return
         df = self.engine.matches_df.copy()
 
+        # Use the split-sheet row numbers for the displayed indices when the
+        # reporter remapped them (generate_report always does).
+        if "debit_display" in df.columns:
+            df["debit_indices"] = df["debit_display"]
+        if "credit_display" in df.columns:
+            df["credit_indices"] = df["credit_display"]
+        df.drop(columns=["debit_display", "credit_display"], errors="ignore", inplace=True)
+
         def format_list(data, is_float=False):
             if not isinstance(data, list):
                 return data
             items = [
-                f"{i / 100:.2f}".replace(".", ",") if is_float else str(i + 2)
+                f"{i / 100:.2f}".replace(".", ",") if is_float else str(i)
                 for i in data
             ]
             return ", ".join(items)
@@ -544,10 +554,16 @@ class ExcelReporter:
                 for cell in row:
                     cell.style = self.currency_style
 
-    def _create_original_sheet(self, writer, original_df):
-        df = original_df.copy()
+    def _build_original_layout(self, original_df):
+        """Builds the expanded layout of the 'Original' sheet.
 
-        # --- Saldo Prog. analysis (source order, before sorting) ---
+        Returns a dict with:
+          - expanded:  list of row Series (original rows + inserted residual rows)
+          - meta:      parallel per-row metadata (color/side/difference/group...)
+          - portion_rows: {orig_index: [excel data rows]} in memberships order
+          - groups, saldo_analysis, n_rows
+        """
+        df = original_df.copy()
         saldo_analysis = self._analyze_saldo_prog(df)
         check_map = saldo_analysis.get("check_map", {})
 
@@ -556,13 +572,10 @@ class ExcelReporter:
 
         groups = self._build_match_groups()
 
-        # --- Build the expanded rows ---
-        # A receipt (Debit) split across several deposits is shown as the first
-        # deposit's consumed portion on its own row, plus one additional row
-        # (inserted below, same date) per residual portion, each colored with
-        # its own group. This way every group has cells of a single color.
         expanded = []
-        meta = []  # parallel: {color_idx, side, difference, group_label, check, inserted}
+        meta = []
+        portion_rows = {}
+        excel_row = 1  # first data row is Excel row 2 (header is row 1)
 
         for _, r in df.iterrows():
             oi = r["orig_index"]
@@ -581,10 +594,13 @@ class ExcelReporter:
                     row = r.copy()
                     row["Debit"] = amount
                     expanded.append(row)
+                    excel_row += 1
                     meta.append(
                         self._row_meta(member, check_map.get(key, ""), False)
                     )
+                    portion_rows[key] = [excel_row]
                 else:
+                    rows_this = []
                     for i, (amount, member) in enumerate(portions):
                         row = r.copy()
                         row["Debit"] = amount
@@ -592,6 +608,7 @@ class ExcelReporter:
                         if inserted and "Saldo Prog." in row.index:
                             row["Saldo Prog."] = None
                         expanded.append(row)
+                        excel_row += 1
                         meta.append(
                             self._row_meta(
                                 member,
@@ -599,9 +616,81 @@ class ExcelReporter:
                                 inserted,
                             )
                         )
+                        rows_this.append(excel_row)
+                    portion_rows[key] = rows_this
             else:
                 expanded.append(r.copy())
+                excel_row += 1
                 meta.append(self._row_meta(info, check_map.get(key, ""), False))
+                if key is not None:
+                    portion_rows[key] = [excel_row]
+
+        return {
+            "expanded": expanded,
+            "meta": meta,
+            "portion_rows": portion_rows,
+            "groups": groups,
+            "saldo_analysis": saldo_analysis,
+            "n_rows": len(expanded),
+        }
+
+    def _remap_matches_to_sheet_rows(self, original_df):
+        """Rewrites Transaction IDs / displayed indices to the row numbers of the
+        SPLIT 'Original' sheet.
+
+        The engine builds D(..)_A(..) IDs from the ORIGINAL row indices. After a
+        receipt is split into extra rows, those indices no longer match the rows
+        the operator sees. This method maps each orig_index (and each split
+        portion) to its final row number in the 'Original' sheet and updates
+        matches_df accordingly (Transaction ID + debit_display/credit_display).
+        """
+        if self.engine.matches_df is None or self.engine.matches_df.empty:
+            return
+
+        layout = self._build_original_layout(original_df)
+        groups = layout["groups"]
+        portion_rows = layout["portion_rows"]
+
+        # orig_index -> {group_id: position in memberships}
+        gid_to_pos = {}
+        for oi, info in groups.items():
+            for pos, m in enumerate(info["memberships"]):
+                gid_to_pos.setdefault(oi, {})[m["group_id"]] = pos
+
+        matches = self.engine.matches_df
+        debit_display = []
+        credit_display = []
+        tids = []
+        for gid, (_, row) in enumerate(matches.iterrows(), start=1):
+            d_rows = []
+            for d in row.get("debit_indices", []) or []:
+                d = int(d)
+                pos = gid_to_pos.get(d, {}).get(gid)
+                rows = portion_rows.get(d, [])
+                if rows:
+                    d_rows.append(rows[pos if pos is not None and pos < len(rows) else 0])
+            c_rows = []
+            for c in row.get("credit_indices", []) or []:
+                rows = portion_rows.get(int(c), [])
+                if rows:
+                    c_rows.append(rows[0])
+            debit_display.append(d_rows)
+            credit_display.append(c_rows)
+            tids.append(
+                "D({})_A({})".format(
+                    ",".join(map(str, d_rows)), ",".join(map(str, c_rows))
+                )
+            )
+
+        matches["debit_display"] = debit_display
+        matches["credit_display"] = credit_display
+        matches["Transaction ID"] = tids
+
+    def _create_original_sheet(self, writer, original_df):
+        layout = self._build_original_layout(original_df)
+        expanded = layout["expanded"]
+        meta = layout["meta"]
+        saldo_analysis = layout["saldo_analysis"]
 
         df_out = pd.DataFrame(expanded).reset_index(drop=True)
 
