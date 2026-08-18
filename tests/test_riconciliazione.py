@@ -287,6 +287,8 @@ class TestReportingVisualization(unittest.TestCase):
         """A receipt split across deposits is shown on the original row (first
         group's portion) plus one inserted row per residual portion, with the
         same date and its own group's color. Total amounts are preserved."""
+        import tempfile
+
         rows = [
             {"Date": datetime(2025, 1, 2), "Debit": 2535.50, "Credit": 0.0},
             {"Date": datetime(2025, 1, 3), "Debit": 2777.00, "Credit": 0.0},
@@ -302,53 +304,54 @@ class TestReportingVisualization(unittest.TestCase):
             search_direction="past_only",
             algorithm="progressive_balance",
         )
-        out = "/tmp/opencode/test_split_report.xlsx"
-        engine.run(df, output_file=out, verbose=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "test_split_report.xlsx")
+            engine.run(df, output_file=out, verbose=False)
 
-        # find a split receipt: same orig_index in 2+ groups
-        groups = self.reporter_cls(engine)._build_match_groups()
-        split_ois = [
-            oi for oi, i in groups.items()
-            if i.get("side") == "debit" and len(i["memberships"]) > 1
-        ]
-        self.assertTrue(split_ois, "Expected at least one split receipt.")
-        for oi in split_ois:
-            info = groups[oi]
-            tids = [m["transaction_id"] for m in info["memberships"]]
-            self.assertEqual(len(set(tids)), len(tids), "Each portion has its own group.")
-            self.assertEqual(info["transaction_id"], tids[0], "Original row keeps first group.")
+            # find a split receipt: same orig_index in 2+ groups
+            groups = self.reporter_cls(engine)._build_match_groups()
+            split_ois = [
+                oi for oi, i in groups.items()
+                if i.get("side") == "debit" and len(i["memberships"]) > 1
+            ]
+            self.assertTrue(split_ois, "Expected at least one split receipt.")
+            for oi in split_ois:
+                info = groups[oi]
+                tids = [m["transaction_id"] for m in info["memberships"]]
+                self.assertEqual(len(set(tids)), len(tids), "Each portion has its own group.")
+                self.assertEqual(info["transaction_id"], tids[0], "Original row keeps first group.")
 
-        # check amounts are preserved in the Original sheet (excluding subtotals)
-        from openpyxl import load_workbook
+            # check amounts are preserved in the Original sheet (excluding subtotals)
+            from openpyxl import load_workbook
 
-        wb = load_workbook(out)
-        ws = wb["Original"]
-        headers = [c.value for c in ws[1]]
-        group_col = headers.index("Gruppo") + 1
-        is_total = lambda r: isinstance(
-            ws.cell(row=r, column=group_col).value, str
-        ) and ws.cell(row=r, column=group_col).value.startswith("TOTALE MESE")
-        total_debit = sum(
-            v
-            for r in range(2, ws.max_row + 1)
-            if isinstance(v := ws.cell(row=r, column=2).value, (int, float))
-            and not is_total(r)
-        )
-        self.assertAlmostEqual(total_debit, 10427.50, places=2)
-        self.assertGreater(ws.max_row - 1, len(df), "Inserted residual rows expected.")
+            wb = load_workbook(out)
+            ws = wb["Original"]
+            headers = [c.value for c in ws[1]]
+            group_col = headers.index("Gruppo") + 1
+            is_total = lambda r: isinstance(
+                ws.cell(row=r, column=group_col).value, str
+            ) and ws.cell(row=r, column=group_col).value.startswith("TOTALE MESE")
+            total_debit = sum(
+                v
+                for r in range(2, ws.max_row + 1)
+                if isinstance(v := ws.cell(row=r, column=2).value, (int, float))
+                and not is_total(r)
+            )
+            self.assertAlmostEqual(total_debit, 10427.50, places=2)
+            self.assertGreater(ws.max_row - 1, len(df), "Inserted residual rows expected.")
 
-        # a monthly subtotal row must be present at each month change
-        totals = [
-            ws.cell(row=r, column=group_col).value
-            for r in range(2, ws.max_row + 1)
-            if is_total(r)
-        ]
-        self.assertTrue(totals, "Expected at least one TOTALE MESE row.")
-        self.assertEqual(
-            totals[0],
-            "TOTALE MESE Gennaio 2025",
-            "Subtotal labelled with month name and year.",
-        )
+            # a monthly subtotal row must be present at each month change
+            totals = [
+                ws.cell(row=r, column=group_col).value
+                for r in range(2, ws.max_row + 1)
+                if is_total(r)
+            ]
+            self.assertTrue(totals, "Expected at least one TOTALE MESE row.")
+            self.assertEqual(
+                totals[0],
+                "TOTALE MESE Gennaio 2025",
+                "Subtotal labelled with month name and year.",
+            )
 
     def test_group_members_share_transaction_and_difference(self):
         """All members of a single group carry the same Transaction ID and delta."""
