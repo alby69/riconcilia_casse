@@ -155,6 +155,30 @@ class TestReconciliationCore(unittest.TestCase):
         self.assertEqual(matches.iloc[0]['total_debit'], 30000)
         self.assertEqual(matches.iloc[0]['total_credit'], 30000)
 
+    def test_past_only_no_future_receipts(self):
+        """With past_only, a deposit must never be matched to a receipt that
+        occurs AFTER the deposit itself, even within days_window."""
+        credits = [(datetime(2025, 5, 5), 300.0)]
+        debits = [
+            (datetime(2025, 5, 4), 200.0),
+            (datetime(2025, 5, 6), 100.0),  # one day AFTER the deposit
+        ]
+
+        df = self._create_df(debits, credits)
+        engine = ReconciliationEngine(
+            algorithm="progressive_balance",
+            days_window=5,
+            tolerance=50.0,
+            search_direction="past_only",
+        )
+        engine.run(df, verbose=False)
+
+        matches = engine.matches_df
+        # only the receipt BEFORE the deposit is matched (200.0 -> difference 100)
+        self.assertEqual(len(matches), 1)
+        debit_indices = matches.iloc[0]['debit_indices']
+        self.assertNotIn(2, debit_indices, "Receipt after deposit must not be matched.")
+
     def test_time_window_compliance(self):
         """Verifies that receipts outside days_window are not matched."""
         credits = [(datetime(2025, 7, 15), 200.0)]

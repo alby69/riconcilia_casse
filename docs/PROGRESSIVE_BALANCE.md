@@ -18,7 +18,7 @@ L'algoritmo **Progressive Balance** è progettato per simulare il comportamento 
 
 Per ogni **versamento (Credit)**:
 
-1. **Ricerca Incassi**: Cerca tutti gli incassi (Debit) disponibili nella finestra temporale di ±5 giorni dalla data del versamento
+1. **Ricerca Incassi**: Cerca tutti gli incassi (Debit) disponibili nella finestra temporale di `days_window` giorni dalla data del versamento. La finestra rispetta la `search_direction`: con `past_only` vengono considerati **solo gli incassi precedenti o dello stesso giorno** del versamento (mai successivi); con `both` la finestra è simmetrica (±days_window).
 
 2. **Verifica Periodo**: 
    - Se il versamento è di un mese/anno **precedente** rispetto agli incassi disponibili → **NON** viene agganciato

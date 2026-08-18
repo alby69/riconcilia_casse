@@ -29,6 +29,7 @@ Questo documento descrive la roadmap strategica ed esecutiva per l'evoluzione e 
 - [x] Scelta deterministica in `_find_matches`: in presenza di più match 1-a-1 esatti, scegliere la transazione più vicina per data anziché la prima in lista.
 - [x] Risoluzione mutazione in-place dei dizionari candidati in `_find_matches` / `_find_combinations_recursive_py` per evitare alterazioni durante il backtracking.
 - [x] Verifica e ottimizzazione della modalità `algorithm="auto"`.
+- [x] Nel `progressive_balance` la finestra temporale ora rispetta la `search_direction` (`_calculate_time_window`): con `past_only` un versamento può essere agganciato solo a incassi **precedenti o dello stesso giorno**, mai a incassi successivi (prima la finestra era simmetrica ±days_window anche con `past_only`).
 
 ### Fase 3: Gestione Profili & Interfaccia Web
 - [x] Endpoint backend in Flask (`/api/config`, `/api/profiles`) per lettura, salvataggio e applicazione profili.

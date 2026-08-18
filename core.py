@@ -1147,8 +1147,9 @@ class ReconciliationEngine:
             credit_orig_idx = credit_rows[credit_idx]["orig_index"]
             credit_date = credit_rows[credit_idx]["analysis_date"]
 
-            min_date = credit_date - pd.Timedelta(days=self.days_window)
-            max_date = credit_date + pd.Timedelta(days=self.days_window)
+            min_date, max_date = self._calculate_time_window(
+                credit_date, self.days_window, self.search_direction
+            )
 
             candidate_debit_indices = []
             candidate_debit_amounts = []
