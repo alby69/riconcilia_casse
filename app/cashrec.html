@@ -647,7 +647,10 @@
             const creditDates = match.credit_dates || [];
             const minCreditDate = creditDates.length > 0 ? new Date(Math.min(...creditDates.map(d => d.getTime()))) : null;
 
+            const tId = `D(${(match.debit_indices || []).map(i => i + 2).join(",")})_A(${(match.credit_indices || []).map(i => i + 2).join(",")})`;
+
             this.matches.push({
+                "Transaction ID": tId,
                 debit_indices: match.debit_indices || [],
                 debit_dates: match.debit_dates || [],
                 debit_amounts: match.debit_amounts || [],
@@ -1026,6 +1029,9 @@
 
             this.buildMatchGroups();
             this.remapMatchesToSheetRows();
+            // Rebuild groups after the remap so the Original sheet's Gruppo
+            // column shows the same (split-sheet) Transaction IDs as Matches.
+            this.buildMatchGroups();
 
             this.createSummarySheet(workbook);
             this.createManualSheet(workbook);
@@ -1157,8 +1163,21 @@
 
         remapMatchesToSheetRows() {
             const { portionRows } = this.buildOriginalLayout();
-            this.engine.matches.forEach(row => {
-                const dRows = (row.debit_indices || []).map(oi => (portionRows[oi] || [oi + 2])[0]);
+            // orig_index -> {group_id: position in memberships}
+            const gidToPos = {};
+            for (const oi in this.groups) {
+                this.groups[oi].memberships.forEach((m, pos) => {
+                    if (!gidToPos[oi]) gidToPos[oi] = {};
+                    gidToPos[oi][m.group_id] = pos;
+                });
+            }
+            this.engine.matches.forEach((row, groupIdx) => {
+                const gid = groupIdx + 1;
+                const dRows = (row.debit_indices || []).map(oi => {
+                    const rows = portionRows[oi] || [oi + 2];
+                    const pos = (gidToPos[oi] || {})[gid];
+                    return rows[(pos !== undefined && pos < rows.length) ? pos : 0];
+                });
                 const cRows = (row.credit_indices || []).map(oi => (portionRows[oi] || [oi + 2])[0]);
                 row["Transaction ID"] = `D(${dRows.join(",")})_A(${cRows.join(",")})`;
                 row.debit_display = dRows;
@@ -1332,33 +1351,54 @@
 
         createMonthlyBalanceSheet(workbook) {
             const ws = workbook.addWorksheet("Monthly Balance");
-            ws.addRow(["Month", "Total Debit", "Used Debit", "Unmatched DEBIT", "Total Credit", "Used Credit", "Unmatched CREDIT"]).font = { bold: true };
+            ws.addRow(["Month", "Total Debit", "Used Debit", "Unmatched DEBIT", "Total Credit", "Used Credit", "Unmatched CREDIT", "Monthly Difference (DEBIT - CREDIT)", "Residual Imbalance (DEBIT - CREDIT)", "Absorbed Imbalance (in match)", "Final Monthly Imbalance"]).font = { bold: true };
 
             // Basic monthly aggregation
             const months = {};
             this.engine.debit_df.forEach(r => {
                 const mKey = `${r.Date.getFullYear()}-${String(r.Date.getMonth() + 1).padStart(2, '0')}`;
-                if (!months[mKey]) months[mKey] = { totD: 0, usedD: 0, totC: 0, usedC: 0 };
+                if (!months[mKey]) months[mKey] = { totD: 0, usedD: 0, totC: 0, usedC: 0, absorbed: 0 };
                 months[mKey].totD += r.Debit;
                 if (r.used) months[mKey].usedD += r.Debit;
             });
             this.engine.credit_df.forEach(r => {
                 const mKey = `${r.Date.getFullYear()}-${String(r.Date.getMonth() + 1).padStart(2, '0')}`;
-                if (!months[mKey]) months[mKey] = { totD: 0, usedD: 0, totC: 0, usedC: 0 };
+                if (!months[mKey]) months[mKey] = { totD: 0, usedD: 0, totC: 0, usedC: 0, absorbed: 0 };
                 months[mKey].totC += r.Credit;
                 if (r.used) months[mKey].usedC += r.Credit;
             });
 
+            // Absorbed imbalance: attributed to the month of the FIRST receipt
+            // of each match (block_imbalance = total_debit - total_credit).
+            this.engine.matches.forEach(m => {
+                const dd = m.debit_dates || [];
+                if (dd.length > 0 && dd[0]) {
+                    const d0 = new Date(dd[0].getTime ? dd[0].getTime() : dd[0]);
+                    const mKey = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}`;
+                    if (!months[mKey]) months[mKey] = { totD: 0, usedD: 0, totC: 0, usedC: 0, absorbed: 0 };
+                    const totalDebit = (m.debit_amounts || []).reduce((s, a) => s + a, 0);
+                    months[mKey].absorbed += totalDebit - (m.total_credit || 0);
+                }
+            });
+
             Object.keys(months).sort().forEach(mKey => {
                 const m = months[mKey];
+                const unmatchedD = m.totD - m.usedD;
+                const unmatchedC = m.totC - m.usedC;
+                const residual = unmatchedD - unmatchedC;
+                const final = residual + m.absorbed;
                 ws.addRow([
                     mKey,
                     m.totD / 100,
                     m.usedD / 100,
-                    (m.totD - m.usedD) / 100,
+                    unmatchedD / 100,
                     m.totC / 100,
                     m.usedC / 100,
-                    (m.totC - m.usedC) / 100
+                    unmatchedC / 100,
+                    (m.totD - m.totC) / 100,
+                    residual / 100,
+                    m.absorbed / 100,
+                    final / 100
                 ]);
             });
         }
