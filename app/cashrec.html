@@ -638,6 +638,17 @@
                 analysis_date: r.valuta_date || r.Date
             }));
 
+            // FIX: When valuta_date is in a different year than the registration Date,
+            // use Date as effective_date and analysis_date.
+            // This allows matching year-end deposits (e.g. Dec 2025) against the
+            // opening balance debit (e.g. Jan 1 2026) which has no valuta_date.
+            this.credit_df.forEach(r => {
+                if (r.valuta_date && r.Date && r.valuta_date.getFullYear() !== r.Date.getFullYear()) {
+                    r.effective_date = r.Date;
+                    r.analysis_date = r.Date;
+                }
+            });
+
             this.debit_df.sort((a, b) => a.Date - b.Date);
             this.credit_df.sort((a, b) => a.analysis_date - b.analysis_date);
         }
@@ -841,13 +852,23 @@
                     if (usedIndicesCandidates.has(c.orig_index)) return false;
                     const candDate = c.Date;
                     if (colToProcess === "Credit" && recordRow.effective_date) {
-                        const valutaDate = recordRow.effective_date;
-                        if (candDate.getFullYear() > valutaDate.getFullYear()) return false;
-                        if (candDate.getFullYear() === valutaDate.getFullYear() && candDate.getMonth() > valutaDate.getMonth()) return false;
+                        // FIX: When valuta_date is in a different year than registration Date,
+                        // use Date for the filter to allow cross-year matching
+                        const regDate = recordRow.Date;
+                        let filterDate = recordRow.effective_date;
+                        if (regDate && filterDate.getFullYear() !== regDate.getFullYear()) {
+                            filterDate = regDate;
+                        }
+                        if (candDate.getFullYear() > filterDate.getFullYear()) return false;
+                        if (candDate.getFullYear() === filterDate.getFullYear() && candDate.getMonth() > filterDate.getMonth()) return false;
                     } else if (colToProcess === "Debit") {
-                        const creditEffectiveDate = c.effective_date || c.Date;
-                        if (creditEffectiveDate.getFullYear() > recordRow.Date.getFullYear()) return false;
-                        if (creditEffectiveDate.getFullYear() === recordRow.Date.getFullYear() && creditEffectiveDate.getMonth() > recordRow.Date.getMonth()) return false;
+                        // FIX: Use valuta_date (if present) for period filtering,
+                        // not effective_date which may be overridden for cross-year credits
+                        const creditValuta = c.valuta_date;
+                        const creditEffective = c.effective_date || c.Date;
+                        const filterDate = (creditValuta && creditValuta instanceof Date && !isNaN(creditValuta)) ? creditValuta : creditEffective;
+                        if (filterDate.getFullYear() > recordRow.Date.getFullYear()) return false;
+                        if (filterDate.getFullYear() === recordRow.Date.getFullYear() && filterDate.getMonth() > recordRow.Date.getMonth()) return false;
                     }
                     return candDate >= minDate && candDate <= maxDate;
                 });
@@ -1451,56 +1472,66 @@
 
         createMonthlyBalanceSheet(workbook) {
             const ws = workbook.addWorksheet("Monthly Balance");
-            ws.addRow(["Month", "Total Debit", "Used Debit", "Unmatched DEBIT", "Total Credit", "Used Credit", "Unmatched CREDIT", "Monthly Difference (DEBIT - CREDIT)", "Residual Imbalance (DEBIT - CREDIT)", "Absorbed Imbalance (in match)", "Final Monthly Imbalance"]).font = { bold: true };
+            const headers = ["Mese", "Incassi Totali", "Incassi Riconc.", "Versamenti Totali", "Versamenti Riconc.", "Differenza Mensile", "Cumulato", "Vers. Non Agganciati"];
+            const headerRow = ws.addRow(headers);
+            headerRow.font = { bold: true };
+            headerRow.eachCell(cell => {
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
+                cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            });
 
-            // Basic monthly aggregation
             const months = {};
             this.engine.debit_df.forEach(r => {
                 const mKey = `${r.Date.getFullYear()}-${String(r.Date.getMonth() + 1).padStart(2, '0')}`;
-                if (!months[mKey]) months[mKey] = { totD: 0, usedD: 0, totC: 0, usedC: 0, absorbed: 0 };
+                if (!months[mKey]) months[mKey] = { totD: 0, usedD: 0, totC: 0, usedC: 0 };
                 months[mKey].totD += r.Debit;
                 if (r.used) months[mKey].usedD += r.Debit;
             });
             this.engine.credit_df.forEach(r => {
                 const mKey = `${r.Date.getFullYear()}-${String(r.Date.getMonth() + 1).padStart(2, '0')}`;
-                if (!months[mKey]) months[mKey] = { totD: 0, usedD: 0, totC: 0, usedC: 0, absorbed: 0 };
+                if (!months[mKey]) months[mKey] = { totD: 0, usedD: 0, totC: 0, usedC: 0 };
                 months[mKey].totC += r.Credit;
                 if (r.used) months[mKey].usedC += r.Credit;
             });
 
-            // Absorbed imbalance: attributed to the month of the FIRST receipt
-            // of each match (block_imbalance = total_debit - total_credit).
-            this.engine.matches.forEach(m => {
-                const dd = m.debit_dates || [];
-                if (dd.length > 0 && dd[0]) {
-                    const d0 = new Date(dd[0].getTime ? dd[0].getTime() : dd[0]);
-                    const mKey = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}`;
-                    if (!months[mKey]) months[mKey] = { totD: 0, usedD: 0, totC: 0, usedC: 0, absorbed: 0 };
-                    const totalDebit = (m.debit_amounts || []).reduce((s, a) => s + a, 0);
-                    months[mKey].absorbed += totalDebit - (m.total_credit || 0);
-                }
-            });
-
-            Object.keys(months).sort().forEach(mKey => {
+            let cumulato = 0;
+            const sortedKeys = Object.keys(months).sort();
+            sortedKeys.forEach(mKey => {
                 const m = months[mKey];
-                const unmatchedD = m.totD - m.usedD;
-                const unmatchedC = m.totC - m.usedC;
-                const residual = unmatchedD - unmatchedC;
-                const final = residual + m.absorbed;
-                ws.addRow([
+                const diff = m.usedD - m.usedC;
+                cumulato += diff;
+                const nonAgg = m.totC - m.usedC;
+                const row = ws.addRow([
                     mKey,
                     m.totD / 100,
                     m.usedD / 100,
-                    unmatchedD / 100,
                     m.totC / 100,
                     m.usedC / 100,
-                    unmatchedC / 100,
-                    (m.totD - m.totC) / 100,
-                    residual / 100,
-                    m.absorbed / 100,
-                    final / 100
+                    diff / 100,
+                    cumulato / 100,
+                    nonAgg / 100
                 ]);
+                // Color the "Vers. Non Agganciati" cell red if > 0
+                if (nonAgg > 0) {
+                    row.getCell(8).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFCCCC' } };
+                }
+                // Color the Cumulato cell
+                const cumCell = row.getCell(7);
+                cumCell.fill = {
+                    type: 'pattern', pattern: 'solid',
+                    fgColor: { argb: cumulato >= 0 ? 'FFC6EFCE' : 'FFFFC7CE' }
+                };
             });
+
+            // Format currency columns (B-H)
+            for (let r = 2; r <= sortedKeys.length + 1; r++) {
+                for (let c = 2; c <= 8; c++) {
+                    ws.getCell(r, c).numFmt = '#,##0.00 €';
+                }
+            }
+            // Column widths
+            ws.getColumn(1).width = 12;
+            for (let c = 2; c <= 8; c++) ws.getColumn(c).width = 20;
         }
     }
 
@@ -1764,7 +1795,14 @@
 </ul>
 <p>In fondo a ogni mese c'è una riga <strong>TOTALE MESE</strong>: la somma degli incassi, dei versamenti e la differenza (Dare − Avere) di quel mese.</p>
 <h3>Monthly Balance (Quadratura mensile)</h3>
-<p>Per ogni mese mostra i totali, gli importi usati e la colonna <strong>Monthly Difference (DEBIT - CREDIT)</strong>: se la differenza mensile è vicina a zero, quel mese è quadrato.</p>
+<p>Schema sintetico per verificare mese per mese se incassi e versamenti sono in ordine:</p>
+<ul>
+<li><strong>Incassi Totali / Riconc.</strong>: totale incassi del mese e quanti sono stati abbinati a versamenti.</li>
+<li><strong>Versamenti Totali / Riconc.</strong>: totale versamenti del mese e quanti sono stati abbinati a incassi.</li>
+<li><strong>Differenza Mensile</strong>: Incassi Riconc. − Versamenti Riconc. Se positivo, la cassa ha incassato di piu' di quanto versato.</li>
+<li><strong>Cumulato</strong>: somma progressiva delle differenze dall'inizio dell'anno. Verde = positivo, rosso = negativo.</li>
+<li><strong>Vers. Non Agganciati</strong>: versamenti che non hanno trovato un incasso. Se > 0, vanno investigate le cause (sfondo rosso).</li>
+</ul>
 <h3>Unused DEBIT / Unreconciled CREDIT</h3>
 <ul>
 <li><strong>Unused DEBIT</strong>: gli incassi che non hanno trovato un versamento;</li>

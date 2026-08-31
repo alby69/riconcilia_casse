@@ -333,6 +333,20 @@ class ReconciliationEngine:
         else:
             self.credit_df["analysis_date"] = self.credit_df["Date"]
 
+        # FIX: When valuta_date is in a different year than the registration Date,
+        # use Date as effective_date and analysis_date.
+        # This allows matching year-end deposits (e.g. Dec 2025) against the
+        # opening balance debit (e.g. Jan 1 2026) which has no valuta_date.
+        if "valuta_date" in self.credit_df.columns:
+            cross_year = (
+                self.credit_df["valuta_date"].notna()
+                & self.credit_df["Date"].notna()
+                & (self.credit_df["valuta_date"].dt.year != self.credit_df["Date"].dt.year)
+            )
+            if cross_year.any():
+                self.credit_df.loc[cross_year, "effective_date"] = self.credit_df.loc[cross_year, "Date"]
+                self.credit_df.loc[cross_year, "analysis_date"] = self.credit_df.loc[cross_year, "Date"]
+
         if self.sorting_strategy == "date":
             self.debit_df = self.debit_df.sort_values("Date", ascending=True)
             # Sort CREDIT by analysis_date (Data Analisi = Data Valuta if present, otherwise Data)
@@ -737,14 +751,23 @@ class ReconciliationEngine:
 
                     # If CREDIT has valuta_date, filter candidates to same month/year
                     # This prevents December valuta from matching January DEBITs
+                    # UNLESS valuta_date is in a different year than registration Date
+                    # (cross-year case: e.g. deposit from Dec 2025 matched against Jan 2026 opening balance)
                     if valuta_date is not None:
-                        # Skip DEBITs from year AFTER valuta year
-                        if candidate_date.year > valuta_date.year:
+                        reg_date = record_row.get("Date")
+                        # When effective_date (valuta_date) is in a different year than
+                        # registration Date, use Date for the filter to allow cross-year matching
+                        if pd.notnull(reg_date) and valuta_date.year != reg_date.year:
+                            filter_date = reg_date
+                        else:
+                            filter_date = valuta_date
+                        # Skip DEBITs from year AFTER filter year
+                        if candidate_date.year > filter_date.year:
                             continue
-                        # Skip DEBITs from month AFTER valuta month (in same year)
+                        # Skip DEBITs from month AFTER filter month (in same year)
                         if (
-                            candidate_date.year == valuta_date.year
-                            and candidate_date.month > valuta_date.month
+                            candidate_date.year == filter_date.year
+                            and candidate_date.month > filter_date.month
                         ):
                             continue
 
@@ -759,17 +782,20 @@ class ReconciliationEngine:
                     if c["orig_index"] in used_indices_candidates:
                         continue
 
-                    # For CREDIT candidates, use effective_date (valuta_date if available)
-                    # If CREDIT has valuta_date, filter to same month/year as DEBIT
+                    # For CREDIT candidates, use valuta_date (if present) for period filtering,
+                    # not effective_date which may be overridden to Date for cross-year credits.
+                    # This ensures Dec 2025 deposits can still match Dec 2025 debits.
+                    credit_valuta = c.get("valuta_date")
                     credit_effective_date = c.get("effective_date", c["Date"])
+                    filter_date = credit_valuta if (credit_valuta is not None and pd.notnull(credit_valuta)) else credit_effective_date
 
-                    # Skip CREDITs from year AFTER debit year
-                    if credit_effective_date.year > debit_date.year:
+                    # Skip CREDITs from year AFTER filter year
+                    if filter_date.year > debit_date.year:
                         continue
-                    # Skip CREDITs from month AFTER debit month (in same year)
+                    # Skip CREDITs from month AFTER filter month (in same year)
                     if (
-                        credit_effective_date.year == debit_date.year
-                        and credit_effective_date.month > debit_date.month
+                        filter_date.year == debit_date.year
+                        and filter_date.month > debit_date.month
                     ):
                         continue
 
@@ -1120,6 +1146,18 @@ class ReconciliationEngine:
             df_credit["Date"]
         )
 
+        # FIX: When valuta_date is in a different year than the registration Date,
+        # use Date as analysis_date so the time window can reach debits from the
+        # current year (e.g. opening balance on Jan 1).
+        if "valuta_date" in df_credit.columns:
+            cross_year = (
+                df_credit["valuta_date"].notna()
+                & df_credit["Date"].notna()
+                & (df_credit["valuta_date"].dt.year != df_credit["Date"].dt.year)
+            )
+            if cross_year.any():
+                df_credit.loc[cross_year, "analysis_date"] = df_credit.loc[cross_year, "Date"]
+
         df_debit = df_debit.sort_values(by=["analysis_date", "orig_index"])
         df_credit = df_credit.sort_values(by=["analysis_date", "orig_index"])
 
@@ -1446,7 +1484,14 @@ class ReconciliationEngine:
         return matches
 
     def _calculate_monthly_balance(self):
-        """Calculates aggregate statistics by month to identify periodic imbalances."""
+        """Calcola la quadratura mensile: incassi vs versamenti con progressivo cumulato.
+
+        Schema semplice per operatore:
+        - Incassi/Versamenti Totali e Riconciliati
+        - Differenza mensile (solo riconciliati)
+        - Cumulato progressivo
+        - Versamenti non agganciati (da investigare)
+        """
         if self.debit_df is None or self.credit_df is None:
             return pd.DataFrame()
 
@@ -1464,63 +1509,21 @@ class ReconciliationEngine:
         stats_credit = aggregate(self.credit_df, "Credit")
         stats = pd.merge(
             stats_debit, stats_credit, left_index=True, right_index=True, how="outer"
-        )
+        ).fillna(0)
 
-        absorbed_imbalance = pd.DataFrame()
-        if self.matches_df is not None and not self.matches_df.empty:
-            df_temp_matches = self.matches_df.copy()
-            df_temp_matches["Month"] = df_temp_matches["debit_dates"].apply(
-                lambda x: x[0].to_period("M") if isinstance(x, list) and x else None
-            )
-            df_temp_matches.dropna(subset=["Month"], inplace=True)
-            df_temp_matches["total_debit"] = df_temp_matches["debit_amounts"].apply(
-                lambda x: sum(x) if isinstance(x, list) else 0
-            )
-            df_temp_matches["block_imbalance"] = (
-                df_temp_matches["total_debit"] - df_temp_matches["total_credit"]
-            )
-            absorbed_imbalance = (
-                df_temp_matches.groupby("Month")["block_imbalance"]
-                .sum()
-                .to_frame("Absorbed Imbalance (in match)")
-            )
+        stats["Differenza Mensile"] = stats["Used Debit"] - stats["Used Credit"]
+        stats["Cumulato"] = stats["Differenza Mensile"].cumsum()
+        stats["Versamenti Non Agganciati"] = stats["Total Credit"] - stats["Used Credit"]
 
-        if not absorbed_imbalance.empty:
-            stats = pd.merge(
-                stats,
-                absorbed_imbalance,
-                left_index=True,
-                right_index=True,
-                how="outer",
-            )
-
-        stats = stats.fillna(0)
-        stats["Unmatched DEBIT"] = stats["Total Debit"] - stats["Used Debit"]
-        stats["Unmatched CREDIT"] = stats["Total Credit"] - stats["Used Credit"]
-        stats["Monthly Difference (DEBIT - CREDIT)"] = (
-            stats["Total Debit"] - stats["Total Credit"]
-        )
-        stats["Residual Imbalance (DEBIT - CREDIT)"] = (
-            stats["Unmatched DEBIT"] - stats["Unmatched CREDIT"]
-        )
-        if "Absorbed Imbalance (in match)" not in stats.columns:
-            stats["Absorbed Imbalance (in match)"] = 0
-        stats["Final Monthly Imbalance"] = (
-            stats["Residual Imbalance (DEBIT - CREDIT)"]
-            + stats["Absorbed Imbalance (in match)"]
-        )
         stats = stats[
             [
                 "Total Debit",
                 "Used Debit",
-                "Unmatched DEBIT",
                 "Total Credit",
                 "Used Credit",
-                "Unmatched CREDIT",
-                "Monthly Difference (DEBIT - CREDIT)",
-                "Residual Imbalance (DEBIT - CREDIT)",
-                "Absorbed Imbalance (in match)",
-                "Final Monthly Imbalance",
+                "Differenza Mensile",
+                "Cumulato",
+                "Versamenti Non Agganciati",
             ]
         ]
         stats = stats.sort_index()

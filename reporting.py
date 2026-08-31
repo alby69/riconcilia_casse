@@ -2,7 +2,7 @@ import calendar
 
 import pandas as pd
 from openpyxl.styles import PatternFill, Alignment, Font, NamedStyle
-from openpyxl.formatting.rule import DataBarRule, ColorScaleRule
+from openpyxl.formatting.rule import DataBarRule, ColorScaleRule, CellIsRule
 from openpyxl.chart import BarChart, Reference, Series
 
 
@@ -985,52 +985,55 @@ class ExcelReporter:
         df.to_excel(writer, sheet_name="Monthly Balance", index=False)
         ws = writer.sheets["Monthly Balance"]
 
-        # Apply currency style
-        for row in ws.iter_rows(min_row=2, max_row=len(df) + 1, min_col=2):
+        # Rename headers to Italian for operator clarity
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_align = Alignment(horizontal="center")
+        italian_headers = {
+            "Month": "Mese",
+            "Total Debit": "Incassi Totali",
+            "Used Debit": "Incassi Riconc.",
+            "Total Credit": "Versamenti Totali",
+            "Used Credit": "Versamenti Riconc.",
+            "Differenza Mensile": "Differenza Mensile",
+            "Cumulato": "Cumulato",
+            "Versamenti Non Agganciati": "Vers. Non Agganciati",
+        }
+        for col_idx, cell in enumerate(ws[1], start=1):
+            header = cell.value
+            if header in italian_headers:
+                cell.value = italian_headers[header]
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+
+        # Apply currency style to amount columns (B-H)
+        for row in ws.iter_rows(min_row=2, max_row=len(df) + 1, min_col=2, max_col=8):
             for cell in row:
                 cell.style = self.currency_style
 
-        # Conditional formatting for Unmatched columns
-        red_scale_rule = ColorScaleRule(
-            start_type="min", start_color="FFFFE0", end_type="max", end_color="FF0000"
-        )
-        unmatched_debit_range = f"D2:D{len(df) + 1}"
-        unmatched_credit_range = f"G2:G{len(df) + 1}"
-        ws.conditional_formatting.add(unmatched_debit_range, red_scale_rule)
-        ws.conditional_formatting.add(unmatched_credit_range, red_scale_rule)
-
-        # --- New Clustered Bar Chart (Total vs Used) ---
-        chart = BarChart()
-        chart.type, chart.style, chart.grouping = "col", 10, "clustered"
-        chart.title, chart.y_axis.title, chart.x_axis.title = (
-            "Monthly Performance (Total vs. Used)",
-            "Amount (€)",
-            "Month",
+        # Conditional formatting: red background for "Vers. Non Agganciati" > 0
+        red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+        non_agg_range = f"H2:H{len(df) + 1}"
+        ws.conditional_formatting.add(
+            non_agg_range,
+            CellIsRule(operator="greaterThan", formula=["0"], fill=red_fill),
         )
 
-        categories = Reference(ws, min_col=1, min_row=2, max_row=len(df) + 1)
-        chart.set_categories(categories)
+        # Cumulato: conditional green if >= 0, red if < 0
+        green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        red_fill_light = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        cumulato_range = f"G2:G{len(df) + 1}"
+        ws.conditional_formatting.add(
+            cumulato_range,
+            CellIsRule(operator="greaterThanOrEqual", formula=["0"], fill=green_fill),
+        )
+        ws.conditional_formatting.add(
+            cumulato_range,
+            CellIsRule(operator="lessThan", formula=["0"], fill=red_fill_light),
+        )
 
-        data_cols = {
-            "Total Debit": 2,
-            "Used Debit": 3,
-            "Total Credit": 5,
-            "Used Credit": 6,
-        }
-        for title, col_idx in data_cols.items():
-            series_ref = Reference(ws, min_col=col_idx, min_row=1, max_row=len(df) + 1)
-            series = Series(series_ref, title_from_data=True)
-            # Assegna colori diversi per distinguere Totale vs Usato
-            if "Debit" in title:
-                if "Total" in title:
-                    series.graphicalProperties.solidFill = "4472C4"  # Dark Blue
-                else:  # Used Debit
-                    series.graphicalProperties.solidFill = "8EB4E3"  # Light Blue
-            else:
-                if "Total" in title:
-                    series.graphicalProperties.solidFill = "ED7D31"  # Dark Orange
-                else:  # Used Credit
-                    series.graphicalProperties.solidFill = "F7B68A"  # Light Orange
-            chart.series.append(series)
-
-        ws.add_chart(chart, f"A{len(df) + 4}")
+        # Set column widths
+        ws.column_dimensions["A"].width = 12
+        for col_letter in ["B", "C", "D", "E", "F", "G", "H"]:
+            ws.column_dimensions[col_letter].width = 20
