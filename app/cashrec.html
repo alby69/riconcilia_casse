@@ -14,10 +14,14 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 
-    <!-- External JS Libraries for Client-Side Processing, Charts and Excel Generation -->
+    <!-- Web App Manifest for PWA Support -->
+    <link rel="manifest" href="../manifest.json">
+
+    <!-- External JS Libraries for Client-Side Processing, Charts, Excel and PDF Generation -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 
     <style>
         :root {
@@ -77,12 +81,50 @@
             --btn-text: #0f172a;
         }
 
+        [data-theme="high-contrast"] {
+            --primary-color: #ffff00; /* Pure Yellow */
+            --primary-hover: #ffffff;
+            --secondary-color: #00ffff; /* Cyan */
+            --accent-color: #00ffff;
+            --accent-light: #003333;
+            --accent-dark: #00ffff;
+            --success-color: #00ff00;
+            --success-bg: #003300;
+            --warning-color: #ffff00;
+            --warning-bg: #333300;
+            --danger-color: #ff0055;
+            --danger-bg: #330011;
+
+            --bg-color: #000000;
+            --card-bg: #000000;
+            --card-border: #ffffff;
+            --card-shadow: 0 0 0 2px #ffffff;
+            --text-color: #ffffff;
+            --text-muted: #e2e8f0;
+            --border-color: #ffffff;
+            --input-bg: #000000;
+            --btn-text: #000000;
+        }
+
+        :focus-visible {
+            outline: 3px solid var(--accent-color) !important;
+            outline-offset: 3px !important;
+        }
+
         body {
             background-color: var(--bg-color);
             font-family: var(--font-body);
             color: var(--text-color);
             transition: background-color 0.3s ease, color 0.3s ease;
             min-height: 100vh;
+        }
+
+        /* Mobile Responsive Enhancements */
+        @media (max-width: 576px) {
+            .card-body { padding: 1.5rem !important; }
+            .hero-banner { margin: 15px auto 10px auto; }
+            .btn-process { width: 100%; padding: 12px 20px; font-size: 1rem; }
+            .kpi-grid { grid-template-columns: 1fr; }
         }
 
         h1, h2, h3, h4, h5, h6, .brand-font {
@@ -164,6 +206,69 @@
         .upload-area:hover i.upload-icon {
             transform: scale(1.1) translateY(-4px);
             color: var(--accent-color);
+        }
+
+        /* Skeleton Loader Animation */
+        .skeleton {
+            background: linear-gradient(90deg, var(--card-border) 25%, var(--bg-color) 50%, var(--card-border) 75%);
+            background-size: 200% 100%;
+            animation: skeleton-loading 1.5s infinite;
+            border-radius: var(--radius-sm);
+        }
+        @keyframes skeleton-loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        .skeleton-text { height: 16px; margin-bottom: 8px; width: 100%; }
+        .skeleton-title { height: 24px; margin-bottom: 12px; width: 60%; }
+        .skeleton-box { height: 80px; width: 100%; }
+
+        /* Custom Toast Notification Styling */
+        .toast-container-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 1090;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-width: 360px;
+            width: 100%;
+            pointer-events: none;
+        }
+        .toast-custom {
+            pointer-events: auto;
+            background: var(--card-bg);
+            color: var(--text-color);
+            border: 1px solid var(--card-border);
+            border-left: 5px solid var(--accent-color);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+            border-radius: var(--radius-sm);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+        .toast-custom.toast-success { border-left-color: var(--success-color); }
+        .toast-custom.toast-danger { border-left-color: var(--danger-color); }
+        .toast-custom.toast-warning { border-left-color: var(--warning-color); }
+        @keyframes slideInRight {
+            from { opacity: 0; transform: translateX(50px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        /* Empty State Graphic Styling */
+        .empty-state-card {
+            border: 2px dashed var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 40px 20px;
+            text-align: center;
+            background: var(--bg-color);
+            color: var(--text-muted);
+            margin-top: 15px;
         }
 
         /* File Selected Preview Badge */
@@ -321,12 +426,21 @@
             </svg>
             <span>CashRec</span>
         </a>
-        <button class="btn btn-link position-absolute text-decoration-none" id="btnHelp" title="Manuale Utente" style="color: var(--text-color); right: 55px; font-size: 1.25rem;">
-            <i class="fas fa-circle-question"></i>
-        </button>
-        <button class="btn btn-link position-absolute end-0 text-decoration-none" id="themeToggle" style="color: var(--text-color); font-size: 1.25rem;">
-            <i class="fas fa-moon"></i>
-        </button>
+        <div class="position-absolute end-0 d-flex align-items-center gap-1">
+            <select id="langSelect" class="form-select form-select-sm border-0 bg-transparent fw-semibold" style="width: auto; cursor: pointer; color: var(--text-color); font-size: 0.85rem;" aria-label="Seleziona Lingua">
+                <option value="it">🇮🇹 IT</option>
+                <option value="en">🇬🇧 EN</option>
+            </select>
+            <button class="btn btn-link text-decoration-none" id="btnHistory" title="Cronologia Elaborazioni" aria-label="Cronologia Elaborazioni" style="color: var(--text-color); font-size: 1.15rem;">
+                <i class="fas fa-history"></i>
+            </button>
+            <button class="btn btn-link text-decoration-none" id="btnHelp" title="Manuale Utente" aria-label="Manuale Utente" style="color: var(--text-color); font-size: 1.15rem;">
+                <i class="fas fa-circle-question"></i>
+            </button>
+            <button class="btn btn-link text-decoration-none" id="themeToggle" title="Cambia Tema Visivo" aria-label="Cambia Tema Visivo" style="color: var(--text-color); font-size: 1.15rem;">
+                <i class="fas fa-moon"></i>
+            </button>
+        </div>
     </div>
 </nav>
 
@@ -346,27 +460,18 @@
                 <!-- Upload Area -->
                 <div class="upload-area mb-4" id="dropZone">
                     <i class="fas fa-cloud-arrow-up fa-3x mb-3 upload-icon"></i>
-                    <h5 class="fw-bold mb-1">Trascina qui il tuo file Excel</h5>
-                    <p class="text-muted small mb-0">supporta formati .xlsx, .xls</p>
-                    <input type="file" name="file_input" id="fileInput" class="d-none" accept=".xlsx, .xls">
+                    <h5 class="fw-bold mb-1" data-i18n="dropzone_title">Trascina qui i tuoi file Excel o CSV</h5>
+                    <p class="text-muted small mb-0" data-i18n="dropzone_sub">supporta formati .xlsx, .xls, .csv (singolo o multi-file)</p>
+                    <input type="file" name="file_input" id="fileInput" class="d-none" accept=".xlsx, .xls, .csv" multiple>
 
                     <div id="filePreviewContainer" class="d-none">
-                        <div class="file-preview-card">
-                            <i class="fas fa-file-excel fa-2x text-success"></i>
-                            <div class="text-start">
-                                <div id="fileName" class="fw-bold text-dark small text-truncate" style="max-width: 280px;"></div>
-                                <div id="fileSize" class="text-muted text-xs" style="font-size: 0.75rem;"></div>
-                            </div>
-                            <span class="badge bg-success-subtle text-success border border-success-subtle ms-2 rounded-pill small">
-                                <i class="fas fa-check-circle me-1"></i>Pronto
-                            </span>
-                        </div>
+                        <div id="fileQueueList" class="d-flex flex-column gap-2 align-items-center mt-3"></div>
                     </div>
                 </div>
 
                 <!-- Advanced Settings Toggle -->
                 <div class="text-center mb-3">
-                    <span class="settings-toggle" onclick="toggleSettings()">
+                    <span class="settings-toggle" onclick="toggleSettings()" data-i18n="advanced_toggle">
                         <i class="fas fa-sliders me-1"></i> Impostazioni Avanzate <i class="fas fa-chevron-down ms-1" id="toggleIcon"></i>
                     </span>
                 </div>
@@ -481,13 +586,13 @@
                 <!-- Action Button -->
                 <div class="text-center mt-4">
                     <button type="submit" class="btn btn-process px-5" id="btnSubmit">
-                        <i class="fas fa-wand-magic-sparkles me-2"></i>Elabora File
+                        <i class="fas fa-wand-magic-sparkles me-2"></i><span data-i18n="btn_process">Elabora File</span>
                     </button>
                 </div>
             </form>
 
             <!-- Error Panel -->
-            <div id="errorContainer" class="mt-4 d-none text-start">
+            <div id="errorContainer" class="mt-4 d-none text-start" role="alert" aria-live="assertive">
                 <div class="alert alert-danger shadow-sm border-0 rounded-3 p-4">
                     <h5 class="alert-heading text-danger fw-bold d-flex align-items-center mb-2">
                         <i class="fas fa-exclamation-triangle me-2 fa-lg"></i>Si è verificato un errore
@@ -497,12 +602,26 @@
                 </div>
             </div>
 
-            <!-- Progress Container -->
-            <div id="progressContainer" class="mt-4 d-none text-center">
+            <!-- Progress & Skeleton Container -->
+            <div id="progressContainer" class="mt-4 d-none text-center" role="status" aria-live="polite">
                 <div class="progress mb-3" style="height: 22px; border-radius: 12px; overflow: hidden; background-color: var(--border-color);">
                     <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated bg-teal fw-bold" role="progressbar" style="width: 0%; font-size: 0.85rem; background-color: var(--accent-color);" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
                 </div>
                 <p class="text-muted fw-semibold mb-3" id="progressStatusText">Elaborazione in corso nel browser...</p>
+
+                <!-- Skeleton Loader UI for processing feedback -->
+                <div class="p-3 border rounded-3 bg-body mb-3 text-start">
+                    <div class="skeleton skeleton-title mb-3"></div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-3"><div class="skeleton skeleton-box"></div></div>
+                        <div class="col-3"><div class="skeleton skeleton-box"></div></div>
+                        <div class="col-3"><div class="skeleton skeleton-box"></div></div>
+                        <div class="col-3"><div class="skeleton skeleton-box"></div></div>
+                    </div>
+                    <div class="skeleton skeleton-text"></div>
+                    <div class="skeleton skeleton-text" style="width: 80%;"></div>
+                </div>
+
                 <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-4 fw-semibold" id="btnCancel">
                     <i class="fas fa-circle-stop me-1"></i>Annulla Elaborazione
                 </button>
@@ -581,6 +700,9 @@
                     <div class="d-flex flex-wrap gap-2 justify-content-center">
                         <button id="btnDownload" class="btn btn-success fw-bold px-4 py-2 rounded-pill">
                             <i class="fas fa-file-excel me-2"></i>Scarica Report Excel
+                        </button>
+                        <button id="btnDownloadPDF" class="btn btn-outline-danger fw-bold px-4 py-2 rounded-pill ms-md-2">
+                            <i class="fas fa-file-pdf me-2"></i>Scarica Report PDF
                         </button>
                         <button class="btn btn-outline-primary fw-bold px-4 py-2 rounded-pill ms-md-2" id="btnNewFile">
                             <i class="fas fa-plus me-2"></i>Nuovo File
@@ -670,6 +792,138 @@
     let generatedReportBlob = null;
     let generatedReportFilename = "report_riconciliazione.xlsx";
 
+    // --- IndexedDB Local History Manager (Phase 7) ---
+    class CashRecDB {
+        static DB_NAME = 'CashRecDB';
+        static DB_VERSION = 1;
+        static STORE_NAME = 'history';
+
+        static openDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(CashRecDB.DB_NAME, CashRecDB.DB_VERSION);
+                request.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains(CashRecDB.STORE_NAME)) {
+                        db.createObjectStore(CashRecDB.STORE_NAME, { keyPath: 'id', autoIncrement: true });
+                    }
+                };
+                request.onsuccess = (e) => resolve(e.target.result);
+                request.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        static async saveRun(runData) {
+            try {
+                const db = await CashRecDB.openDB();
+                const tx = db.transaction(CashRecDB.STORE_NAME, 'readwrite');
+                const store = tx.objectStore(CashRecDB.STORE_NAME);
+
+                // Limit history to last 10 entries
+                const all = await new Promise((res) => {
+                    const req = store.getAll();
+                    req.onsuccess = () => res(req.result || []);
+                });
+
+                if (all.length >= 10) {
+                    all.sort((a, b) => a.timestamp - b.timestamp);
+                    store.delete(all[0].id);
+                }
+
+                store.add({
+                    timestamp: Date.now(),
+                    dateStr: new Date().toLocaleString('it-IT'),
+                    fileName: runData.fileName,
+                    stats: runData.stats,
+                    dashboardData: runData.dashboardData,
+                    fullLogText: runData.fullLogText
+                });
+            } catch (err) {
+                console.warn("IndexedDB save error:", err);
+            }
+        }
+
+        static async getHistory() {
+            try {
+                const db = await CashRecDB.openDB();
+                const tx = db.transaction(CashRecDB.STORE_NAME, 'readonly');
+                const store = tx.objectStore(CashRecDB.STORE_NAME);
+                return new Promise((resolve) => {
+                    const req = store.getAll();
+                    req.onsuccess = () => {
+                        const res = req.result || [];
+                        res.sort((a, b) => b.timestamp - a.timestamp);
+                        resolve(res);
+                    };
+                });
+            } catch (err) {
+                console.warn("IndexedDB get error:", err);
+                return [];
+            }
+        }
+
+        static async clearHistory() {
+            try {
+                const db = await CashRecDB.openDB();
+                const tx = db.transaction(CashRecDB.STORE_NAME, 'readwrite');
+                tx.objectStore(CashRecDB.STORE_NAME).clear();
+            } catch (err) {
+                console.warn("IndexedDB clear error:", err);
+            }
+        }
+    }
+
+    // Register PWA Service Worker (Phase 8)
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('../sw.js').then((reg) => {
+                console.log('PWA ServiceWorker registered with scope:', reg.scope);
+            }).catch((err) => {
+                console.log('PWA ServiceWorker registration skipped/failed:', err);
+            });
+        });
+    }
+
+    // --- i18n Translation Dictionary (Phase 13) ---
+    const I18N_TRANSLATIONS = {
+        it: {
+            dropzone_title: "Trascina qui i tuoi file Excel o CSV",
+            dropzone_sub: "supporta formati .xlsx, .xls, .csv (singolo o multi-file)",
+            advanced_toggle: "Impostazioni Avanzate",
+            btn_process: "Elabora File",
+            btn_download_excel: "Scarica Report Excel",
+            btn_download_pdf: "Scarica Report PDF",
+            btn_new_file: "Nuovo File"
+        },
+        en: {
+            dropzone_title: "Drag & drop your Excel or CSV files here",
+            dropzone_sub: "supports .xlsx, .xls, .csv formats (single or multi-file)",
+            advanced_toggle: "Advanced Settings",
+            btn_process: "Process File",
+            btn_download_excel: "Download Excel Report",
+            btn_download_pdf: "Download PDF Report",
+            btn_new_file: "New File"
+        }
+    };
+
+    function applyLanguage(lang) {
+        const translations = I18N_TRANSLATIONS[lang] || I18N_TRANSLATIONS['it'];
+        document.querySelectorAll('[data-i18n]').forEach(el => {
+            const key = el.getAttribute('data-i18n');
+            if (translations[key]) {
+                el.textContent = translations[key];
+            }
+        });
+        localStorage.setItem('cashrec_lang', lang);
+    }
+
+    const langSelect = document.getElementById('langSelect');
+    if (langSelect) {
+        const savedLang = localStorage.getItem('cashrec_lang') || 'it';
+        langSelect.value = savedLang;
+        applyLanguage(savedLang);
+        langSelect.addEventListener('change', (e) => applyLanguage(e.target.value));
+    }
+
     // --- Theme Logic ---
     const themeToggle = document.getElementById('themeToggle');
     const body = document.body;
@@ -688,25 +942,35 @@
     updateIcon(savedTheme);
 
     themeToggle.addEventListener('click', () => {
-        const newTheme = body.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+        const currentTheme = body.getAttribute('data-theme') || 'light';
+        let newTheme = 'light';
+        if (currentTheme === 'light') newTheme = 'dark';
+        else if (currentTheme === 'dark') newTheme = 'high-contrast';
+        else newTheme = 'light';
+
         body.setAttribute('data-theme', newTheme);
         localStorage.setItem('theme', newTheme);
         updateIcon(newTheme);
+        showToast(`Tema impostato: ${newTheme.toUpperCase()}`, 'info');
     });
 
     function updateIcon(theme) {
-        icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+        if (theme === 'dark') icon.className = 'fas fa-sun';
+        else if (theme === 'high-contrast') icon.className = 'fas fa-adjust';
+        else icon.className = 'fas fa-moon';
     }
 
-    // --- UI Logic ---
+    // --- UI Logic & Multi-File Queue (Phase 9) ---
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const filePreviewContainer = document.getElementById('filePreviewContainer');
-    const fileNameDisplay = document.getElementById('fileName');
-    const fileSizeDisplay = document.getElementById('fileSize');
+    const fileQueueList = document.getElementById('fileQueueList');
+
+    let selectedFilesQueue = [];
+    let currentSelectedFileIndex = 0;
 
     dropZone.addEventListener('click', (e) => {
-        if (!e.target.closest('.file-preview-card')) {
+        if (!e.target.closest('.file-preview-card') && !e.target.closest('.btn-queue-select')) {
             fileInput.click();
         }
     });
@@ -721,8 +985,10 @@
     ['dragleave', 'drop'].forEach(e => dropZone.addEventListener(e, () => dropZone.classList.remove('dragover')));
 
     dropZone.addEventListener('drop', (e) => {
-        fileInput.files = e.dataTransfer.files;
-        handleFileSelect();
+        if (e.dataTransfer.files.length > 0) {
+            fileInput.files = e.dataTransfer.files;
+            handleFileSelect();
+        }
     });
 
     function formatFileSize(bytes) {
@@ -735,13 +1001,46 @@
 
     function handleFileSelect() {
         if (fileInput.files.length > 0) {
-            const file = fileInput.files[0];
-            fileNameDisplay.textContent = file.name;
-            fileSizeDisplay.textContent = formatFileSize(file.size);
+            selectedFilesQueue = Array.from(fileInput.files);
+            currentSelectedFileIndex = 0;
+            renderFileQueueUI();
             filePreviewContainer.classList.remove('d-none');
             dropZone.style.borderColor = "var(--accent-color)";
         }
     }
+
+    function renderFileQueueUI() {
+        if (!fileQueueList) return;
+        fileQueueList.innerHTML = selectedFilesQueue.map((file, idx) => {
+            const isCsv = file.name.toLowerCase().endsWith('.csv');
+            const iconClass = isCsv ? 'fa-file-csv text-info' : 'fa-file-excel text-success';
+            const isActive = idx === currentSelectedFileIndex;
+            return `
+                <div class="file-preview-card ${isActive ? 'border-primary' : ''}">
+                    <i class="fas ${iconClass} fa-2x"></i>
+                    <div class="text-start">
+                        <div class="fw-bold text-dark small text-truncate" style="max-width: 260px;">${file.name}</div>
+                        <div class="text-muted text-xs" style="font-size: 0.75rem;">${formatFileSize(file.size)} ${isCsv ? '• CSV' : '• Excel'}</div>
+                    </div>
+                    ${selectedFilesQueue.length > 1 ? `
+                        <button type="button" class="btn btn-xs ${isActive ? 'btn-primary' : 'btn-outline-secondary'} btn-queue-select rounded-pill ms-2" onclick="selectQueueIndex(${idx})">
+                            ${isActive ? 'Selezionato' : 'Scegli'}
+                        </button>
+                    ` : `
+                        <span class="badge bg-success-subtle text-success border border-success-subtle ms-2 rounded-pill small">
+                            <i class="fas fa-check-circle me-1"></i>Pronto
+                        </span>
+                    `}
+                </div>
+            `;
+        }).join('');
+    }
+
+    window.selectQueueIndex = function(idx) {
+        currentSelectedFileIndex = idx;
+        renderFileQueueUI();
+        showToast(`Selezionato per l'elaborazione: ${selectedFilesQueue[idx].name}`, 'info');
+    };
 
     function toggleSettings() {
         const section = document.getElementById('advancedSettings');
@@ -776,8 +1075,8 @@
         }
     });
 
-    document.getElementById('btnSaveProfile')?.addEventListener('click', function() {
-        const name = prompt("Inserisci il nome del nuovo profilo:");
+    document.getElementById('btnSaveProfile')?.addEventListener('click', async function() {
+        const name = await customPrompt("Inserisci il nome del nuovo profilo:", "", "Salva Profilo");
         if (!name || !name.trim()) return;
 
         const formEl = document.getElementById('uploadForm');
@@ -791,26 +1090,26 @@
         localStorage.setItem('cashrec_profiles', JSON.stringify(PROFILES));
         renderProfileSelect();
         document.getElementById('profile_select').value = name.trim();
-        alert("Profilo '" + name.trim() + "' salvato in locale con successo!");
+        showToast("Profilo '" + name.trim() + "' salvato con successo!", 'success');
     });
 
-    document.getElementById('btnDeleteProfile')?.addEventListener('click', function() {
+    document.getElementById('btnDeleteProfile')?.addEventListener('click', async function() {
         const select = document.getElementById('profile_select');
         const selected = select.value;
         if (!selected) {
-            alert("Seleziona prima un profilo da eliminare.");
+            showToast("Seleziona prima un profilo da eliminare.", 'warning');
             return;
         }
-        if (!confirm("Sei sicuro di voler eliminare il profilo '" + selected + "'?")) return;
+        if (!(await customConfirm("Sei sicuro di voler eliminare il profilo '" + selected + "'?", "Elimina Profilo"))) return;
 
         delete PROFILES[selected];
         localStorage.setItem('cashrec_profiles', JSON.stringify(PROFILES));
         renderProfileSelect();
-        alert("Profilo eliminato con successo.");
+        showToast("Profilo eliminato con successo.", 'success');
     });
 
-    document.getElementById('btnSaveDefaultConfig')?.addEventListener('click', function() {
-        if (!confirm("Sei sicuro di voler salvare questi parametri come nuovi default nel tuo browser?")) return;
+    document.getElementById('btnSaveDefaultConfig')?.addEventListener('click', async function() {
+        if (!(await customConfirm("Sei sicuro di voler salvare questi parametri come nuovi default?", "Salva Default"))) return;
 
         const formEl = document.getElementById('uploadForm');
         CONFIG.common.algorithm = formEl.elements['algorithm']?.value || CONFIG.common.algorithm;
@@ -823,7 +1122,7 @@
         CONFIG.common.handover_days = parseInt(formEl.elements['handover_days']?.value) || CONFIG.common.handover_days;
 
         localStorage.setItem('cashrec_config', JSON.stringify(CONFIG));
-        alert("Configurazione predefinita salvata con successo nel browser!");
+        showToast("Configurazione predefinita salvata nel browser!", 'success');
     });
 
     function populateForm(params) {
@@ -881,16 +1180,73 @@
         return isNaN(d.getTime()) ? null : d;
     }
 
-    // --- Read File with SheetJS ---
-    async function readExcelFile(file, columnMappingForm, logMessages = [], progressCallback = null) {
-        const buffer = await file.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
+    // --- CSV Parser Helper (Phase 9) ---
+    function parseCSVText(csvText) {
+        const lines = csvText.split(/\\r?\\n/);
+        if (lines.length === 0) return [];
 
-        const rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+        const firstLine = lines[0] || "";
+        const semicoCount = (firstLine.match(/;/g) || []).length;
+        const commaCount = (firstLine.match(/,/g) || []).length;
+        const delimiter = semicoCount >= commaCount ? ';' : ',';
+
+        const parseLine = (line) => {
+            const result = [];
+            let current = '';
+            let inQuotes = false;
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+                if (char === '"') {
+                    if (inQuotes && line[i+1] === '"') {
+                        current += '"';
+                        i++;
+                    } else {
+                        inQuotes = !inQuotes;
+                    }
+                } else if (char === delimiter && !inQuotes) {
+                    result.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+            result.push(current.trim());
+            return result;
+        };
+
+        const headers = parseLine(lines[0]);
+        const rows = [];
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            const vals = parseLine(line);
+            const row = {};
+            headers.forEach((h, idx) => {
+                row[h] = vals[idx] !== undefined ? vals[idx] : "";
+            });
+            rows.push(row);
+        }
+        return rows;
+    }
+
+    // --- Read File with SheetJS or CSV ---
+    async function readExcelFile(file, fileName, columnMappingForm, logMessages = [], progressCallback = null) {
+        const buffer = await file.arrayBuffer();
+        let rawRows = [];
+
+        if (fileName && fileName.toLowerCase().endsWith('.csv')) {
+            const textDecoder = new TextDecoder('utf-8');
+            const csvText = textDecoder.decode(buffer);
+            rawRows = parseCSVText(csvText);
+        } else {
+            const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+            const firstSheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[firstSheetName];
+            rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+        }
+
         if (rawRows.length === 0) {
-            throw new Error("Il file Excel appare vuoto.");
+            throw new Error("Il file caricato appare vuoto.");
         }
 
         const MAX_ROWS = 50000;
@@ -922,12 +1278,12 @@
         const actualColValutaDate = findCol(colValutaDateInput, "Data Val.", "Data Valuta", "Valuta");
 
         const missingCols = [];
-        if (!actualColDate) missingCols.push(\`Data ('\${colDateInput || 'Data Reg.'}')\`);
-        if (!actualColDebit) missingCols.push(\`Dare ('\${colDebitInput || 'Dare'}')\`);
-        if (!actualColCredit) missingCols.push(\`Avere ('\${colCreditInput || 'Avere'}')\`);
+        if (!actualColDate) missingCols.push("Data ('" + (colDateInput || 'Data Reg.') + "')");
+        if (!actualColDebit) missingCols.push("Dare ('" + (colDebitInput || 'Dare') + "')");
+        if (!actualColCredit) missingCols.push("Avere ('" + (colCreditInput || 'Avere') + "')");
 
         if (missingCols.length > 0) {
-            throw new Error(\`Colonne obbligatorie non trovate nel file Excel: \${missingCols.join(', ')}. Verifica i nomi delle colonne nelle Impostazioni Avanzate.\`);
+            throw new Error("Colonne obbligatorie non trovate nel file Excel: " + missingCols.join(', ') + ". Verifica i nomi delle colonne nelle Impostazioni Avanzate.");
         }
 
         const rows = [];
@@ -2006,7 +2362,7 @@
 
                 const dummyFile = { arrayBuffer: async () => fileBuffer };
 
-                const rows = await readExcelFile(dummyFile, columnMappingForm, logMessages, (perc, msg) => {
+                const rows = await readExcelFile(dummyFile, fileName, columnMappingForm, logMessages, (perc, msg) => {
                     self.postMessage({ type: 'progress', percent: perc, statusText: msg });
                 });
 
@@ -2029,7 +2385,7 @@
 
                 self.postMessage({ type: 'progress', percent: 100, statusText: "Elaborazione completata!" });
 
-                const origName = fileName.replace(/\\.[^/.]+\$/, "");
+                const origName = fileName.replace(/\.[^/.]+$/, "");
                 const reportFilename = origName + "_result.xlsx";
                 logMessages.push("[Report] Report Excel generato con successo (" + reportFilename + ").");
 
@@ -2408,8 +2764,12 @@
 
         hideError();
 
-        if (!fileInput.files.length) {
-            showError("Selezione File", "Per favore, seleziona un file Excel prima di procedere.");
+        const file = (selectedFilesQueue.length > 0 && selectedFilesQueue[currentSelectedFileIndex])
+            ? selectedFilesQueue[currentSelectedFileIndex]
+            : (fileInput.files && fileInput.files[0]);
+
+        if (!file) {
+            showError("Selezione File", "Per favore, seleziona un file Excel o CSV prima di procedere.");
             return;
         }
 
@@ -2425,9 +2785,7 @@
         log.textContent = '';
         fullLogText = "";
 
-        updateProgressUI(0, "Avvio elaborazione nel Web Worker...");
-
-        const file = fileInput.files[0];
+        updateProgressUI(0, `Avvio elaborazione di "${file.name}" nel Web Worker...`);
         const formData = new FormData(this);
         const columnMappingForm = {
             col_date: formData.get("col_date"),
@@ -2477,6 +2835,14 @@
                         renderAnomaliesTable(dashboardData.tableItems);
                     }
 
+                    // Save session to local IndexedDB history (Phase 7)
+                    CashRecDB.saveRun({
+                        fileName: file.name,
+                        stats: stats,
+                        dashboardData: dashboardData,
+                        fullLogText: workerLog
+                    });
+
                     progress.classList.add('d-none');
                     btn.disabled = false;
                     result.classList.remove('d-none');
@@ -2518,10 +2884,10 @@
         }
     });
 
-    // --- Download Handler ---
+    // --- Download Handlers (Excel & PDF) ---
     document.getElementById('btnDownload')?.addEventListener('click', function() {
         if (!generatedReportBlob) {
-            alert("Nessun report generato disponibile.");
+            showToast("Nessun report generato disponibile.", 'warning');
             return;
         }
         const url = URL.createObjectURL(generatedReportBlob);
@@ -2532,12 +2898,76 @@
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+        showToast("Download del Report Excel avviato!", 'success');
+    });
+
+    // Executive PDF Report Export (Phase 10)
+    document.getElementById('btnDownloadPDF')?.addEventListener('click', async function() {
+        const resultCard = document.querySelector('#resultContainer .alert-success');
+        if (!resultCard || document.getElementById('resultContainer').classList.contains('d-none')) {
+            showToast("Nessun risultato disponibile per l'export PDF.", 'warning');
+            return;
+        }
+
+        showToast("Generazione del report PDF in corso...", 'info');
+
+        // Create PDF element container
+        const pdfContainer = document.createElement('div');
+        pdfContainer.style.padding = '20px';
+        pdfContainer.style.background = '#ffffff';
+        pdfContainer.style.color = '#1e293b';
+        pdfContainer.style.fontFamily = 'Inter, sans-serif';
+
+        const chartCanvas = document.getElementById('monthlyChart');
+        let chartImgHtml = '';
+        if (chartCanvas) {
+            const chartDataUrl = chartCanvas.toDataURL('image/png');
+            chartImgHtml = `<div style="text-align: center; margin: 15px 0;"><img src="${chartDataUrl}" style="max-width: 100%; height: 200px;" /></div>`;
+        }
+
+        const kpiHtml = document.getElementById('kpiDashboard')?.innerHTML || '';
+        const badgesHtml = document.getElementById('matchBadgesSummary')?.innerHTML || '';
+
+        pdfContainer.innerHTML = `
+            <div style="border-bottom: 2px solid #0f2b5c; padding-bottom: 10px; margin-bottom: 15px;">
+                <h2 style="color: #0f2b5c; font-family: Outfit, sans-serif; font-weight: 800; margin: 0;">CashRec — Report Executive Riconciliazione</h2>
+                <div style="font-size: 0.85rem; color: #64748b; margin-top: 4px;">Data Report: ${new Date().toLocaleString('it-IT')}</div>
+            </div>
+            <h4 style="font-size: 1.1rem; color: #0f2b5c; margin-bottom: 10px;">Indicatori Chiave di Prestazione (KPI)</h4>
+            <div style="margin-bottom: 15px;">${kpiHtml}</div>
+            <div style="margin-bottom: 15px;">${badgesHtml}</div>
+            <h4 style="font-size: 1.1rem; color: #0f2b5c; margin-top: 20px; margin-bottom: 10px;">Quadratura Mensile</h4>
+            ${chartImgHtml}
+            <div style="margin-top: 20px; font-size: 0.75rem; color: #94a3b8; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 8px;">
+                Generato con CashRec Standalone App • 100% Client-Side
+            </div>
+        `;
+
+        const opt = {
+            margin:       10,
+            filename:     `cashrec_report_${new Date().toISOString().slice(0, 10)}.pdf`,
+            image:        { type: 'jpeg', quality: 0.98 },
+            html2canvas:  { scale: 2, logging: false },
+            jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        };
+
+        try {
+            if (window.html2pdf) {
+                await html2pdf().set(opt).from(pdfContainer).save();
+                showToast("Download del Report PDF completato!", 'success');
+            } else {
+                window.print();
+            }
+        } catch (err) {
+            console.warn("PDF generation error, fallback to print:", err);
+            window.print();
+        }
     });
 
     // --- Log Download Handler ---
     document.getElementById('btnDownloadLog')?.addEventListener('click', function() {
         if (!fullLogText) {
-            alert("Nessun log disponibile per il download.");
+            showToast("Nessun log disponibile per il download.", 'warning');
             return;
         }
         const blob = new Blob([fullLogText], { type: 'text/plain;charset=utf-8' });
@@ -2549,6 +2979,7 @@
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+        showToast("Download del file Log avviato!", 'success');
     });
 
     // --- Reset Form Handler ---
@@ -2566,9 +2997,148 @@
         populateForm(CONFIG.common);
     });
 
+    // --- Toast Notifications & Custom Dialogs Utility ---
+    function showToast(message, type = 'info') {
+        let container = document.getElementById('toastContainer');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toastContainer';
+            container.className = 'toast-container-custom';
+            document.body.appendChild(container);
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `toast-custom toast-${type}`;
+
+        let iconClass = 'fa-circle-info text-info';
+        if (type === 'success') iconClass = 'fa-circle-check text-success';
+        if (type === 'danger') iconClass = 'fa-triangle-exclamation text-danger';
+        if (type === 'warning') iconClass = 'fa-triangle-exclamation text-warning';
+
+        toast.innerHTML = `
+            <div class="d-flex align-items-center gap-2">
+                <i class="fas ${iconClass} fa-lg"></i>
+                <span style="font-size: 0.9rem;">${message}</span>
+            </div>
+            <button class="btn-close btn-close-sm ms-2" onclick="this.parentElement.remove()"></button>
+        `;
+
+        container.appendChild(toast);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateX(50px)';
+            setTimeout(() => toast.remove(), 300);
+        }, 4000);
+    }
+
+    function customConfirm(message, title = "Conferma Operazione") {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('confirmModal');
+            const titleEl = document.getElementById('confirmModalTitle');
+            const msgEl = document.getElementById('confirmModalMessage');
+            const btnYes = document.getElementById('btnConfirmYes');
+            const btnNo = document.getElementById('btnConfirmNo');
+
+            titleEl.textContent = title;
+            msgEl.textContent = message;
+            modal.classList.remove('d-none');
+
+            const cleanup = () => {
+                modal.classList.add('d-none');
+                btnYes.removeEventListener('click', onYes);
+                btnNo.removeEventListener('click', onNo);
+            };
+
+            const onYes = () => { cleanup(); resolve(true); };
+            const onNo = () => { cleanup(); resolve(false); };
+
+            btnYes.addEventListener('click', onYes);
+            btnNo.addEventListener('click', onNo);
+        });
+    }
+
+    function customPrompt(message, defaultValue = "", title = "Inserisci Valore") {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('promptModal');
+            const titleEl = document.getElementById('promptModalTitle');
+            const msgEl = document.getElementById('promptModalMessage');
+            const inputEl = document.getElementById('promptModalInput');
+            const btnOk = document.getElementById('btnPromptOk');
+            const btnCancel = document.getElementById('btnPromptCancel');
+
+            titleEl.textContent = title;
+            msgEl.textContent = message;
+            inputEl.value = defaultValue;
+            modal.classList.remove('d-none');
+            inputEl.focus();
+
+            const cleanup = () => {
+                modal.classList.add('d-none');
+                btnOk.removeEventListener('click', onOk);
+                btnCancel.removeEventListener('click', onCancel);
+            };
+
+            const onOk = () => { const val = inputEl.value; cleanup(); resolve(val); };
+            const onCancel = () => { cleanup(); resolve(null); };
+
+            btnOk.addEventListener('click', onOk);
+            btnCancel.addEventListener('click', onCancel);
+        });
+    }
+
     // Initial setup
     document.addEventListener('DOMContentLoaded', initializeForm);
 </script>
+
+<!-- Custom Confirm Modal -->
+<div id="confirmModal" class="d-none" style="position: fixed; inset: 0; z-index: 1060; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); backdrop-filter: blur(3px); display: flex;">
+    <div style="background: var(--card-bg); color: var(--text-color); max-width: 440px; width: 90%; border-radius: var(--radius-md); box-shadow: var(--card-shadow); border: 1px solid var(--card-border); padding: 24px;">
+        <h5 id="confirmModalTitle" class="fw-bold mb-2 text-primary">Conferma</h5>
+        <p id="confirmModalMessage" class="text-muted mb-4 small"></p>
+        <div class="d-flex justify-content-end gap-2">
+            <button type="button" class="btn btn-outline-secondary btn-sm px-3 rounded-pill" id="btnConfirmNo">Annulla</button>
+            <button type="button" class="btn btn-primary btn-sm px-4 rounded-pill fw-bold" id="btnConfirmYes">Conferma</button>
+        </div>
+    </div>
+</div>
+
+<!-- Custom Prompt Modal -->
+<div id="promptModal" class="d-none" style="position: fixed; inset: 0; z-index: 1060; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); backdrop-filter: blur(3px); display: flex;">
+    <div style="background: var(--card-bg); color: var(--text-color); max-width: 440px; width: 90%; border-radius: var(--radius-md); box-shadow: var(--card-shadow); border: 1px solid var(--card-border); padding: 24px;">
+        <h5 id="promptModalTitle" class="fw-bold mb-2 text-primary">Richiesta Input</h5>
+        <p id="promptModalMessage" class="text-muted mb-3 small"></p>
+        <input type="text" id="promptModalInput" class="form-control form-control-sm mb-4" placeholder="">
+        <div class="d-flex justify-content-end gap-2">
+            <button type="button" class="btn btn-outline-secondary btn-sm px-3 rounded-pill" id="btnPromptCancel">Annulla</button>
+            <button type="button" class="btn btn-primary btn-sm px-4 rounded-pill fw-bold" id="btnPromptOk">OK</button>
+        </div>
+    </div>
+</div>
+
+<!-- History Modal (Cronologia Elaborazioni) -->
+<div id="historyModal" class="d-none" style="position: fixed; inset: 0; z-index: 1050; align-items: flex-start; justify-content: center; overflow-y: auto; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); padding: 40px 15px;">
+    <div style="background: var(--card-bg); color: var(--text-color); max-width: 760px; width: 100%; border-radius: var(--radius-lg); box-shadow: 0 25px 50px rgba(0,0,0,0.35); margin: auto; border: 1px solid var(--card-border);">
+        <div class="d-flex justify-content-between align-items-center p-3 px-4 border-bottom" style="border-color: var(--card-border) !important;">
+            <h5 class="mb-0 fw-bold d-flex align-items-center text-primary">
+                <i class="fas fa-history me-2"></i>
+                <span>Cronologia Elaborazioni Locali</span>
+            </h5>
+            <button type="button" class="btn btn-sm btn-outline-secondary rounded-circle" id="historyModalClose" style="width: 32px; height: 32px; padding: 0;">
+                <i class="fas fa-xmark"></i>
+            </button>
+        </div>
+        <div class="p-4">
+            <p class="text-muted small mb-3">Le ultime 10 elaborazioni salvate in locale nel browser (IndexedDB):</p>
+            <div id="historyListContainer" class="list-group mb-3" style="max-height: 380px; overflow-y: auto;"></div>
+            <div class="d-flex justify-content-between align-items-center pt-2">
+                <button type="button" class="btn btn-outline-danger btn-sm rounded-pill" id="btnClearHistory">
+                    <i class="fas fa-trash me-1"></i>Svuota Cronologia
+                </button>
+                <button type="button" class="btn btn-secondary btn-sm rounded-pill px-4" onclick="document.getElementById('historyModal').classList.add('d-none')">Chiudi</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- Help Modal (Manuale Utente) -->
 <div id="helpModal" class="d-none" style="position: fixed; inset: 0; z-index: 1050; align-items: flex-start; justify-content: center; overflow-y: auto; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); padding: 40px 15px;">
@@ -2742,6 +3312,71 @@
         document.getElementById('helpModalClose')?.addEventListener('click', close);
         modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
         document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    })();
+
+    // --- History Modal Logic (Phase 7) ---
+    (function() {
+        const modal = document.getElementById('historyModal');
+        const listContainer = document.getElementById('historyListContainer');
+        if (!modal || !listContainer) return;
+
+        const open = async () => {
+            const history = await CashRecDB.getHistory();
+            if (history.length === 0) {
+                listContainer.innerHTML = '<div class="text-center text-muted py-4 small"><i class="fas fa-folder-open fa-2x mb-2"></i><br>Nessuna elaborazione salvata in cronologia.</div>';
+            } else {
+                listContainer.innerHTML = history.map(item => `
+                    <div class="list-group-item list-group-item-action d-flex align-items-center justify-content-between gap-3 p-3" style="background: var(--bg-color); border-color: var(--border-color);">
+                        <div>
+                            <div class="fw-bold small text-dark"><i class="fas fa-file-excel text-success me-2"></i>${item.fileName}</div>
+                            <div class="text-muted text-xs" style="font-size: 0.78rem;"><i class="fas fa-clock me-1"></i>${item.dateStr}</div>
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill small">
+                                ${item.stats._raw_debit_amount_perc.toFixed(1)}% Copertura
+                            </span>
+                            <button type="button" class="btn btn-sm btn-outline-primary rounded-pill btn-restore-history" data-timestamp="${item.timestamp}">
+                                <i class="fas fa-folder-open me-1"></i>Riapri
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+
+                listContainer.querySelectorAll('.btn-restore-history').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const ts = parseInt(btn.getAttribute('data-timestamp'));
+                        const record = history.find(h => h.timestamp === ts);
+                        if (record) {
+                            renderKPIDashboard(record.stats);
+                            if (record.dashboardData) {
+                                renderMatchBadges(record.dashboardData.matchCounts);
+                                renderMonthlyChart(record.dashboardData.monthlyBalance);
+                                renderAnomaliesTable(record.dashboardData.tableItems);
+                            }
+                            fullLogText = record.fullLogText || "";
+                            document.getElementById('logOutput').textContent = fullLogText;
+                            document.getElementById('resultContainer').classList.remove('d-none');
+                            modal.classList.add('d-none');
+                            showToast("Riepilogo caricato dalla cronologia!", "info");
+                        }
+                    });
+                });
+            }
+            modal.classList.remove('d-none');
+        };
+
+        const close = () => modal.classList.add('d-none');
+
+        document.getElementById('btnHistory')?.addEventListener('click', open);
+        document.getElementById('historyModalClose')?.addEventListener('click', close);
+        document.getElementById('btnClearHistory')?.addEventListener('click', async () => {
+            if (await customConfirm("Sei sicuro di voler svuotare l'intera cronologia?", "Svuota Cronologia")) {
+                await CashRecDB.clearHistory();
+                open();
+                showToast("Cronologia svuotata.", "success");
+            }
+        });
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
     })();
 </script>
 </body>
