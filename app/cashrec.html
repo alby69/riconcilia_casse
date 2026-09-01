@@ -14,9 +14,10 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 
-    <!-- External JS Libraries for Client-Side Processing and Excel Generation -->
+    <!-- External JS Libraries for Client-Side Processing, Charts and Excel Generation -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
     <style>
         :root {
@@ -520,6 +521,60 @@
 
                     <!-- Dynamic KPI Summary Dashboard -->
                     <div class="kpi-grid" id="kpiDashboard"></div>
+
+                    <!-- Match Status Badges Summary -->
+                    <div class="d-flex flex-wrap gap-2 my-3 justify-content-start" id="matchBadgesSummary"></div>
+
+                    <!-- Monthly Balance Chart Container -->
+                    <div class="my-4 p-3 border rounded-3 bg-body shadow-sm" id="chartCard">
+                        <h6 class="fw-bold mb-3 d-flex align-items-center text-primary">
+                            <i class="fas fa-chart-column me-2"></i>Quadratura Mensile (Incassi vs Versamenti)
+                        </h6>
+                        <div style="position: relative; height: 260px; width: 100%;">
+                            <canvas id="monthlyChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Interactive Anomalies & Unreconciled Table Panel -->
+                    <div class="my-4 p-3 border rounded-3 bg-body shadow-sm" id="anomaliesTableCard">
+                        <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+                            <h6 class="fw-bold mb-0 d-flex align-items-center text-danger">
+                                <i class="fas fa-list-check me-2"></i>Anomalie e Movimenti Non Riconciliati
+                            </h6>
+                            <div class="d-flex align-items-center gap-2 flex-wrap">
+                                <select class="form-select form-select-sm w-auto" id="tableFilterSelect">
+                                    <option value="all">Tutti gli elementi (Tutti)</option>
+                                    <option value="anomaly">Solo Anomalie</option>
+                                    <option value="unused_debit">Solo Incassi non usati (Dare)</option>
+                                    <option value="unreconciled_credit">Solo Versamenti scoperti (Avere)</option>
+                                </select>
+                                <select class="form-select form-select-sm w-auto" id="tableSortSelect">
+                                    <option value="date_asc">Data (Crescente)</option>
+                                    <option value="date_desc">Data (Decrescente)</option>
+                                    <option value="amount_desc">Importo (Maggiore prima)</option>
+                                    <option value="amount_asc">Importo (Minore prima)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
+                            <table class="table table-hover table-sm align-middle mb-0" id="anomaliesTable" style="font-size: 0.85rem;">
+                                <thead class="table-light sticky-top" style="z-index: 1;">
+                                    <tr>
+                                        <th>Tipo / Stato</th>
+                                        <th>Data</th>
+                                        <th>Riferimento / Transazione</th>
+                                        <th class="text-end">Importo / Scoperto</th>
+                                        <th>Dettagli / Note</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="anomaliesTableBody"></tbody>
+                            </table>
+                        </div>
+                        <div id="tableEmptyState" class="text-muted text-center py-4 small d-none">
+                            <i class="fas fa-circle-check fa-2x text-success mb-2"></i><br>Nessuna anomalia o movimento da segnalare per i filtri selezionati!
+                        </div>
+                    </div>
 
                     <hr class="my-3 opacity-25">
 
@@ -1980,12 +2035,114 @@
 
                 const fullLogText = logMessages.join('\\n');
 
+                const monthlyTotalsRaw = engine.computeMonthlyTotals();
+                const monthNamesIt = ["Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno", "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"];
+                const monthlyBalance = Object.keys(monthlyTotalsRaw).sort().map(k => {
+                    const [y, m] = k.split("-").map(Number);
+                    const d = monthlyTotalsRaw[k].Debit / 100;
+                    const c = monthlyTotalsRaw[k].Credit / 100;
+                    return {
+                        key: k,
+                        label: (monthNamesIt[m] || ('Mese ' + (m + 1))) + ' ' + y,
+                        debit: d,
+                        credit: c,
+                        delta: d - c
+                    };
+                });
+
+                let countExact = 0;
+                let countTolerance = 0;
+                let countAnomaly = 0;
+                let countForced = 0;
+
+                engine.matches.forEach(m => {
+                    const isAnomaly = (m.match_type || '').startsWith('ANOMALY');
+                    if (isAnomaly) {
+                        countAnomaly++;
+                    } else if (m.difference === 0) {
+                        countExact++;
+                    } else if (m.difference <= engine.tolerance) {
+                        countTolerance++;
+                    } else if (m.is_forced) {
+                        countForced++;
+                    } else {
+                        countExact++;
+                    }
+                });
+
+                const unusedDebits = engine.debit_df.filter(r => !r.used);
+                const unreconciledCredits = engine.credit_df.filter(r => !r.used);
+
+                const matchCounts = {
+                    exact: countExact,
+                    tolerance: countTolerance,
+                    anomaly: countAnomaly,
+                    forced: countForced,
+                    unused_debit: unusedDebits.length,
+                    unreconciled_credit: unreconciledCredits.length
+                };
+
+                const tableItems = [];
+
+                engine.matches.filter(m => (m.match_type || '').startsWith('ANOMALY')).forEach(m => {
+                    const dStr = m.credit_date ? m.credit_date.toLocaleDateString('it-IT') : '';
+                    const dateVal = m.credit_date ? m.credit_date.getTime() : 0;
+                    tableItems.push({
+                        type: 'anomaly',
+                        typeLabel: 'Anomalia',
+                        badgeClass: 'bg-danger-subtle text-danger border border-danger-subtle',
+                        dateStr: dStr,
+                        dateVal: dateVal,
+                        transactionId: m["Transaction ID"],
+                        amount: m.total_credit / 100,
+                        diff: m.difference / 100,
+                        details: m.match_type
+                    });
+                });
+
+                unusedDebits.forEach(r => {
+                    const dStr = r.Date ? r.Date.toLocaleDateString('it-IT') : '';
+                    const dateVal = r.Date ? r.Date.getTime() : 0;
+                    tableItems.push({
+                        type: 'unused_debit',
+                        typeLabel: 'Incasso non usato',
+                        badgeClass: 'bg-warning-subtle text-warning border border-warning-subtle',
+                        dateStr: dStr,
+                        dateVal: dateVal,
+                        transactionId: 'Riga ' + (r.orig_index + 2),
+                        amount: r.Debit / 100,
+                        diff: 0,
+                        details: 'Incasso in Dare senza versamento abbinato'
+                    });
+                });
+
+                unreconciledCredits.forEach(r => {
+                    const dStr = r.Date ? r.Date.toLocaleDateString('it-IT') : '';
+                    const dateVal = r.Date ? r.Date.getTime() : 0;
+                    tableItems.push({
+                        type: 'unreconciled_credit',
+                        typeLabel: 'Versamento scoperto',
+                        badgeClass: 'bg-info-subtle text-info border border-info-subtle',
+                        dateStr: dStr,
+                        dateVal: dateVal,
+                        transactionId: 'Riga ' + (r.orig_index + 2),
+                        amount: r.Credit / 100,
+                        diff: r.Credit / 100,
+                        details: 'Versamento in Avere senza incassi a copertura'
+                    });
+                });
+
                 self.postMessage({
                     type: 'success',
                     reportBlob: reportBlob,
                     reportFilename: reportFilename,
                     fullLogText: fullLogText,
-                    stats: stats
+                    stats: stats,
+                    dashboardData: {
+                        monthlyBalance: monthlyBalance,
+                        matchCounts: matchCounts,
+                        tableItems: tableItems
+                    }
                 });
             } catch (err) {
                 self.postMessage({ type: 'error', phase: 'Elaborazione Client-Side', message: err.message || String(err) });
@@ -2010,6 +2167,9 @@
         const errorContainer = document.getElementById('errorContainer');
         errorContainer.classList.add('d-none');
     }
+
+    let currentChart = null;
+    let currentTableItems = [];
 
     // Render In-App KPI Summary Dashboard
     function renderKPIDashboard(stats) {
@@ -2049,6 +2209,171 @@
             </div>
         `;
     }
+
+    // Render Match Breakdown Status Badges
+    function renderMatchBadges(matchCounts) {
+        const container = document.getElementById('matchBadgesSummary');
+        if (!container || !matchCounts) return;
+
+        container.innerHTML = `
+            <span class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-3 py-2 fw-semibold">
+                <i class="fas fa-check-double me-1"></i>${matchCounts.exact} Match Esatti
+            </span>
+            ${matchCounts.tolerance > 0 ? `
+            <span class="badge bg-info-subtle text-info border border-info-subtle rounded-pill px-3 py-2 fw-semibold">
+                <i class="fas fa-arrows-left-right me-1"></i>${matchCounts.tolerance} Match con Tolleranza
+            </span>` : ''}
+            ${matchCounts.anomaly > 0 ? `
+            <span class="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-3 py-2 fw-semibold">
+                <i class="fas fa-triangle-exclamation me-1"></i>${matchCounts.anomaly} Anomalie
+            </span>` : ''}
+            ${matchCounts.unused_debit > 0 ? `
+            <span class="badge bg-warning-subtle text-warning border border-warning-subtle rounded-pill px-3 py-2 fw-semibold">
+                <i class="fas fa-arrow-down-left me-1"></i>${matchCounts.unused_debit} Incassi non usati
+            </span>` : ''}
+            ${matchCounts.unreconciled_credit > 0 ? `
+            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle rounded-pill px-3 py-2 fw-semibold">
+                <i class="fas fa-arrow-up-right me-1"></i>${matchCounts.unreconciled_credit} Versamenti scoperti
+            </span>` : ''}
+        `;
+    }
+
+    // Render Monthly Balance Chart
+    function renderMonthlyChart(monthlyBalance) {
+        const canvas = document.getElementById('monthlyChart');
+        if (!canvas || !monthlyBalance || monthlyBalance.length === 0) return;
+
+        if (currentChart) {
+            currentChart.destroy();
+            currentChart = null;
+        }
+
+        const labels = monthlyBalance.map(m => m.label);
+        const debitData = monthlyBalance.map(m => m.debit);
+        const creditData = monthlyBalance.map(m => m.credit);
+
+        const isDark = document.body.getAttribute('data-theme') === 'dark';
+        const textColor = isDark ? '#94a3b8' : '#64748b';
+        const gridColor = isDark ? '#334155' : '#e2e8f0';
+
+        const ctx = canvas.getContext('2d');
+        currentChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Incassi (Dare)',
+                        data: debitData,
+                        backgroundColor: '#10b981',
+                        borderRadius: 6
+                    },
+                    {
+                        label: 'Versamenti (Avere)',
+                        data: creditData,
+                        backgroundColor: '#0f2b5c',
+                        borderRadius: 6
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: { color: textColor, font: { family: 'Inter', weight: '500' } }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) label += ': ';
+                                if (context.parsed.y !== null) {
+                                    label += context.parsed.y.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: textColor, font: { family: 'Inter' } },
+                        grid: { color: gridColor }
+                    },
+                    y: {
+                        ticks: {
+                            color: textColor,
+                            font: { family: 'Inter' },
+                            callback: function(value) {
+                                return value.toLocaleString('it-IT') + ' €';
+                            }
+                        },
+                        grid: { color: gridColor }
+                    }
+                }
+            }
+        });
+    }
+
+    // Filter and Sort Table Items
+    function updateAnomaliesTableUI() {
+        const filterVal = document.getElementById('tableFilterSelect')?.value || 'all';
+        const sortVal = document.getElementById('tableSortSelect')?.value || 'date_asc';
+
+        let filtered = [...currentTableItems];
+        if (filterVal !== 'all') {
+            filtered = filtered.filter(item => item.type === filterVal);
+        }
+
+        filtered.sort((a, b) => {
+            if (sortVal === 'date_asc') return a.dateVal - b.dateVal;
+            if (sortVal === 'date_desc') return b.dateVal - a.dateVal;
+            if (sortVal === 'amount_desc') return b.amount - a.amount;
+            if (sortVal === 'amount_asc') return a.amount - b.amount;
+            return 0;
+        });
+
+        const tbody = document.getElementById('anomaliesTableBody');
+        const emptyState = document.getElementById('tableEmptyState');
+        const tableCard = document.getElementById('anomaliesTable');
+
+        if (!tbody) return;
+
+        if (filtered.length === 0) {
+            tbody.innerHTML = '';
+            tableCard.classList.add('d-none');
+            emptyState.classList.remove('d-none');
+            return;
+        }
+
+        tableCard.classList.remove('d-none');
+        emptyState.classList.add('d-none');
+
+        const fmtEur = (v) => v.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+
+        tbody.innerHTML = filtered.map(item => `
+            <tr>
+                <td><span class="badge ${item.badgeClass} rounded-pill px-2 py-1">${item.typeLabel}</span></td>
+                <td><span class="fw-medium">${item.dateStr || '-'}</span></td>
+                <td><code class="text-dark small fw-bold">${item.transactionId}</code></td>
+                <td class="text-end fw-bold ${item.type === 'anomaly' ? 'text-danger' : 'text-body'}">
+                    ${fmtEur(item.amount)}
+                    ${item.diff > 0 && item.type === 'anomaly' ? `<div class="text-danger small" style="font-size: 0.75rem;">Scoperto: ${fmtEur(item.diff)}</div>` : ''}
+                </td>
+                <td class="text-muted small">${item.details}</td>
+            </tr>
+        `).join('');
+    }
+
+    function renderAnomaliesTable(tableItems) {
+        currentTableItems = tableItems || [];
+        updateAnomaliesTableUI();
+    }
+
+    document.getElementById('tableFilterSelect')?.addEventListener('change', updateAnomaliesTableUI);
+    document.getElementById('tableSortSelect')?.addEventListener('change', updateAnomaliesTableUI);
 
     // --- Form Submission & Processing ---
     let currentWorker = null;
@@ -2135,7 +2460,7 @@
             currentWorker = new Worker(workerUrl);
 
             currentWorker.onmessage = function(e) {
-                const { type, percent, statusText, phase, message, reportBlob, reportFilename, fullLogText: workerLog, stats } = e.data;
+                const { type, percent, statusText, phase, message, reportBlob, reportFilename, fullLogText: workerLog, stats, dashboardData } = e.data;
 
                 if (type === 'progress') {
                     updateProgressUI(percent, statusText);
@@ -2146,6 +2471,11 @@
                     log.textContent = fullLogText;
 
                     renderKPIDashboard(stats);
+                    if (dashboardData) {
+                        renderMatchBadges(dashboardData.matchCounts);
+                        renderMonthlyChart(dashboardData.monthlyBalance);
+                        renderAnomaliesTable(dashboardData.tableItems);
+                    }
 
                     progress.classList.add('d-none');
                     btn.disabled = false;

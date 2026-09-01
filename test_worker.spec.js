@@ -36,6 +36,58 @@ test('Web Worker processes Excel reconciliation and updates progress UI', async 
         // Verify log contains success message
         const logText = await page.textContent('#logOutput');
         expect(logText).toContain('Report Excel generato con successo');
+
+        // Verify Phase 4 Dashboard UI elements (Badges, Chart, Table)
+        await expect(page.locator('#matchBadgesSummary')).toBeVisible();
+        await expect(page.locator('#chartCard')).toBeVisible();
+        await expect(page.locator('#monthlyChart')).toBeVisible();
+        await expect(page.locator('#anomaliesTableCard')).toBeVisible();
+    } finally {
+        if (fs.existsSync(testExcelPath)) {
+            fs.unlinkSync(testExcelPath);
+        }
+    }
+});
+
+test('Phase 4 Dashboard table filtering and sorting work', async ({ page }) => {
+    const filePath = path.resolve(__dirname, 'app/cashrec.html');
+    await page.goto(`file://${filePath}`);
+
+    const fileContentBase64 = await page.evaluate(() => {
+        const data = [
+            // Sample data that causes an anomaly, an unused debit, and an unreconciled credit
+            { "Data Reg.": "01/01/2026", "Dare": 10.0, "Avere": 0, "Data Val.": "01/01/2026" },
+            { "Data Reg.": "05/01/2026", "Dare": 0, "Avere": 500.0, "Data Val.": "05/01/2026" },
+            { "Data Reg.": "20/01/2026", "Dare": 250.0, "Avere": 0, "Data Val.": "20/01/2026" }
+        ];
+        const ws = XLSX.utils.json_to_sheet(data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+        return XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
+    });
+
+    const testExcelPath = path.resolve(__dirname, 'test_dashboard.xlsx');
+    fs.writeFileSync(testExcelPath, Buffer.from(fileContentBase64, 'base64'));
+
+    try {
+        const fileInput = await page.$('#fileInput');
+        await fileInput.setInputFiles(testExcelPath);
+
+        await page.click('#btnSubmit');
+        await expect(page.locator('#resultContainer')).not.toHaveClass(/d-none/, { timeout: 15000 });
+
+        // Table should have rows
+        const rowCount = await page.locator('#anomaliesTableBody tr').count();
+        expect(rowCount).toBeGreaterThan(0);
+
+        // Change filter to anomaly
+        await page.selectOption('#tableFilterSelect', 'anomaly');
+        const anomalyRows = await page.locator('#anomaliesTableBody tr').count();
+        expect(anomalyRows).toBeGreaterThanOrEqual(1);
+
+        // Change sort option to amount_desc
+        await page.selectOption('#tableSortSelect', 'amount_desc');
+        await expect(page.locator('#anomaliesTableBody')).toBeVisible();
     } finally {
         if (fs.existsSync(testExcelPath)) {
             fs.unlinkSync(testExcelPath);

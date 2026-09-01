@@ -1,0 +1,27 @@
+{
+  "name": "app",
+  "version": "1.0.0",
+  "description": "CashRec confronta gli **incassi di cassa** di un punto vendita con i **versamenti in banca**, li abbina tra loro e genera un report Excel che evidenzia le differenze da verificare. Funziona al 100% nel tuo browser, in modalità completamente offline e standalone.",
+  "main": "test_worker.spec.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alby69/riconcilia_casse.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/alby69/riconcilia_casse/issues"
+  },
+  "homepage": "https://github.com/alby69/riconcilia_casse#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}
