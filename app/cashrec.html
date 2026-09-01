@@ -243,6 +243,17 @@
                 </div>
             </form>
 
+            <!-- Error Panel -->
+            <div id="errorContainer" class="mt-4 d-none text-start">
+                <div class="alert alert-danger shadow-sm border-0 rounded-3 p-4">
+                    <h5 class="alert-heading text-danger fw-bold d-flex align-items-center mb-2">
+                        <i class="fas fa-exclamation-triangle me-2 fa-lg"></i>Si è verificato un errore
+                    </h5>
+                    <p id="errorPhase" class="fw-semibold mb-2 text-dark small"></p>
+                    <p id="errorMessage" class="mb-0 text-break" style="font-size: 0.95rem;"></p>
+                </div>
+            </div>
+
             <!-- Progress & Results -->
             <div id="progressContainer" class="mt-4 d-none text-center">
                 <div class="spinner-border text-primary mb-2" role="status"></div>
@@ -261,7 +272,10 @@
                         <i class="fas fa-plus me-2"></i>Nuovo File
                     </button>
                 </div>
-                <button class="btn btn-outline-secondary btn-sm mt-2" onclick="toggleLog()">Mostra/Nascondi Log Tecnico</button>
+                <div class="d-flex justify-content-center gap-2 mt-2">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="toggleLog()">Mostra/Nascondi Log Tecnico</button>
+                    <button class="btn btn-outline-secondary btn-sm" id="btnDownloadLog"><i class="fas fa-file-lines me-1"></i>Scarica Log (.txt)</button>
+                </div>
             </div>
 
             <div class="log-container shadow-inner" id="logOutput"></div>
@@ -510,7 +524,7 @@
     }
 
     // --- Read File with SheetJS ---
-    async function readExcelFile(file, columnMappingForm) {
+    async function readExcelFile(file, columnMappingForm, logMessages = []) {
         const buffer = await file.arrayBuffer();
         const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
         const firstSheetName = workbook.SheetNames[0];
@@ -522,38 +536,67 @@
             throw new Error("Il file Excel appare vuoto.");
         }
 
+        const MAX_ROWS = 50000;
+        if (rawRows.length > MAX_ROWS) {
+            throw new Error(`Il file contiene ${rawRows.length.toLocaleString('it-IT')} righe, superando il limite massimo consentito di ${MAX_ROWS.toLocaleString('it-IT')} righe. Ridurre la dimensione del file.`);
+        }
+
         // Clean headers
         const headerKeys = Object.keys(rawRows[0]);
         const mapping = Object.assign({}, CONFIG.common.column_mapping, columnMappingForm);
 
-        // Find actual columns in file
-        const colDateName = columnMappingForm.col_date || "Data";
-        const colDebitName = columnMappingForm.col_debit || "Dare";
-        const colCreditName = columnMappingForm.col_credit || "Avere";
-        const colStoreIdName = columnMappingForm.col_store_id || null;
-        const colValutaDateName = columnMappingForm.col_valuta_date || null;
-
-        const findCol = (name) => {
-            if (!name) return null;
-            return headerKeys.find(k => k.trim().toLowerCase() === name.trim().toLowerCase()) || name;
+        // Find actual columns in file with fallback to common header names
+        const findCol = (...candidates) => {
+            for (const name of candidates) {
+                if (!name || typeof name !== 'string' || !name.trim()) continue;
+                const match = headerKeys.find(k => k.trim().toLowerCase() === name.trim().toLowerCase());
+                if (match) return match;
+            }
+            return null;
         };
 
-        const actualColDate = findCol(colDateName);
-        const actualColDebit = findCol(colDebitName);
-        const actualColCredit = findCol(colCreditName);
-        const actualColStoreId = findCol(colStoreIdName);
-        const actualColValutaDate = findCol(colValutaDateName);
+        const colDateInput = columnMappingForm.col_date?.trim();
+        const colDebitInput = columnMappingForm.col_debit?.trim();
+        const colCreditInput = columnMappingForm.col_credit?.trim();
+        const colStoreIdInput = columnMappingForm.col_store_id?.trim();
+        const colValutaDateInput = columnMappingForm.col_valuta_date?.trim();
+
+        const actualColDate = findCol(colDateInput, "Data Reg.", "Data", "Date");
+        const actualColDebit = findCol(colDebitInput, "Dare", "Debit");
+        const actualColCredit = findCol(colCreditInput, "Avere", "Credit");
+        const actualColStoreId = findCol(colStoreIdInput, "Codice Negozio", "Store", "Store ID");
+        const actualColValutaDate = findCol(colValutaDateInput, "Data Val.", "Data Valuta", "Valuta");
+
+        // Explicit column validation
+        const missingCols = [];
+        if (!actualColDate) missingCols.push(`Data ('${colDateInput || 'Data Reg.'}')`);
+        if (!actualColDebit) missingCols.push(`Dare ('${colDebitInput || 'Dare'}')`);
+        if (!actualColCredit) missingCols.push(`Avere ('${colCreditInput || 'Avere'}')`);
+
+        if (missingCols.length > 0) {
+            throw new Error(`Colonne obbligatorie non trovate nel file Excel: ${missingCols.join(', ')}. Verifica i nomi delle colonne nelle Impostazioni Avanzate.`);
+        }
 
         const rows = [];
+        let skippedInvalidDate = 0;
+        let skippedEmptyAmounts = 0;
+
         for (let i = 0; i < rawRows.length; i++) {
             const raw = rawRows[i];
 
             const rawDate = raw[actualColDate] !== undefined ? raw[actualColDate] : raw["Date"];
             const parsedDate = parseItalianDate(rawDate);
-            if (!parsedDate) continue; // skip rows without valid date
+            if (!parsedDate) {
+                skippedInvalidDate++;
+                continue; // skip rows without valid date
+            }
 
             const debitVal = robustCurrencyParser(raw[actualColDebit] !== undefined ? raw[actualColDebit] : raw["Debit"]);
             const creditVal = robustCurrencyParser(raw[actualColCredit] !== undefined ? raw[actualColCredit] : raw["Credit"]);
+
+            if (debitVal === 0 && creditVal === 0) {
+                skippedEmptyAmounts++;
+            }
 
             const debitCents = Math.round(debitVal * 100);
             const creditCents = Math.round(creditVal * 100);
@@ -578,6 +621,17 @@
             }
 
             rows.push(rowObj);
+        }
+
+        if (logMessages) {
+            logMessages.push(`[Parsing] Letti ${rawRows.length} record dal file Excel.`);
+            if (skippedInvalidDate > 0) {
+                logMessages.push(`[Parsing] Avviso: ${skippedInvalidDate} righe scartate perché senza data valida.`);
+            }
+            if (skippedEmptyAmounts > 0) {
+                logMessages.push(`[Parsing] Info: ${skippedEmptyAmounts} righe con importi Dare/Avere pari a zero.`);
+            }
+            logMessages.push(`[Parsing] ${rows.length} righe valide pronte per la riconciliazione.`);
         }
 
         if (rows.length === 0) {
@@ -1632,12 +1686,31 @@
         }
     }
 
+    let fullLogText = "";
+
+    function showError(phase, message) {
+        const errorContainer = document.getElementById('errorContainer');
+        const errorPhase = document.getElementById('errorPhase');
+        const errorMessage = document.getElementById('errorMessage');
+
+        errorPhase.textContent = `Fase: ${phase}`;
+        errorMessage.textContent = message;
+        errorContainer.classList.remove('d-none');
+    }
+
+    function hideError() {
+        const errorContainer = document.getElementById('errorContainer');
+        errorContainer.classList.add('d-none');
+    }
+
     // --- Form Submission & Processing ---
     document.getElementById('uploadForm').addEventListener('submit', async function(e) {
         e.preventDefault();
 
+        hideError();
+
         if (!fileInput.files.length) {
-            alert("Per favore, seleziona un file prima di procedere.");
+            showError("Selezione File", "Per favore, seleziona un file Excel prima di procedere.");
             return;
         }
 
@@ -1645,14 +1718,24 @@
         const progress = document.getElementById('progressContainer');
         const result = document.getElementById('resultContainer');
         const log = document.getElementById('logOutput');
+        const statusText = document.getElementById('progressStatusText');
 
         btn.disabled = true;
         progress.classList.remove('d-none');
         result.classList.add('d-none');
         log.style.display = 'none';
         log.textContent = '';
+        fullLogText = "";
 
+        const logMessages = [`=== CashRec Log Elaborazione ===`, `Data: ${new Date().toLocaleString('it-IT')}`, `File: ${fileInput.files[0].name}\n`];
+
+        let rows = [];
+        let engine = null;
+        let stats = null;
+
+        // FASE 1: Lettura e Parsing File
         try {
+            statusText.textContent = "Lettura e validazione del file Excel...";
             const formData = new FormData(this);
             const columnMappingForm = {
                 col_date: formData.get("col_date"),
@@ -1662,8 +1745,19 @@
                 col_valuta_date: formData.get("col_valuta_date")
             };
 
-            const rows = await readExcelFile(fileInput.files[0], columnMappingForm);
+            rows = await readExcelFile(fileInput.files[0], columnMappingForm, logMessages);
+        } catch (err) {
+            progress.classList.add('d-none');
+            btn.disabled = false;
+            showError("Lettura e Parsing File", err.message);
+            console.error(err);
+            return;
+        }
 
+        // FASE 2: Esecuzione Motore di Riconciliazione
+        try {
+            statusText.textContent = "Esecuzione dell'algoritmo di riconciliazione...";
+            const formData = new FormData(this);
             const engineParams = {
                 tolerance: parseFloat(formData.get("tolerance")) || CONFIG.common.tolerance,
                 days_window: parseInt(formData.get("days_window")) || CONFIG.common.days_window,
@@ -1675,27 +1769,42 @@
                 algorithm: formData.get("algorithm") || CONFIG.common.algorithm
             };
 
-            const engine = new JSReconciliationEngine(engineParams);
-            const stats = engine.run(rows);
+            logMessages.push(`[Algoritmo] Parametri: ${JSON.stringify(engineParams, null, 2)}`);
+            engine = new JSReconciliationEngine(engineParams);
+            stats = engine.run(rows);
+            logMessages.push(`[Algoritmo] Elaborazione completata.`);
+            logMessages.push(`[Statistiche]\n${JSON.stringify(stats, null, 2)}`);
+        } catch (err) {
+            progress.classList.add('d-none');
+            btn.disabled = false;
+            showError("Motore di Riconciliazione", err.message);
+            console.error(err);
+            return;
+        }
 
+        // FASE 3: Generazione Report Excel
+        try {
+            statusText.textContent = "Generazione del report Excel...";
             const reporter = new JSExcelReporter(engine, rows);
             generatedReportBlob = await reporter.generateReport();
 
             const origName = fileInput.files[0].name.replace(/\.[^/.]+$/, "");
             generatedReportFilename = `${origName}_result.xlsx`;
-
-            log.textContent = JSON.stringify(stats, null, 4);
-
-            progress.classList.add('d-none');
-            btn.disabled = false;
-            result.classList.remove('d-none');
-
+            logMessages.push(`[Report] Report Excel generato con successo (${generatedReportFilename}).`);
         } catch (err) {
             progress.classList.add('d-none');
             btn.disabled = false;
-            alert("Errore durante l'elaborazione del file: " + err.message);
+            showError("Generazione Report Excel", err.message);
             console.error(err);
+            return;
         }
+
+        fullLogText = logMessages.join('\n');
+        log.textContent = fullLogText;
+
+        progress.classList.add('d-none');
+        btn.disabled = false;
+        result.classList.remove('d-none');
     });
 
     // --- Download Handler ---
@@ -1714,12 +1823,30 @@
         URL.revokeObjectURL(url);
     });
 
+    // --- Log Download Handler ---
+    document.getElementById('btnDownloadLog')?.addEventListener('click', function() {
+        if (!fullLogText) {
+            alert("Nessun log disponibile per il download.");
+            return;
+        }
+        const blob = new Blob([fullLogText], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `cashrec_log_${new Date().toISOString().slice(0, 10)}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    });
+
     // --- Reset Form Handler ---
     document.getElementById('btnNewFile')?.addEventListener('click', function() {
         fileInput.value = '';
         fileNameDisplay.textContent = '';
         dropZone.style.borderColor = '';
 
+        hideError();
         document.getElementById('resultContainer').classList.add('d-none');
         document.getElementById('logOutput').style.display = 'none';
         document.getElementById('logOutput').textContent = '';
