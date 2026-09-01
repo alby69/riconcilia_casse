@@ -2,10 +2,7 @@ const { test, expect } = require('@playwright/test');
 const path = require('path');
 const fs = require('fs');
 
-test('Web Worker processes Excel reconciliation and updates progress UI', async ({ page }) => {
-    page.on('console', msg => console.log(`BROWSER CONSOLE (${msg.type()}): ${msg.text()}`));
-    page.on('pageerror', err => console.log(`PAGE ERROR: ${err.message}`));
-
+test('Standalone App: Web Worker processes Excel reconciliation', async ({ page }) => {
     const filePath = path.resolve(__dirname, 'app/cashrec.html');
     await page.goto(`file://${filePath}`);
 
@@ -30,14 +27,11 @@ test('Web Worker processes Excel reconciliation and updates progress UI', async 
 
         await page.click('#btnSubmit');
 
-        // Verify result container appears upon worker completion
         await expect(page.locator('#resultContainer')).not.toHaveClass(/d-none/, { timeout: 15000 });
 
-        // Verify log contains success message
         const logText = await page.textContent('#logOutput');
         expect(logText).toContain('Report Excel generato con successo');
 
-        // Verify Phase 4 Dashboard UI elements (Badges, Chart, Table)
         await expect(page.locator('#matchBadgesSummary')).toBeVisible();
         await expect(page.locator('#chartCard')).toBeVisible();
         await expect(page.locator('#monthlyChart')).toBeVisible();
@@ -81,7 +75,6 @@ test('Theme toggle cycles through Light, Dark, High-Contrast and i18n switches l
     const filePath = path.resolve(__dirname, 'app/cashrec.html');
     await page.goto(`file://${filePath}`);
 
-    // Cycle themes
     await page.click('#themeToggle');
     let theme = await page.getAttribute('body', 'data-theme');
     expect(theme).toBe('dark');
@@ -94,7 +87,6 @@ test('Theme toggle cycles through Light, Dark, High-Contrast and i18n switches l
     theme = await page.getAttribute('body', 'data-theme');
     expect(theme).toBe('light');
 
-    // Switch i18n language to English
     await page.selectOption('#langSelect', 'en');
     const processBtnText = await page.textContent('[data-i18n="btn_process"]');
     expect(processBtnText).toContain('Process File');
@@ -104,11 +96,9 @@ test('IndexedDB history records run and opens history modal (Phase 7)', async ({
     const filePath = path.resolve(__dirname, 'app/cashrec.html');
     await page.goto(`file://${filePath}`);
 
-    // Open History Modal
     await page.click('#btnHistory');
     await expect(page.locator('#historyModal')).not.toHaveClass(/d-none/);
 
-    // Close History Modal
     await page.click('#historyModalClose');
     await expect(page.locator('#historyModal')).toHaveClass(/d-none/);
 });
@@ -119,7 +109,6 @@ test('Phase 4 Dashboard table filtering and sorting work', async ({ page }) => {
 
     const fileContentBase64 = await page.evaluate(() => {
         const data = [
-            // Sample data that causes an anomaly, an unused debit, and an unreconciled credit
             { "Data Reg.": "01/01/2026", "Dare": 10.0, "Avere": 0, "Data Val.": "01/01/2026" },
             { "Data Reg.": "05/01/2026", "Dare": 0, "Avere": 500.0, "Data Val.": "05/01/2026" },
             { "Data Reg.": "20/01/2026", "Dare": 250.0, "Avere": 0, "Data Val.": "20/01/2026" }
@@ -140,16 +129,13 @@ test('Phase 4 Dashboard table filtering and sorting work', async ({ page }) => {
         await page.click('#btnSubmit');
         await expect(page.locator('#resultContainer')).not.toHaveClass(/d-none/, { timeout: 15000 });
 
-        // Table should have rows
         const rowCount = await page.locator('#anomaliesTableBody tr').count();
         expect(rowCount).toBeGreaterThan(0);
 
-        // Change filter to anomaly
         await page.selectOption('#tableFilterSelect', 'anomaly');
         const anomalyRows = await page.locator('#anomaliesTableBody tr').count();
         expect(anomalyRows).toBeGreaterThanOrEqual(1);
 
-        // Change sort option to amount_desc
         await page.selectOption('#tableSortSelect', 'amount_desc');
         await expect(page.locator('#anomaliesTableBody')).toBeVisible();
     } finally {
@@ -184,10 +170,8 @@ test('Web Worker cancellation via Annulla button works', async ({ page }) => {
 
         await page.click('#btnSubmit');
 
-        // Cancel process
         await page.click('#btnCancel');
 
-        // Error container should show cancellation
         await expect(page.locator('#errorContainer')).not.toHaveClass(/d-none/);
         const errorText = await page.textContent('#errorMessage');
         expect(errorText).toContain("Elaborazione annullata dall'utente");

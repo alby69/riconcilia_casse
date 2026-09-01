@@ -1,67 +1,54 @@
 # CashRec — Riconciliazione Casse
 
-CashRec confronta gli **incassi di cassa** di un punto vendita con i **versamenti in banca**, li abbina tra loro e genera un report Excel che evidenzia le differenze da verificare. Funziona al 100% nel tuo browser, in modalità completamente offline e standalone.
+CashRec confronta gli **incassi di cassa** di un punto vendita con i **versamenti in banca**, li abbina tra loro e genera un report Excel che evidenzia le differenze da verificare.
+
+Il progetto è in **Dual Mode**:
+1. **Modalità Standalone (`app/cashrec.html`)**: un singolo file HTML autocontenuto che gira 100% nel browser, senza server né installazione.
+2. **Modalità Web App (`web/`)**: versione deployabile su **Render.com** tramite Docker containerizzato Nginx.
+
+---
 
 ## 📖 Documentazione e Roadmap
 
 - **[Manuale Utente](./docs/MANUALE_UTENTE.md)** — guida semplice per chi usa l'applicazione tutti i giorni (in italiano, integrata anche come help nell'app standalone).
-- **[ROADMAP e Storico Versioni](./ROADMAP.md)** — per lo storico delle versioni e la roadmap di sviluppo, vedi [ROADMAP.md](./ROADMAP.md).
+- **[Specifiche Tecniche di Refactoring](./docs/SPECIFICHE.md)** — specifiche architetturali Dual Mode (Standalone + Web App).
+- **[Guida al Deploy su Render](./docs/DEPLOY.md)** — istruzioni per pubblicare la Web App su Render via Blueprint o Docker.
+- **[Guida allo Sviluppo](./docs/DEVELOPMENT.md)** — informazioni sull'ambiente dev, modularizzazione e test E2E Playwright.
+- **[ROADMAP e Storico Versioni](./ROADMAP.md)** — per lo storico delle versioni e la roadmap di sviluppo.
+
+---
 
 ## ✨ Funzionalità principali
 
-- **App standalone (`app/cashrec.html`)**: un unico file HTML/JS che gira interamente nel browser, senza server né installazione. I dati non lasciano mai il computer.
+- **Dual Mode**:
+  - **Standalone**: `app/cashrec.html` funziona con un semplice doppio click (`file://`), 100% offline, privacy-first.
+  - **Web App**: `web/index.html` servita via Docker/Nginx su Render con moduli JS/CSS separati.
 - **Tre algoritmi di riconciliazione**: `progressive_balance` (profilo operatore, default), `subset_sum`, `greedy_amount_first`.
 - **Profilo Operatore Punto Vendita**: default preconfigurati per la cassa quotidiana (versamenti abbinati a incassi di 1–5 giorni prima, direzione `past_only`, tolleranza 50 €).
 - **Gestione profili**: salva, carica ed elimina profili di configurazione salvati in `localStorage`.
-- **Recupero residui**: recupera automaticamente le differenze dai blocchi forzati.
-- **Multi-negozio**: colonna opzionale *Codice Negozio* per abbinamenti prioritari all'interno dello stesso negozio.
-- **Data Valuta**: gestisce i passaggi di fine anno (versamenti di gennaio che si riferiscono a dicembre).
-- **Report Excel dettagliato**: fogli Summary, Matches, Anomalie, Original, Quadratura Mensile, Unused DEBIT e Unreconciled CREDIT, con importi in euro (`#,##0.00 €`), colori per stato e totali mensili.
+- **Multi-formato & Multi-file**: supporto per file `.xlsx`, `.xls` e `.csv` con rilevamento automatico del separatore.
+- **IndexedDB History**: salva le ultime 10 elaborazioni localmente nel browser (`CashRecDB`).
+- **PWA & Offline**: Web App Manifest e Service Worker (`sw.js`) per installabilità e caching offline.
+- **Report Excel & PDF**: generazione client-side con ExcelJS e html2pdf.js.
+- **Accessibilità & Temi**: temi Chiaro, Scuro e Alto Contrasto, selettore lingua IT/EN e visualizzazione responsive.
+
+---
 
 ## 🚀 Utilizzo
 
+### Modalità Standalone
 Apri `app/cashrec.html` con un doppio clic, oppure trascinalo nel browser. Nessuna installazione, nessun server, i dati non lasciano mai il tuo computer.
 
-## 📚 Come funzionano gli algoritmi
-
-### Concetti base
-
-- **Dare / DEBIT** — denaro entrato in cassa (scontrini, fatture, ricevute).
-- **Avere / CREDIT** — denaro versato in banca.
-- **Abbinamento (match)** — l'unione di uno o più incassi con un versamento che li copre.
-- **Tolleranza** — differenza massima (in €) accettata come "uguale".
-
-### Progressive Balance (profilo operatore, default)
-
-Simula il comportamento umano: procede cronologicamente e abbina ogni versamento con gli incassi presenti **negli N giorni prima** (di default 5).
-
+### Modalità Web App
+Avvia il container Docker locale:
+```bash
+docker compose -f docker/docker-compose.yml up
 ```
-1. Data_Analisi = Data_Valuta (se presente) altrimenti Data Registrazione
-2. Ordinamento per Data_Analisi crescente
-3. Per ogni versamento (CREDIT):
-   - cerca gli incassi (DEBIT) non usati dentro la finestra di giorni nel passato
-   - totale DEBIT >= CREDIT  → match (con uso parziale se serve)
-   - totale DEBIT < CREDIT entro la tolleranza → match tollerato
-   - totale DEBIT < CREDIT oltre la tolleranza → ANOMALIA (il residuo NON passa al versamento successivo)
-4. I movimenti usati vengono marcati
-```
+L'applicazione sarà accessibile su `http://localhost:8080`.
 
-Esempio: versamento di **150 €** del 10/01 con `days_window=5` e `past_only`:
-- cerca incassi dal 05/01 al 10/01;
-- trova 100 € + 50 € = 150 € → **MATCH** ✅;
-- trova solo 80 € → **ANOMALIA** di 70 € (residuo non trasferito).
-
-### Subset Sum
-
-Cerca abbinamenti per **combinazioni** di importi, in 3 passate: aggregazione di molti incassi su un versamento, scomposizione su più versamenti, recupero residui con finestra estesa.
-
-### Greedy Amount First
-
-Ordina i movimenti per importo decrescente e abbina prima gli importi più grandi.
+---
 
 ## 🔧 Parametri di configurazione
-
-### Mappatura colonne (file in stile SAN SEVERO)
 
 | Campo | Colonna del file |
 |---|---|
@@ -71,32 +58,44 @@ Ordina i movimenti per importo decrescente e abbina prima gli importi più grand
 | Data Valuta | `Data Val.` |
 | Codice Negozio | (opzionale) |
 
-### Parametri comuni
-
-| Parametro | Default (Operatore) | Descrizione |
-|---|---|---|
-| `algorithm` | `progressive_balance` | Strategia di riconciliazione |
-| `tolerance` | `50.0 €` | Differenza massima accettata |
-| `days_window` | `5 giorni` | Finestra temporale di ricerca |
-| `search_direction` | `past_only` | Direzione di ricerca (`past_only`, `future_only`, `both`) |
-| `max_combinations` | `10` | Massimo numero di elementi combinati (subset_sum) |
-| `residual_threshold` | `50.0 €` | Soglia per il recupero dei residui |
-| `residual_days_window` | `5 giorni` | Finestra estesa per i residui |
-| `handover_days` | `5` | **Giorni Finestra Lasca (handover)**: giorni del mese successivo riportati al mese precedente nella Quadratura Mensile (es. versamenti di gennaio da attribuire a dicembre) |
+---
 
 ## 📂 Struttura del progetto
 
 ```
-riconcilia_casse/
+cashrec/
 ├── README.md
 ├── ROADMAP.md
-├── .gitignore
+├── package.json
+├── render.yaml
+├── docker/
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   └── nginx.conf
 ├── app/
-│   └── cashrec.html
+│   ├── cashrec.html
+│   ├── manifest.json
+│   └── sw.js
+├── web/
+│   ├── index.html
+│   └── static/
+│       ├── css/
+│       │   └── cashrec.css
+│       └── js/
+│           ├── config.js
+│           ├── engine.js
+│           ├── parser.js
+│           ├── reporter.js
+│           ├── worker.js
+│           ├── history.js
+│           ├── pwa.js
+│           ├── ui.js
+│           └── main.js
 ├── docs/
-│   └── MANUALE_UTENTE.md
-├── assets/
-│   └── cashrec-banner-it.png
+│   ├── MANUALE_UTENTE.md
+│   ├── SPECIFICHE.md
+│   ├── DEPLOY.md
+│   └── DEVELOPMENT.md
 └── tools/
     └── generate_help.py
 ```
