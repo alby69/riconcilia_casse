@@ -263,7 +263,7 @@ L'attuale UI (Bootstrap 5 + palette blu/teal, dark mode già presente) è pulita
 | Fase 0 — Refactoring standalone-only | ✅ Completato | Rimosso backend Flask/Docker/Python, `app/cashrec.html` 100% standalone |
 | Fase 1 — Robustezza motore | ✅ Completato | Validazione colonne obbligatorie, limite 50k righe, pannello errori dedicato per fase e download log .txt |
 | Fase 2 — Web Worker | ✅ Completato | Parsing Excel, motore di riconciliazione e generazione report spostati in un Web Worker inline, con progress bar % reale, stato a step e pulsante Annulla |
-| Fase 3 — Refresh visivo | ⬜ Da fare | |
+| Fase 3 — Refresh visivo | ✅ Completato | Google Fonts Outfit & Inter, design system CSS con palette navy/teal, anteprima file con badge e KPI Dashboard in-app |
 | Fase 4 — Dashboard risultati | ⬜ Da fare | |
 | Fase 5 — Micro-interazioni | ⬜ Da fare | |
 | Fase 6 — Test automatici | ⬜ Da fare | |
