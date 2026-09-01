@@ -1580,8 +1580,13 @@
         }
 
         createMonthlyBalanceSheet(workbook) {
-            const ws = workbook.addWorksheet("Monthly Balance");
-            const headers = ["Mese", "Incassi Totali", "Incassi Riconc.", "Versamenti Totali", "Versamenti Riconc.", "Differenza Mensile", "Cumulato", "Vers. Non Agganciati"];
+            // Riepilogo "Quadratura Mensile" semplice per operatore non tecnico.
+            // Incassi realmente incassati (Dare) e versamenti realmente versati
+            // (Avere, per competenza economica con la finestra "lasca"), la
+            // differenza (Δ) e il cumulato progressivo. Δ entro la tolleranza =
+            // mese quadrato: verde OK, rosso Controllare.
+            const ws = workbook.addWorksheet("Quadratura Mensile");
+            const headers = ["Mese", "Dare (Incassi)", "Avere (Versamenti)", "Δ Mese", "Cumulato", "Stato"];
             const headerRow = ws.addRow(headers);
             headerRow.font = { bold: true };
             headerRow.eachCell(cell => {
@@ -1589,73 +1594,44 @@
                 cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
             });
 
-            // Economic monthly totals (loose window): Versamenti (Avere) attributed
-            // by economic/valuta date with the `handover_days` carry-back, so the
-            // month squares with the deposits of the first days of the following
-            // month that relate to the previous month.
             const monthlyEco = this.engine.computeMonthlyTotals();
-            const displayKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-            const displayKeyFromEco = k => {
-                const [y, m] = k.split("-").map(Number);
-                return `${y}-${String(m + 1).padStart(2, '0')}`;
-            };
-
-            const months = {};
-            for (const k in monthlyEco) {
-                const dk = displayKeyFromEco(k);
-                if (!months[dk]) months[dk] = { totD: 0, usedD: 0, totC: 0, usedC: 0 };
-                months[dk].totD = monthlyEco[k].Debit;
-                months[dk].totC = monthlyEco[k].Credit;
-            }
-            this.engine.debit_df.forEach(r => {
-                const dk = displayKey(r.Date);
-                if (!months[dk]) months[dk] = { totD: 0, usedD: 0, totC: 0, usedC: 0 };
-                if (r.used) months[dk].usedD += r.Debit;
-            });
-            this.engine.credit_df.forEach(r => {
-                const dk = displayKey(r.Date);
-                if (!months[dk]) months[dk] = { totD: 0, usedD: 0, totC: 0, usedC: 0 };
-                if (r.used) months[dk].usedC += r.Credit;
-            });
-
+            const tolerance = this.engine.tolerance / 100;
+            const rows = [];
             let cumulato = 0;
-            const sortedKeys = Object.keys(months).sort();
-            sortedKeys.forEach(mKey => {
-                const m = months[mKey];
-                const diff = m.totD - m.totC;
-                cumulato += diff;
-                const nonAgg = m.totC - m.usedC;
-                const row = ws.addRow([
-                    mKey,
-                    m.totD / 100,
-                    m.usedD / 100,
-                    m.totC / 100,
-                    m.usedC / 100,
-                    diff / 100,
-                    cumulato / 100,
-                    nonAgg / 100
-                ]);
-                // Color the "Vers. Non Agganciati" cell red if > 0
-                if (nonAgg > 0) {
-                    row.getCell(8).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFCCCC' } };
+            Object.keys(monthlyEco).sort().forEach(k => {
+                const m = monthlyEco[k];
+                const [y, mm] = k.split("-").map(Number);
+                const dare = m.Debit / 100;
+                const avere = m.Credit / 100;
+                const delta = dare - avere;
+                cumulato += delta;
+                const stato = Math.abs(delta) <= tolerance ? "OK" : "Controllare";
+                rows.push([`${y}-${String(mm + 1).padStart(2, '0')}`, dare, avere, delta, cumulato, stato]);
+            });
+
+            rows.forEach(r => {
+                const rowCell = ws.addRow(r);
+                const dareCell = rowCell.getCell(2);
+                const avereCell = rowCell.getCell(3);
+                const deltaCell = rowCell.getCell(4);
+                const cumCell = rowCell.getCell(5);
+                const statoCell = rowCell.getCell(6);
+                [dareCell, avereCell, deltaCell, cumCell].forEach(c => c.numFmt = '#,##0.00 €');
+                // Stato: green for OK, red for Controllare
+                if (r[3] !== undefined && Math.abs(r[3]) <= tolerance) {
+                    statoCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
+                } else {
+                    statoCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } };
                 }
-                // Color the Cumulato cell
-                const cumCell = row.getCell(7);
+                // Cumulato: green if >= 0, red if < 0
                 cumCell.fill = {
                     type: 'pattern', pattern: 'solid',
                     fgColor: { argb: cumulato >= 0 ? 'FFC6EFCE' : 'FFFFC7CE' }
                 };
             });
 
-            // Format currency columns (B-H)
-            for (let r = 2; r <= sortedKeys.length + 1; r++) {
-                for (let c = 2; c <= 8; c++) {
-                    ws.getCell(r, c).numFmt = '#,##0.00 €';
-                }
-            }
-            // Column widths
             ws.getColumn(1).width = 12;
-            for (let c = 2; c <= 8; c++) ws.getColumn(c).width = 20;
+            for (let c = 2; c <= 6; c++) ws.getColumn(c).width = 20;
         }
     }
 
@@ -1919,15 +1895,16 @@
 <li><strong>Grigio</strong> = riga di riepilogo del mese.</li>
 </ul>
 <p>In fondo a ogni mese c'è una riga <strong>TOTALE MESE</strong>: la somma degli incassi, dei versamenti e la differenza (Dare − Avere) di quel mese. Usa una finestra economica "lasca": i versamenti dei primi giorni del mese successivo relativi al mese precedente (data valuta/aggancio) vengono riportati al mese di competenza, così il mese si quadra pochi giorni dopo il suo inizio.</p>
-<h3>Monthly Balance (Quadratura mensile)</h3>
-<p>Schema sintetico per verificare mese per mese se incassi e versamenti sono in ordine:</p>
+<h3>Quadratura Mensile</h3>
+<p>Schema sintetico per verificare mese per mese se gli incassi quadrano con i versamenti:</p>
 <ul>
-<li><strong>Incassi Totali / Riconc.</strong>: totale incassi del mese e quanti sono stati abbinati a versamenti.</li>
-<li><strong>Versamenti Totali / Riconc.</strong>: totale versamenti del mese e quanti sono stati abbinati a incassi.</li>
-<li><strong>Differenza Mensile</strong>: Incassi Totali − Versamenti Totali (versamenti attribuiti per competenza economica con la finestra lasca). Se positivo, la cassa ha incassato più di quanto versato.</li>
-<li><strong>Cumulato</strong>: somma progressiva delle differenze dall'inizio dell'anno. Verde = positivo, rosso = negativo.</li>
-<li><strong>Vers. Non Agganciati</strong>: versamenti che non hanno trovato un incasso. Se > 0, vanno investigate le cause (sfondo rosso).</li>
+<li><strong>Dare (Incassi)</strong>: totale incassato nel mese.</li>
+<li><strong>Avere (Versamenti)</strong>: totale versato nel mese (attribuito per competenza economica con la finestra "lasca").</li>
+<li><strong>Δ Mese</strong>: Dare − Avere. Se è dentro la tolleranza il mese è <strong>quadrato</strong>.</li>
+<li><strong>Cumulato</strong>: somma progressiva delle differenze dall'inizio dell'anno.</li>
+<li><strong>Stato</strong>: <strong>OK</strong> (verde) se il mese è quadrato, <strong>Controllare</strong> (rosso) se c'è qualcosa da verificare.</li>
 </ul>
+<p>Con la finestra "lasca" i versamenti dei primi giorni del mese successivo riferiti al mese precedente vengono riportati al mese di competenza, così il mese si quadra pochi giorni dopo il suo inizio.</p>
 <h3>Unused DEBIT / Unreconciled CREDIT</h3>
 <ul>
 <li><strong>Unused DEBIT</strong>: gli incassi che non hanno trovato un versamento;</li>

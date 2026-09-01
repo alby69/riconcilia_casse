@@ -1010,56 +1010,61 @@ class ExcelReporter:
         }
 
     def _create_monthly_balance_sheet(self, writer):
-        df = self.engine._calculate_monthly_balance()
-        if df.empty:
+        """Riepilogo 'Quadratura Mensile' semplice per operatore non tecnico.
+
+        Mostra mese per mese gli incassi realmente incassati (Dare) e i versamenti
+        realmente versati (Avere, attribuiti per competenza economica con la
+        finestra 'lasca'), la differenza (Δ) e il cumulato progressivo. Una riga
+        con Δ entro la tolleranza è quadrata: l'operatore vede subito con il
+        colore verde quali mesi sono a posto e con il rosso quali controllare.
+        """
+        monthly = self.engine._compute_monthly_totals()
+        if not monthly:
             return
 
-        for c in df.columns:
-            if c != "Month":
-                df[c] = df[c] / 100.0
+        tolerance = self.engine.tolerance / 100.0
+        rows = []
+        cumulato = 0.0
+        for month in sorted(monthly):
+            m = monthly[month]
+            dare = m["Debit"] / 100.0
+            avere = m["Credit"] / 100.0
+            delta = dare - avere
+            cumulato += delta
+            stato = "OK" if abs(delta) <= tolerance else "Controllare"
+            rows.append((str(month), dare, avere, delta, cumulato, stato))
 
-        df.to_excel(writer, sheet_name="Monthly Balance", index=False)
-        ws = writer.sheets["Monthly Balance"]
+        df = pd.DataFrame(
+            rows, columns=["Mese", "Dare (Incassi)", "Avere (Versamenti)", "Δ Mese", "Cumulato", "Stato"]
+        )
+        df.to_excel(writer, sheet_name="Quadratura Mensile", index=False)
+        ws = writer.sheets["Quadratura Mensile"]
 
-        # Rename headers to Italian for operator clarity
         header_font = Font(bold=True, color="FFFFFF")
         header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
         header_align = Alignment(horizontal="center")
-        italian_headers = {
-            "Month": "Mese",
-            "Total Debit": "Incassi Totali",
-            "Used Debit": "Incassi Riconc.",
-            "Total Credit": "Versamenti Totali",
-            "Used Credit": "Versamenti Riconc.",
-            "Differenza Mensile": "Differenza Mensile",
-            "Cumulato": "Cumulato",
-            "Versamenti Non Agganciati": "Vers. Non Agganciati",
-        }
-        for col_idx, cell in enumerate(ws[1], start=1):
-            header = cell.value
-            if header in italian_headers:
-                cell.value = italian_headers[header]
+        for cell in ws[1]:
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = header_align
 
-        # Apply currency style to amount columns (B-H)
-        for row in ws.iter_rows(min_row=2, max_row=len(df) + 1, min_col=2, max_col=8):
-            for cell in row:
+        # Currency style to Dare/Avere/Δ/Cumulato (B-E)
+        for excel_row in ws.iter_rows(min_row=2, max_row=len(rows) + 1, min_col=2, max_col=5):
+            for cell in excel_row:
                 cell.style = self.currency_style
 
-        # Conditional formatting: red background for "Vers. Non Agganciati" > 0
-        red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
-        non_agg_range = f"H2:H{len(df) + 1}"
-        ws.conditional_formatting.add(
-            non_agg_range,
-            CellIsRule(operator="greaterThan", formula=["0"], fill=red_fill),
-        )
-
-        # Cumulato: conditional green if >= 0, red if < 0
+        # Stato: green for OK, red for Controllare
         green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
         red_fill_light = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-        cumulato_range = f"G2:G{len(df) + 1}"
+        for idx, (_, _, _, delta, _, _) in enumerate(rows, start=2):
+            stato_cell = ws.cell(row=idx, column=6)
+            if abs(delta) <= tolerance:
+                stato_cell.fill = green_fill
+            else:
+                stato_cell.fill = red_fill_light
+
+        # Cumulato: conditional green if >= 0, red if < 0
+        cumulato_range = f"E2:E{len(rows) + 1}"
         ws.conditional_formatting.add(
             cumulato_range,
             CellIsRule(operator="greaterThanOrEqual", formula=["0"], fill=green_fill),
@@ -1071,5 +1076,5 @@ class ExcelReporter:
 
         # Set column widths
         ws.column_dimensions["A"].width = 12
-        for col_letter in ["B", "C", "D", "E", "F", "G", "H"]:
+        for col_letter in ["B", "C", "D", "E", "F"]:
             ws.column_dimensions[col_letter].width = 20
