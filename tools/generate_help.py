@@ -3,7 +3,7 @@
 
 Legge docs/MANUALE_UTENTE.md, lo converte in HTML e sostituisce il blocco
 compreso tra i marcatori HELP_MANUAL_START / HELP_MANUAL_END in
-app/cashrec.html e templates/index.html.
+app/cashrec.html.
 
 In questo modo il file markdown resta l'unica fonte del manuale: dopo ogni
 modifica basta rieseguire:  python3 tools/generate_help.py
@@ -18,7 +18,7 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 MANUAL = ROOT / "docs" / "MANUALE_UTENTE.md"
-TARGETS = [ROOT / "app" / "cashrec.html", ROOT / "templates" / "index.html"]
+TARGETS = [ROOT / "app" / "cashrec.html"]
 
 START = "<!-- HELP_MANUAL_START -->"
 END = "<!-- HELP_MANUAL_END -->"

@@ -1,27 +1,8 @@
-# Input and Output
-input/*
-!input/.gitkeep
-output/*
-!output/.gitkeep
-log/*
-!log/.gitkeep
-
-# Environment variables & secrets
-.env
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.pytest_cache/
-
-# Virtual Environment
-.venv/
-/venv/
-/env/
-
 # OS / IDE
 .DS_Store
 .idea/
 .vscode/
+
+# Node / Build artifacts
+node_modules/
+dist/

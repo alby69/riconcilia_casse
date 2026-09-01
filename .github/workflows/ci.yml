@@ -1,4 +1,4 @@
-name: CI Build & Test
+name: CI Static Check
 
 on:
   push:
@@ -7,24 +7,17 @@ on:
     branches: [ "main", "master" ]
 
 jobs:
-  test:
+  validate:
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
       with:
-        python-version: '3.12'
+        node-version: '20'
 
-    - name: Install dependencies
+    - name: Validate HTML
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest
-
-    - name: Run unit tests
-      run: |
-        chmod +x ./run_tests.sh
-        ./run_tests.sh
+        npx htmlhint app/cashrec.html
