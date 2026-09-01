@@ -256,8 +256,13 @@
 
             <!-- Progress & Results -->
             <div id="progressContainer" class="mt-4 d-none text-center">
-                <div class="spinner-border text-primary mb-2" role="status"></div>
-                <p class="text-muted blink" id="progressStatusText">Elaborazione in corso nel browser...</p>
+                <div class="progress mb-3" style="height: 25px; border-radius: 12px; overflow: hidden; background-color: var(--border-color);">
+                    <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated bg-primary fw-bold" role="progressbar" style="width: 0%; font-size: 0.9rem;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                </div>
+                <p class="text-muted blink fw-semibold mb-3" id="progressStatusText">Elaborazione in corso nel browser...</p>
+                <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-4 fw-semibold" id="btnCancel">
+                    <i class="fas fa-stop-circle me-1"></i>Annulla Elaborazione
+                </button>
             </div>
 
             <div id="resultContainer" class="mt-4 d-none text-center">
@@ -485,6 +490,11 @@
         renderProfileSelect();
     }
 
+        // --- Web Worker Inline Code ---
+    const WORKER_SCRIPT = `
+    importScripts('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+    importScripts('https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js');
+
     // --- Currency Parser Helper ---
     function robustCurrencyParser(value) {
         if (typeof value === 'number') return value;
@@ -524,7 +534,7 @@
     }
 
     // --- Read File with SheetJS ---
-    async function readExcelFile(file, columnMappingForm, logMessages = []) {
+    async function readExcelFile(file, columnMappingForm, logMessages = [], progressCallback = null) {
         const buffer = await file.arrayBuffer();
         const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
         const firstSheetName = workbook.SheetNames[0];
@@ -538,7 +548,7 @@
 
         const MAX_ROWS = 50000;
         if (rawRows.length > MAX_ROWS) {
-            throw new Error(`Il file contiene ${rawRows.length.toLocaleString('it-IT')} righe, superando il limite massimo consentito di ${MAX_ROWS.toLocaleString('it-IT')} righe. Ridurre la dimensione del file.`);
+            throw new Error("Il file contiene " + rawRows.length.toLocaleString('it-IT') + " righe, superando il limite massimo consentito di " + MAX_ROWS.toLocaleString('it-IT') + " righe. Ridurre la dimensione del file.");
         }
 
         // Clean headers
@@ -623,8 +633,9 @@
             rows.push(rowObj);
         }
 
+        if (progressCallback) progressCallback(15, "Lettura completata: " + rawRows.length + " record trovati.");
         if (logMessages) {
-            logMessages.push(`[Parsing] Letti ${rawRows.length} record dal file Excel.`);
+            logMessages.push("[Parsing] Letti " + rawRows.length + " record dal file Excel.");
             if (skippedInvalidDate > 0) {
                 logMessages.push(`[Parsing] Avviso: ${skippedInvalidDate} righe scartate perché senza data valida.`);
             }
@@ -644,6 +655,7 @@
     // --- JS Reconciliation Engine ---
     class JSReconciliationEngine {
         constructor(params) {
+            this.progressCallback = params.progressCallback || null;
             this.tolerance = Math.round((params.tolerance || 50.0) * 100);
             this.days_window = params.days_window || 5;
             this.max_combinations = params.max_combinations || 10;
@@ -940,6 +952,7 @@
         }
 
         reconcileSubsetSum() {
+            if (this.progressCallback) this.progressCallback(35, "Subset Sum Pass 1: Aggregazione incassi...");
             // Simplified multi-pass recursive subset sum logic for client-side execution
             this.runGenericPass(
                 this.credit_df.filter(c => !this.used_credit_indices.has(c.orig_index)),
@@ -950,6 +963,7 @@
                 this.search_direction, this.findDebitMatches.bind(this), true
             );
 
+            if (this.progressCallback) this.progressCallback(50, "Subset Sum Pass 2: Scomposizione versamenti...");
             let pass2Dir = this.search_direction === "past_only" ? "future_only" : (this.search_direction === "future_only" ? "past_only" : "both");
             this.runGenericPass(
                 this.debit_df.filter(d => !this.used_debit_indices.has(d.orig_index)),
@@ -960,12 +974,13 @@
                 pass2Dir, this.findMatches.bind(this), false
             );
 
+            if (this.progressCallback) this.progressCallback(65, "Subset Sum Pass 3: Recupero residui...");
             this.runGenericPass(
                 this.credit_df.filter(c => !this.used_credit_indices.has(c.orig_index)),
                 this.debit_df,
                 "Credit", "Debit", this.used_debit_indices,
                 this.residual_days_window, this.max_combinations,
-                `Pass 3: Residual Recovery (Extended window: ${this.residual_days_window}d)`,
+                "Pass 3: Residual Recovery (Extended window: " + this.residual_days_window + "d)",
                 this.search_direction, this.findDebitMatches.bind(this), false
             );
         }
@@ -1133,6 +1148,7 @@
             }
 
             if (this.algorithm === "progressive_balance") {
+                if (this.progressCallback) this.progressCallback(40, "Esecuzione Progressive Balance...");
                 this.reconcileProgressiveBalance();
             } else if (this.algorithm === "subset_sum") {
                 this.reconcileSubsetSum();
@@ -1140,6 +1156,7 @@
                 this.reconcileGreedyAmountFirst();
             }
 
+            if (this.progressCallback) this.progressCallback(75, "Recupero residui da blocchi forzati...");
             this.reconcileResidualRecovery();
 
             // Mark used
@@ -1189,7 +1206,8 @@
             this.originalRows = originalRows;
         }
 
-        async generateReport() {
+        async generateReport(progressCallback = null) {
+            if (progressCallback) progressCallback(82, "Generazione fogli Excel (Summary, Matches, Original)...");
             const workbook = new ExcelJS.Workbook();
 
             this.buildMatchGroups();
@@ -1206,6 +1224,7 @@
             this.createOriginalSheet(workbook);
             this.createMonthlyBalanceSheet(workbook);
 
+            if (progressCallback) progressCallback(95, "Finalizzazione e compressione file Excel...");
             const buffer = await workbook.xlsx.writeBuffer();
             return new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
         }
@@ -1686,7 +1705,60 @@
         }
     }
 
-    let fullLogText = "";
+
+
+    self.onmessage = async function(e) {
+        const { type, data } = e.data;
+        if (type === 'start') {
+            const { fileBuffer, fileName, columnMappingForm, engineParams } = data;
+            const logMessages = ["=== CashRec Log Elaborazione ===", "Data: " + new Date().toLocaleString('it-IT'), "File: " + fileName + "\\n"];
+
+            try {
+                self.postMessage({ type: 'progress', percent: 5, statusText: 'Caricamento librerie e lettura file Excel...' });
+
+                const dummyFile = { arrayBuffer: async () => fileBuffer };
+
+                const rows = await readExcelFile(dummyFile, columnMappingForm, logMessages, (perc, msg) => {
+                    self.postMessage({ type: 'progress', percent: perc, statusText: msg });
+                });
+
+                self.postMessage({ type: 'progress', percent: 30, statusText: "Esecuzione motore di riconciliazione..." });
+                engineParams.progressCallback = (perc, msg) => {
+                    self.postMessage({ type: 'progress', percent: perc, statusText: msg });
+                };
+
+                logMessages.push("[Algoritmo] Parametri: " + JSON.stringify(engineParams, null, 2));
+                const engine = new JSReconciliationEngine(engineParams);
+                const stats = engine.run(rows);
+                logMessages.push("[Algoritmo] Elaborazione completata.");
+                logMessages.push("[Statistiche]\\n" + JSON.stringify(stats, null, 2));
+
+                self.postMessage({ type: 'progress', percent: 80, statusText: "Generazione del report Excel..." });
+                const reporter = new JSExcelReporter(engine, rows);
+                const reportBlob = await reporter.generateReport((perc, msg) => {
+                    self.postMessage({ type: 'progress', percent: perc, statusText: msg });
+                });
+
+                self.postMessage({ type: 'progress', percent: 100, statusText: "Elaborazione completata!" });
+
+                const origName = fileName.replace(/\\.[^/.]+\$/, "");
+                const reportFilename = origName + "_result.xlsx";
+                logMessages.push("[Report] Report Excel generato con successo (" + reportFilename + ").");
+
+                const fullLogText = logMessages.join('\\n');
+
+                self.postMessage({
+                    type: 'success',
+                    reportBlob: reportBlob,
+                    reportFilename: reportFilename,
+                    fullLogText: fullLogText
+                });
+            } catch (err) {
+                self.postMessage({ type: 'error', phase: 'Elaborazione Client-Side', message: err.message || String(err) });
+            }
+        }
+    };
+    `;let fullLogText = "";
 
     function showError(phase, message) {
         const errorContainer = document.getElementById('errorContainer');
@@ -1704,6 +1776,33 @@
     }
 
     // --- Form Submission & Processing ---
+        let currentWorker = null;
+
+    function updateProgressUI(percent, statusText) {
+        const progressBar = document.getElementById('progressBar');
+        const statusTextEl = document.getElementById('progressStatusText');
+        if (progressBar) {
+            progressBar.style.width = `${percent}%`;
+            progressBar.setAttribute('aria-valuenow', percent);
+            progressBar.textContent = `${percent}%`;
+        }
+        if (statusTextEl && statusText) {
+            statusTextEl.textContent = statusText;
+        }
+    }
+
+    // Cancel Button Handler
+    document.getElementById('btnCancel')?.addEventListener('click', function() {
+        if (currentWorker) {
+            currentWorker.terminate();
+            currentWorker = null;
+        }
+        document.getElementById('progressContainer').classList.add('d-none');
+        document.getElementById('btnSubmit').disabled = false;
+        showError("Annullamento", "Elaborazione annullata dall'utente.");
+    });
+
+    // --- Form Submission & Processing via Web Worker ---
     document.getElementById('uploadForm').addEventListener('submit', async function(e) {
         e.preventDefault();
 
@@ -1718,7 +1817,6 @@
         const progress = document.getElementById('progressContainer');
         const result = document.getElementById('resultContainer');
         const log = document.getElementById('logOutput');
-        const statusText = document.getElementById('progressStatusText');
 
         btn.disabled = true;
         progress.classList.remove('d-none');
@@ -1727,84 +1825,90 @@
         log.textContent = '';
         fullLogText = "";
 
-        const logMessages = [`=== CashRec Log Elaborazione ===`, `Data: ${new Date().toLocaleString('it-IT')}`, `File: ${fileInput.files[0].name}\n`];
+        updateProgressUI(0, "Avvio elaborazione nel Web Worker...");
 
-        let rows = [];
-        let engine = null;
-        let stats = null;
+        const file = fileInput.files[0];
+        const formData = new FormData(this);
+        const columnMappingForm = {
+            col_date: formData.get("col_date"),
+            col_debit: formData.get("col_debit"),
+            col_credit: formData.get("col_credit"),
+            col_store_id: formData.get("col_store_id"),
+            col_valuta_date: formData.get("col_valuta_date")
+        };
 
-        // FASE 1: Lettura e Parsing File
+        const engineParams = {
+            tolerance: parseFloat(formData.get("tolerance")) || CONFIG.common.tolerance,
+            days_window: parseInt(formData.get("days_window")) || CONFIG.common.days_window,
+            max_combinations: parseInt(formData.get("max_combinations")) || CONFIG.common.max_combinations,
+            residual_threshold: parseFloat(formData.get("residual_threshold")) || CONFIG.common.residual_threshold,
+            residual_days_window: parseInt(formData.get("residual_days_window")) || CONFIG.common.residual_days_window,
+            handover_days: parseInt(formData.get("handover_days")) || CONFIG.common.handover_days,
+            search_direction: formData.get("search_direction") || CONFIG.common.search_direction,
+            algorithm: formData.get("algorithm") || CONFIG.common.algorithm
+        };
+
         try {
-            statusText.textContent = "Lettura e validazione del file Excel...";
-            const formData = new FormData(this);
-            const columnMappingForm = {
-                col_date: formData.get("col_date"),
-                col_debit: formData.get("col_debit"),
-                col_credit: formData.get("col_credit"),
-                col_store_id: formData.get("col_store_id"),
-                col_valuta_date: formData.get("col_valuta_date")
+            const fileBuffer = await file.arrayBuffer();
+
+            if (currentWorker) {
+                currentWorker.terminate();
+            }
+
+            const blob = new Blob([WORKER_SCRIPT], { type: 'application/javascript' });
+            const workerUrl = URL.createObjectURL(blob);
+            currentWorker = new Worker(workerUrl);
+
+            currentWorker.onmessage = function(e) {
+                const { type, percent, statusText, phase, message, reportBlob, reportFilename, fullLogText: workerLog } = e.data;
+
+                if (type === 'progress') {
+                    updateProgressUI(percent, statusText);
+                } else if (type === 'success') {
+                    generatedReportBlob = reportBlob;
+                    generatedReportFilename = reportFilename;
+                    fullLogText = workerLog;
+                    log.textContent = fullLogText;
+
+                    progress.classList.add('d-none');
+                    btn.disabled = false;
+                    result.classList.remove('d-none');
+
+                    URL.revokeObjectURL(workerUrl);
+                    currentWorker = null;
+                } else if (type === 'error') {
+                    progress.classList.add('d-none');
+                    btn.disabled = false;
+                    showError(phase || "Elaborazione", message);
+                    URL.revokeObjectURL(workerUrl);
+                    currentWorker = null;
+                }
             };
 
-            rows = await readExcelFile(fileInput.files[0], columnMappingForm, logMessages);
-        } catch (err) {
-            progress.classList.add('d-none');
-            btn.disabled = false;
-            showError("Lettura e Parsing File", err.message);
-            console.error(err);
-            return;
-        }
-
-        // FASE 2: Esecuzione Motore di Riconciliazione
-        try {
-            statusText.textContent = "Esecuzione dell'algoritmo di riconciliazione...";
-            const formData = new FormData(this);
-            const engineParams = {
-                tolerance: parseFloat(formData.get("tolerance")) || CONFIG.common.tolerance,
-                days_window: parseInt(formData.get("days_window")) || CONFIG.common.days_window,
-                max_combinations: parseInt(formData.get("max_combinations")) || CONFIG.common.max_combinations,
-                residual_threshold: parseFloat(formData.get("residual_threshold")) || CONFIG.common.residual_threshold,
-                residual_days_window: parseInt(formData.get("residual_days_window")) || CONFIG.common.residual_days_window,
-                handover_days: parseInt(formData.get("handover_days")) || CONFIG.common.handover_days,
-                search_direction: formData.get("search_direction") || CONFIG.common.search_direction,
-                algorithm: formData.get("algorithm") || CONFIG.common.algorithm
+            currentWorker.onerror = function(err) {
+                progress.classList.add('d-none');
+                btn.disabled = false;
+                showError("Web Worker Error", err.message || "Errore sconosciuto nel Web Worker.");
+                URL.revokeObjectURL(workerUrl);
+                currentWorker = null;
             };
 
-            logMessages.push(`[Algoritmo] Parametri: ${JSON.stringify(engineParams, null, 2)}`);
-            engine = new JSReconciliationEngine(engineParams);
-            stats = engine.run(rows);
-            logMessages.push(`[Algoritmo] Elaborazione completata.`);
-            logMessages.push(`[Statistiche]\n${JSON.stringify(stats, null, 2)}`);
+            currentWorker.postMessage({
+                type: 'start',
+                data: {
+                    fileBuffer: fileBuffer,
+                    fileName: file.name,
+                    columnMappingForm: columnMappingForm,
+                    engineParams: engineParams
+                }
+            }, [fileBuffer]);
+
         } catch (err) {
             progress.classList.add('d-none');
             btn.disabled = false;
-            showError("Motore di Riconciliazione", err.message);
+            showError("Preparazione File", err.message);
             console.error(err);
-            return;
         }
-
-        // FASE 3: Generazione Report Excel
-        try {
-            statusText.textContent = "Generazione del report Excel...";
-            const reporter = new JSExcelReporter(engine, rows);
-            generatedReportBlob = await reporter.generateReport();
-
-            const origName = fileInput.files[0].name.replace(/\.[^/.]+$/, "");
-            generatedReportFilename = `${origName}_result.xlsx`;
-            logMessages.push(`[Report] Report Excel generato con successo (${generatedReportFilename}).`);
-        } catch (err) {
-            progress.classList.add('d-none');
-            btn.disabled = false;
-            showError("Generazione Report Excel", err.message);
-            console.error(err);
-            return;
-        }
-
-        fullLogText = logMessages.join('\n');
-        log.textContent = fullLogText;
-
-        progress.classList.add('d-none');
-        btn.disabled = false;
-        result.classList.remove('d-none');
     });
 
     // --- Download Handler ---
