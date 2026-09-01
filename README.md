@@ -1,25 +1,26 @@
 # CashRec — Riconciliazione Casse
 
-CashRec confronta gli **incassi di cassa** di un punto vendita con i **versamenti in banca**, li abbina tra loro e genera un report Excel che evidenzia le differenze da verificare.
+CashRec confronta gli **incassi di cassa** di un punto vendita con i **versamenti in banca**, li abbina tra loro e genera un report Excel che evidenzia le differenze da verificare. Funziona al 100% nel tuo browser, in modalità completamente offline e standalone.
 
-## 📖 Documentazione
+## 📖 Documentazione e Roadmap
 
-- **[Manuale Utente](./docs/MANUALE_UTENTE.md)** — guida semplice per chi usa l'applicazione tutti i giorni (in italiano, integrata anche come help nella web UI e nell'app standalone).
-- **[Tutorial Cloudflare Tunnel](./docs/CLOUDFLARE_TUNNEL_TUTORIAL.md)** — come esporre l'applicazione su internet in modo sicuro tramite Cloudflare Tunnel (Raspberry Pi).
+- **[Manuale Utente](./docs/MANUALE_UTENTE.md)** — guida semplice per chi usa l'applicazione tutti i giorni (in italiano, integrata anche come help nell'app standalone).
+- **[ROADMAP e Storico Versioni](./ROADMAP.md)** — per lo storico delle versioni e la roadmap di sviluppo, vedi [ROADMAP.md](./ROADMAP.md).
 
 ## ✨ Funzionalità principali
 
-- **Web UI (Flask)**: interfaccia per caricare il file Excel, modificare i parametri, gestire i profili e scaricare il report.
 - **App standalone (`app/cashrec.html`)**: un unico file HTML/JS che gira interamente nel browser, senza server né installazione. I dati non lasciano mai il computer.
-- **Elaborazione batch**: script `batch.py` per processare più file automaticamente.
 - **Tre algoritmi di riconciliazione**: `progressive_balance` (profilo operatore, default), `subset_sum`, `greedy_amount_first`.
 - **Profilo Operatore Punto Vendita**: default preconfigurati per la cassa quotidiana (versamenti abbinati a incassi di 1–5 giorni prima, direzione `past_only`, tolleranza 50 €).
-- **SSOT (Single Source of Truth)**: tutte le configurazioni sono centralizzate in `config.json`, condivise da CLI, web UI, app standalone e batch.
-- **Gestione profili**: salva, carica ed elimina profili di configurazione dalla Web UI o via REST API.
+- **Gestione profili**: salva, carica ed elimina profili di configurazione salvati in `localStorage`.
 - **Recupero residui**: recupera automaticamente le differenze dai blocchi forzati.
 - **Multi-negozio**: colonna opzionale *Codice Negozio* per abbinamenti prioritari all'interno dello stesso negozio.
 - **Data Valuta**: gestisce i passaggi di fine anno (versamenti di gennaio che si riferiscono a dicembre).
 - **Report Excel dettagliato**: fogli Summary, Matches, Anomalie, Original, Quadratura Mensile, Unused DEBIT e Unreconciled CREDIT, con importi in euro (`#,##0.00 €`), colori per stato e totali mensili.
+
+## 🚀 Utilizzo
+
+Apri `app/cashrec.html` con un doppio clic, oppure trascinalo nel browser. Nessuna installazione, nessun server, i dati non lasciano mai il tuo computer.
 
 ## 📚 Come funzionano gli algoritmi
 
@@ -58,54 +59,7 @@ Cerca abbinamenti per **combinazioni** di importi, in 3 passate: aggregazione di
 
 Ordina i movimenti per importo decrescente e abbina prima gli importi più grandi.
 
-## ⚙️ Installazione e test
-
-Prerequisiti: **Python 3.9+** e **Git**.
-
-```bash
-git clone <URL_DEL_REPOSITORY>
-cd riconcilia_casse
-pip install -r requirements.txt
-./run_tests.sh
-```
-
-## 🚀 Utilizzo
-
-### Web UI (server Flask)
-
-```bash
-python app.py
-# http://localhost:5001
-```
-
-### App standalone (100% nel browser)
-
-Apri `app/cashrec.html` con un doppio clic (o trascinala nel browser). Nessuna installazione richiesta.
-
-### Docker
-
-```bash
-docker compose up -d --build
-# http://localhost:5000
-```
-
-### CLI su un singolo file
-
-```bash
-python main.py --config config.json
-```
-
-### API principali
-
-| Endpoint | Descrizione |
-|---|---|
-| `GET /api/config` | Configurazione corrente |
-| `POST /api/config` | Aggiorna la configurazione |
-| `GET /api/profiles` | Elenco profili |
-| `POST /api/profiles` | Salva un profilo |
-| `DELETE /api/profiles/<nome>` | Elimina un profilo |
-
-## 🔧 Parametri di configurazione (`config.json`)
+## 🔧 Parametri di configurazione
 
 ### Mappatura colonne (file in stile SAN SEVERO)
 
@@ -133,35 +87,16 @@ python main.py --config config.json
 ## 📂 Struttura del progetto
 
 ```
-├── core.py              # ReconciliationEngine (logica e algoritmi)
-├── reporting.py         # Generazione del report Excel
-├── app.py               # Web UI Flask e REST API
-├── main.py              # CLI su singolo file
-├── batch.py             # Elaborazione batch
-├── config.json          # Configurazione (Single Source of Truth)
-├── profiles.json        # Profili di configurazione salvati
-├── templates/           # Template della Web UI
-├── app/                 # App standalone (cashrec.html e asset)
-├── tests/               # Suite di unit test
-├── tools/               # Script di supporto per sviluppatori
-└── .github/workflows/   # Workflow CI
+riconcilia_casse/
+├── README.md
+├── ROADMAP.md
+├── .gitignore
+├── app/
+│   └── cashrec.html
+├── docs/
+│   └── MANUALE_UTENTE.md
+├── assets/
+│   └── cashrec-banner-it.png
+└── tools/
+    └── generate_help.py
 ```
-
-## 📜 Changelog
-
-### v5.3 (September 2026)
-- **Rimozione "Ottimizza Parametri"**: il pulsante non faceva nulla di sostanziale (restituiva i valori di default) e il backend richiedeva la libreria `optuna` non installata. Eliminato da Web UI, app standalone, `app.py`, `optimizer.py` e `config.json`. I parametri si impostano manualmente nelle Impostazioni Avanzate.
-- **Giorni Finestra Lasca (handover)**: campo ora presente e valorizzato (default 5) in Web UI, app standalone e default `config.json`; aggiunto anche ai profili predefiniti.
-- **Documentazione semplificata**: ridotti i file a 2 guide (manuale utente + tutorial Cloudflare Tunnel) e tradotto tutto il resto in italiano.
-
-### v5.2 (September 2026)
-- **Quadratura Mensile**: riepilogo mensile semplificato (Mese, Dare, Avere, Δ, Cumulato, Stato OK/Controllare) al posto del vecchio "Monthly Balance", che sommava importi su basi incoerenti. Rimosso il fuorviante "Vers. Non Agganciati".
-- **Original Sheet**: aggiunta la colonna `Data Valuta` (competenza dell'aggancio Dare/Avere) e formato euro `#,##0.00 €` (`.` migliaia, `,` decimali).
-- **Default Column Mapping**: `Data Reg.`→Data, `Dare`→Dare, `Avere`→Avere, `Data Val.`→Data Valuta (Codice Negozio opzionale), in `config.json` e nelle UI.
-
-### v5.1 (March 2026)
-- **Default Operatore Punto Vendita**: parametri ottimizzati per la cassa quotidiana.
-- **Single Source of Truth**: configurazione centralizzata in `config.json`.
-- **Gestione profili**: salvataggio e applicazione di profili nominativi da Web UI e REST API.
-- **Hardening del motore**: abbinamenti esatti deterministici per prossimità di data, elaborazione senza side-effect.
-- **Sicurezza**: chiavi segrete da ambiente, limiti di dimensione upload, pulizia automatica dei report generati, workflow CI.

@@ -1832,11 +1832,11 @@
 <h3>Original</h3>
 <p>Tutti i movimenti del file originale, uno per riga. Le colonne sono:</p>
 <ul>
-<li><strong>Data</strong>: la data di registrazione del movimento;</li>
-<li><strong>Data Valuta</strong>: la data di competenza economica (quando presente nel file, aiuta a capire a quale periodo si riferisce l'aggancio Dare/Avere);</li>
-<li><strong>Dare / Avere</strong>: gli importi in euro (separatore migliaia ".", decimale ",");</li>
-<li><strong>Gruppo</strong>: l'identificativo dell'abbinamento (stesso codice = stesso gruppo);</li>
-<li><strong>Delta</strong>: la differenza del gruppo.</li>
+<li><strong>Data</strong> — la data di registrazione del movimento;</li>
+<li><strong>Data Valuta</strong> — la data di competenza economica del movimento (quando presente nel file, aiuta a capire a quale periodo appartiene l'aggancio Dare/Avere);</li>
+<li><strong>Dare</strong> e <strong>Avere</strong> — gli importi, espressi in euro con il separatore migliaia <code>.</code> e decimale <code>,</code> (es. <code>1.234,56 €</code>);</li>
+<li><strong>Gruppo</strong> — l'identificativo dell'abbinamento (stesso codice = stesso gruppo);</li>
+<li><strong>Delta</strong> — la differenza del gruppo.</li>
 </ul>
 <p>I colori aiutano a capire la situazione al volo:</p>
 <ul>
@@ -1846,17 +1846,9 @@
 <li><strong>Blu</strong> = versamento non abbinato;</li>
 <li><strong>Grigio</strong> = riga di riepilogo del mese.</li>
 </ul>
-<p>In fondo a ogni mese c'è una riga <strong>TOTALE MESE</strong>: la somma degli incassi, dei versamenti e la differenza (Dare − Avere) di quel mese. Usa una finestra economica "lasca": i versamenti dei primi giorni del mese successivo relativi al mese precedente (data valuta/aggancio) vengono riportati al mese di competenza, così il mese si quadra pochi giorni dopo il suo inizio.</p>
+<p>In fondo a ogni mese c'è una riga <strong>TOTALE MESE</strong>: la somma degli incassi, dei versamenti e la differenza (Dare − Avere) di quel mese.</p>
 <h3>Quadratura Mensile</h3>
-<p>Schema sintetico per verificare mese per mese se gli incassi quadrano con i versamenti:</p>
-<ul>
-<li><strong>Dare (Incassi)</strong>: totale incassato nel mese.</li>
-<li><strong>Avere (Versamenti)</strong>: totale versato nel mese (attribuito per competenza economica con la finestra "lasca").</li>
-<li><strong>Δ Mese</strong>: Dare − Avere. Se è dentro la tolleranza il mese è <strong>quadrato</strong>.</li>
-<li><strong>Cumulato</strong>: somma progressiva delle differenze dall'inizio dell'anno.</li>
-<li><strong>Stato</strong>: <strong>OK</strong> (verde) se il mese è quadrato, <strong>Controllare</strong> (rosso) se c'è qualcosa da verificare.</li>
-</ul>
-<p>Con la finestra "lasca" i versamenti dei primi giorni del mese successivo riferiti al mese precedente vengono riportati al mese di competenza, così il mese si quadra pochi giorni dopo il suo inizio.</p>
+<p>Per ogni mese mostra gli incassi realmente incassati (<strong>Dare</strong>), i versamenti realmente versati (<strong>Avere</strong>) e la loro differenza (<strong>Δ Mese</strong>). Se il Δ è dentro la tolleranza il mese è <strong>quadrato</strong> e lo <strong>Stato</strong> è verde <strong>OK</strong>; altrimenti è rosso <strong>Controllare</strong>. La colonna <strong>Cumulato</strong> mostra la somma progressiva delle differenze di tutto l'anno.</p>
 <h3>Unused DEBIT / Unreconciled CREDIT</h3>
 <ul>
 <li><strong>Unused DEBIT</strong>: gli incassi che non hanno trovato un versamento;</li>
