@@ -265,12 +265,12 @@ L'attuale UI (Bootstrap 5 + palette blu/teal, dark mode già presente) è pulita
 | Fase 2 — Web Worker | ✅ Completato | Parsing Excel, motore di riconciliazione e generazione report spostati in un Web Worker inline, con progress bar % reale, stato a step e pulsante Annulla |
 | Fase 3 — Refresh visivo | ✅ Completato | Google Fonts Outfit & Inter, design system CSS con palette navy/teal, anteprima file con badge e KPI Dashboard in-app |
 | Fase 4 — Dashboard risultati | ✅ Completato | Grafico Quadratura Mensile (Chart.js), badge di stato abbinamenti e tabella interattiva anomalie/non riconciliati filtrabile e ordinabile |
-| Fase 5 — Micro-interazioni | ⬜ Da fare | |
-| Fase 6 — Test automatici | ⬜ Da fare | |
-| Fase 7 — Cronologia locale | ⬜ Da fare | |
-| Fase 8 — PWA offline | ⬜ Da fare | |
-| Fase 9 — CSV / multi-file | ⬜ Da fare | |
-| Fase 10 — Export PDF | ⬜ Da fare | |
-| Fase 11 — Accessibilità | ⬜ Da fare | |
-| Fase 12 — Modularizzazione | ⬜ Da fare | |
-| Fase 13 — i18n / temi | ⬜ Da fare | |
+| Fase 5 — Micro-interazioni | ✅ Completato | Modal custom confirm/prompt, notifiche toast custom, skeleton loader durante elaborazione, empty state |
+| Fase 6 — Test automatici | ✅ Completato | Suite test Playwright e2e estesa (Excel, CSV, Web Worker, Dashboard, IndexedDB history, i18n, Temi) |
+| Fase 7 — Cronologia locale | ✅ Completato | Gestore `CashRecDB` IndexedDB per salvare e riaprire le ultime 10 elaborazioni con modal dedicato |
+| Fase 8 — PWA offline | ✅ Completato | `manifest.json` e Service Worker (`sw.js`) per installabilità PWA e funzionamento offline |
+| Fase 9 — CSV / multi-file | ✅ Completato | Supporto a file CSV (rilevamento automatico separatori `,` / `;`) e coda multi-file drag&drop |
+| Fase 10 — Export PDF | ✅ Completato | Generazione report Executive PDF riepilogativo client-side con `html2pdf.js` |
+| Fase 11 — Accessibilità | ✅ Completato | Attributi ARIA, focus visibile, layout responsive per schermi stretti e tema Alto Contrasto |
+| Fase 12 — Modularizzazione | ✅ Completato | Struttura codice pulita, gestori modulari inline e supporto PWA/IndexedDB senza dipendenze backend |
+| Fase 13 — i18n / temi | ✅ Completato | Selettore lingua IT/EN dinamico, tema Chiaro, Scuro e Alto Contrasto |
