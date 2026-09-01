@@ -891,7 +891,7 @@ class ExcelReporter:
         ]
 
         # Keep only the essential columns in the Original sheet
-        keep_cols = ["Date", "Debit", "Credit"]
+        keep_cols = ["Date", "valuta_date", "Debit", "Credit"]
         if "Saldo Prog." in df_out.columns:
             keep_cols.append("Saldo Prog.")
         keep_cols += ["Gruppo", "Difference"]
@@ -901,6 +901,7 @@ class ExcelReporter:
         df_out.rename(
             columns={
                 "Date": "Data",
+                "valuta_date": "Data Valuta",
                 "Debit": "Dare",
                 "Credit": "Avere",
                 "Difference": "Delta",
@@ -912,7 +913,7 @@ class ExcelReporter:
             df_out["Dare"] = df_out["Dare"] / 100
         if "Avere" in df_out.columns:
             df_out["Avere"] = df_out["Avere"] / 100
-        # Format the Date column as GG/MM/AAAA
+        # Format the date columns as GG/MM/AAAA
         for col in df_out.select_dtypes(include=["datetime64"]).columns:
             df_out[col] = pd.to_datetime(df_out[col], errors="coerce").dt.strftime(
                 "%d/%m/%Y"
@@ -922,6 +923,14 @@ class ExcelReporter:
 
         df_out.to_excel(writer, sheet_name="Original", index=False)
         ws = writer.sheets["Original"]
+
+        # Currency format (euro, separatore migliaia ".", separatore decimale ",")
+        col_map = {name: idx + 1 for idx, name in enumerate(df_out.columns)}
+        for col_name in ("Dare", "Avere", "Delta"):
+            col_idx = col_map.get(col_name)
+            if col_idx:
+                for row in range(2, len(df_out) + 2):
+                    ws.cell(row=row, column=col_idx).number_format = "#,##0.00 €"
 
         # --- Color the Debit/Credit/Difference cells by match group ---
         col_map = {name: idx + 1 for idx, name in enumerate(df_out.columns)}

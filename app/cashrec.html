@@ -170,7 +170,7 @@
                         <div class="row g-2">
                             <div class="col-6 col-md-3">
                                 <label class="form-label small">Data</label>
-                                <input type="text" class="form-control form-control-sm" name="col_date" placeholder="es: Data" value="Data">
+                                <input type="text" class="form-control form-control-sm" name="col_date" placeholder="es: Data Reg." value="Data Reg.">
                             </div>
                             <div class="col-6 col-md-3">
                                 <label class="form-label small">Dare (Incassi)</label>
@@ -186,7 +186,7 @@
                             </div>
                             <div class="col-6 col-md-3">
                                 <label class="form-label small">Data Valuta</label>
-                                <input type="text" class="form-control form-control-sm" name="col_valuta_date" placeholder="es: Data Valuta" value="Data Valuta">
+                                <input type="text" class="form-control form-control-sm" name="col_valuta_date" placeholder="es: Data Val." value="Data Val.">
                             </div>
                         </div>
                     </div>
@@ -1511,9 +1511,9 @@
             const ws = workbook.addWorksheet("Original");
             const { expanded, meta } = this.buildOriginalLayout();
 
-            const headers = ["Data", "Dare", "Avere", "Gruppo", "Delta"];
+            const headers = ["Data", "Data Valuta", "Dare", "Avere", "Gruppo", "Delta"];
             if (this.originalRows.some(r => r["Saldo Prog."] !== undefined)) {
-                headers.splice(3, 0, "Saldo Prog.");
+                headers.splice(4, 0, "Saldo Prog.");
             }
             ws.addRow(headers).font = { bold: true };
 
@@ -1523,6 +1523,7 @@
                 const m = meta[idx];
                 const rowData = [
                     r.Date ? r.Date.toLocaleDateString("it-IT") : "",
+                    r.valuta_date ? r.valuta_date.toLocaleDateString("it-IT") : "",
                     r.Debit ? r.Debit / 100 : 0,
                     r.Credit ? r.Credit / 100 : 0
                 ];
@@ -1536,6 +1537,11 @@
 
                 const rowCell = ws.addRow(rowData);
 
+                // Currency format (euro, separatore migliaia ".", separatore decimale ",")
+                [3, 4, headers.length].forEach(ci => {
+                    if (rowCell.getCell(ci).value !== "") rowCell.getCell(ci).numFmt = '#,##0.00 €';
+                });
+
                 if (m.month_total) {
                     rowCell.eachCell(cell => {
                         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'E7E6E6' } };
@@ -1544,9 +1550,9 @@
                 } else if (m.color_idx !== null && m.color_idx !== undefined) {
                     const fillHex = GROUP_FILLS[m.color_idx];
                     if (m.side === "debit") {
-                        rowCell.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillHex } };
-                    } else if (m.side === "credit") {
                         rowCell.getCell(3).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillHex } };
+                    } else if (m.side === "credit") {
+                        rowCell.getCell(4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillHex } };
                     }
                     const diffCell = rowCell.getCell(headers.length);
                     diffCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillHex } };
@@ -1842,16 +1848,16 @@
 <h2>Prima di iniziare</h2>
 <p>Ti serve un file Excel (o CSV) con i movimenti del punto vendita, che contenga almeno queste colonne:</p>
 <ul>
-<li><strong>Data</strong> — la data del movimento;</li>
+<li><strong>Data Reg.</strong> — la data del movimento;</li>
 <li><strong>Dare</strong> — l'importo dell'incasso;</li>
 <li><strong>Avere</strong> — l'importo del versamento.</li>
 </ul>
-<p>Se il file contiene anche le colonne <strong>Data Valuta</strong> e <strong>Saldo Prog.</strong>, CashRec le usa per un'analisi più precisa.</p>
+<p>Se il file contiene anche le colonne <strong>Data Val.</strong> e <strong>Saldo Prog.</strong>, CashRec le usa per un'analisi più precisa.</p>
 <h2>Guida passo per passo</h2>
 <ol>
 <li><strong>Apri</strong> CashRec.</li>
 <li><strong>Trascina</strong> il file Excel nell'area di caricamento, oppure clicca per selezionarlo.</li>
-<li>(Opzionale) Apri le <strong>Impostazioni Avanzate</strong> e controlla che i nomi delle colonne (Data, Dare, Avere, Data Valuta, Codice Negozio) corrispondano a quelli del tuo file.</li>
+<li>(Opzionale) Apri le <strong>Impostazioni Avanzate</strong> e controlla che i nomi delle colonne (Data Reg., Dare, Avere, Data Val., Codice Negozio) corrispondano a quelli del tuo file.</li>
 <li>(Opzionale) Modifica i parametri:
    - <strong>Algoritmo</strong>: AUTO è la scelta consigliata.
    - <strong>Direzione ricerca</strong>: <em>Solo passato</em> cerca solo incassi precedenti al versamento; <em>Entrambi</em> cerca anche quelli successivi.
@@ -1881,8 +1887,11 @@
 <h3>Anomalie</h3>
 <p>Contiene <strong>solo</strong> gli abbinamenti con una differenza <strong>oltre la tolleranza</strong>: sono i casi da verificare per primi (le righe sono colorate di rosso).</p>
 <h3>Original</h3>
-<p>Tutti i movimenti del file originale, uno per riga, con due colonne aggiuntive:</p>
+<p>Tutti i movimenti del file originale, uno per riga. Le colonne sono:</p>
 <ul>
+<li><strong>Data</strong>: la data di registrazione del movimento;</li>
+<li><strong>Data Valuta</strong>: la data di competenza economica (quando presente nel file, aiuta a capire a quale periodo si riferisce l'aggancio Dare/Avere);</li>
+<li><strong>Dare / Avere</strong>: gli importi in euro (separatore migliaia ".", decimale ",");</li>
 <li><strong>Gruppo</strong>: l'identificativo dell'abbinamento (stesso codice = stesso gruppo);</li>
 <li><strong>Delta</strong>: la differenza del gruppo.</li>
 </ul>

@@ -2,12 +2,11 @@
   "common": {
     "comment": "Parametri comuni a tutti gli algoritmi (Profilo predefinito: Operatore Punto Vendita)",
     "column_mapping": {
-      "Data": "Date",
+      "Data Reg.": "Date",
       "Dare": "Debit",
-      "Avere": "Credit",
-      "INCASSI": "Debit",
-      "VERSAMENTI": "Credit"
+      "Avere": "Credit"
     },
+    "valuta_date_column": "Data Val.",
     "input_folder": "input",
     "output_folder": "output",
     "file_patterns": ["*.xlsx", "*.csv"],

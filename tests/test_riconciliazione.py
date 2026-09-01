@@ -328,13 +328,14 @@ class TestReportingVisualization(unittest.TestCase):
             ws = wb["Original"]
             headers = [c.value for c in ws[1]]
             group_col = headers.index("Gruppo") + 1
+            dare_col = headers.index("Dare") + 1
             is_total = lambda r: isinstance(
                 ws.cell(row=r, column=group_col).value, str
             ) and ws.cell(row=r, column=group_col).value.startswith("TOTALE MESE")
             total_debit = sum(
                 v
                 for r in range(2, ws.max_row + 1)
-                if isinstance(v := ws.cell(row=r, column=2).value, (int, float))
+                if isinstance(v := ws.cell(row=r, column=dare_col).value, (int, float))
                 and not is_total(r)
             )
             self.assertAlmostEqual(total_debit, 10427.50, places=2)

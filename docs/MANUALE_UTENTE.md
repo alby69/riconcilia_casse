@@ -22,17 +22,17 @@ Questa guida è pensata per chi usa l'applicazione tutti i giorni, senza conosce
 
 Ti serve un file Excel (o CSV) con i movimenti del punto vendita, che contenga almeno queste colonne:
 
-- **Data** — la data del movimento;
+- **Data Reg.** — la data del movimento;
 - **Dare** — l'importo dell'incasso;
 - **Avere** — l'importo del versamento.
 
-Se il file contiene anche le colonne **Data Valuta** e **Saldo Prog.**, CashRec le usa per un'analisi più precisa.
+Se il file contiene anche le colonne **Data Val.** e **Saldo Prog.**, CashRec le usa per un'analisi più precisa.
 
 ## Guida passo per passo
 
 1. **Apri** CashRec.
 2. **Trascina** il file Excel nell'area di caricamento, oppure clicca per selezionarlo.
-3. (Opzionale) Apri le **Impostazioni Avanzate** e controlla che i nomi delle colonne (Data, Dare, Avere, Data Valuta, Codice Negozio) corrispondano a quelli del tuo file.
+3. (Opzionale) Apri le **Impostazioni Avanzate** e controlla che i nomi delle colonne (Data Reg., Dare, Avere, Data Val., Codice Negozio) corrispondano a quelli del tuo file.
 4. (Opzionale) Modifica i parametri:
    - **Algoritmo**: AUTO è la scelta consigliata.
    - **Direzione ricerca**: *Solo passato* cerca solo incassi precedenti al versamento; *Entrambi* cerca anche quelli successivi.
@@ -69,10 +69,13 @@ Contiene **solo** gli abbinamenti con una differenza **oltre la tolleranza**: so
 
 ### Original
 
-Tutti i movimenti del file originale, uno per riga, con due colonne aggiuntive:
+Tutti i movimenti del file originale, uno per riga. Le colonne sono:
 
-- **Gruppo**: l'identificativo dell'abbinamento (stesso codice = stesso gruppo);
-- **Difference**: la differenza del gruppo.
+- **Data** — la data di registrazione del movimento;
+- **Data Valuta** — la data di competenza economica del movimento (quando presente nel file, aiuta a capire a quale periodo appartiene l'aggancio Dare/Avere);
+- **Dare** e **Avere** — gli importi, espressi in euro con il separatore migliaia `.` e decimale `,` (es. `1.234,56 €`);
+- **Gruppo** — l'identificativo dell'abbinamento (stesso codice = stesso gruppo);
+- **Delta** — la differenza del gruppo.
 
 I colori aiutano a capire la situazione al volo:
 
@@ -84,9 +87,9 @@ I colori aiutano a capire la situazione al volo:
 
 In fondo a ogni mese c'è una riga **TOTALE MESE**: la somma degli incassi, dei versamenti e la differenza (Dare − Avere) di quel mese.
 
-### Monthly Balance (Quadratura mensile)
+### Quadratura Mensile
 
-Per ogni mese mostra i totali, gli importi usati e la colonna **Monthly Difference (DEBIT - CREDIT)**: se la differenza mensile è vicina a zero, quel mese è quadrato.
+Per ogni mese mostra gli incassi realmente incassati (**Dare**), i versamenti realmente versati (**Avere**) e la loro differenza (**Δ Mese**). Se il Δ è dentro la tolleranza il mese è **quadrato** e lo **Stato** è verde **OK**; altrimenti è rosso **Controllare**. La colonna **Cumulato** mostra la somma progressiva delle differenze di tutto l'anno.
 
 ### Unused DEBIT / Unreconciled CREDIT
 

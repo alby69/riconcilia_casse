@@ -23,9 +23,9 @@ This project provides a powerful and flexible accounting reconciliation service,
 - **Capienza Logic**: Supports GDO-style matching where credit >= debits (anticipi, incassi extra).
 - **Multi-Store Support**: Optional store ID column for prioritized matching within the same store.
 - **Data Valuta**: Handles year-end transitions where January deposits may refer to December.
-- **Flexible Column Mapping**: Map any Excel column names to the internal format via Web UI.
+- **Flexible Column Mapping**: Map any Excel column names to the internal format via Web UI; default mapping targets the SAN SEVERO-style file (`Data Reg.`, `Dare`, `Avere`, optional `Data Val.`).
 - **Secure Processing**: Environment-based secret keys, file size limits (50MB), and automatic retention cleanup for generated reports.
-- **Detailed Excel Reports**: Multi-sheet output with Summary, Matches, Unreconciled items, and Monthly Balance charts.
+- **Detailed Excel Reports**: Multi-sheet output with Summary, Matches, Unreconciled items, Quadratura Mensile, and an Original sheet with Italian column names, the `Data Valuta` column, and euro amounts (`#,##0.00 €`).
 - **Batch Processing**: Command-line script (`batch.py`) for automatic multiple file processing.
 - **Parameter Optimizer**: Script (`optimizer.py`) to find optimal reconciliation parameters.
 
@@ -156,6 +156,19 @@ Configurations are loaded directly from `config.json`. You can manage named prof
 
 ## 🔧 Configuration Parameters (Single Source of Truth)
 
+Configurations are centralised in `config.json`. The default `column_mapping` is
+built for the SAN SEVERO-style file:
+
+| Campo | Colonna del file |
+|-------|-------------------|
+| `Data` | `Data Reg.` |
+| `Dare (Incassi)` | `Dare` |
+| `Avere (Versamenti)` | `Avere` |
+| `Codice Negozio` | (opzionale) |
+| `Data Valuta` | `Data Val.` |
+
+These can be overridden per-run from the Web UI / standalone app form.
+
 | Parameter | Default (POS Operator) | Description |
 |-----------|------------------------|-------------|
 | `algorithm` | `progressive_balance` | Reconciliation strategy (`progressive_balance`, `subset_sum`, `greedy_amount_first`, `auto`) |
@@ -165,6 +178,7 @@ Configurations are loaded directly from `config.json`. You can manage named prof
 | `max_combinations` | `10` | Maximum elements combined in subset sum |
 | `residual_threshold` | `50.0 €` | Threshold for residual recovery |
 | `residual_days_window` | `5 days` | Extended window for residual recovery |
+| `handover_days` | `5` | Days of the following month carried back to the previous month in the Quadratura Mensile |
 
 ---
 
@@ -187,6 +201,11 @@ Configurations are loaded directly from `config.json`. You can manage named prof
 ---
 
 ## 📜 Changelog
+
+### v5.2 (September 2026)
+- **Quadratura Mensile**: Riepilogo mensile semplificato (Mese, Dare, Avere, Δ, Cumulato, Stato OK/Controllare) al posto del vecchio "Monthly Balance", che sommava importi su basi incoerenti (attribuzione economica vs calendario). Rimosso il fuorviante "Vers. Non Agganciati".
+- **Original Sheet**: Aggiunta la colonna `Data Valuta` (competenza dell'aggancio Dare/Avere) e formato euro `#,##0.00 €` (`.` per le migliaia, `,` per i decimali) su Dare/Avere/Delta.
+- **Default Column Mapping**: `Data Reg.`→`Data`, `Dare`→`Dare`, `Avere`→`Avere`, `Data Val.`→`Data Valuta` (Codice Negozio opzionale), in `config.json` e nelle UI.
 
 ### v5.1 (March 2026)
 - **POS Operator Defaults**: Default parameters optimized for store operators (`progressive_balance`, 5-day window, `past_only` direction, 50€ tolerance).

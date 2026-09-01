@@ -250,7 +250,7 @@ def processa_file():
         form_data = request.form.to_dict()
 
         # Build column mapping from form inputs
-        col_date = form_data.get("col_date", "Data")
+        col_date = form_data.get("col_date", "Data Reg.")
         col_debit = form_data.get("col_debit", "Dare")
         col_credit = form_data.get("col_credit", "Avere")
         col_store_id = form_data.get("col_store_id")
@@ -292,6 +292,12 @@ def processa_file():
 
         file.stream.seek(0)
         df_input = prepare_dataframe(file.stream, column_mapping)
+
+        # Carry the valuta date into the report so the 'Original' sheet can show it.
+        if valuta_date_col and valuta_date_col in df_input.columns:
+            df_input["valuta_date"] = pd.to_datetime(
+                df_input[valuta_date_col], errors="coerce", dayfirst=True
+            )
 
         # Cleanup old output/log files
         cleanup_old_files(app.config["OUTPUT_FOLDER"])
