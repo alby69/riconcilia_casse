@@ -120,7 +120,6 @@ Possibili cause:
 2. Usa la **Data Valuta** se il gestionale la gestisce: i versamenti hanno spesso valuta diversa dalla data di registrazione.
 3. Se un versamento *del mese precedente* non viene abbinato, può essere normale: i versamenti di fine anno restano scoperti perché gli incassi di dicembre sono stati registrati a gennaio.
 4. Con *Solo passato* un incasso successivo al versamento non viene mai usato per coprirlo: se ti serve quella flessibilità, prova *Entrambi*.
-5. Se trovi molte differenze, usa il pulsante **Ottimizza Parametri**: l'applicazione calcola da sola i valori migliori per i tuoi dati.
 
 ## Glossario minimo
 

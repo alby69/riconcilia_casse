@@ -4,7 +4,6 @@ numpy
 openpyxl
 xlrd
 tqdm
-optuna
 numba
 pyarrow
 gunicorn

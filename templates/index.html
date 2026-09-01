@@ -100,10 +100,6 @@
                     <p class="text-muted small">o clicca per selezionare</p>
                     <input type="file" name="file_input" id="fileInput" class="d-none" accept=".xlsx, .xls">
                     <div id="fileName" class="mt-2 fw-bold text-success"></div>
-                    <div id="optimizationSpinner" class="mt-3 d-none">
-                        <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
-                        <span class="ms-2 text-muted">Ricerca parametri ottimali...</span>
-                    </div>
                 </div>
 
                 <!-- Advanced Settings Toggle -->
@@ -211,6 +207,10 @@
                             <label class="form-label small fw-bold">Finestra Residui (giorni)</label>
                             <input type="number" class="form-control form-select-sm" name="residual_days_window">
                         </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Giorni Finestra Lasca (handover)</label>
+                            <input type="number" class="form-control form-select-sm" name="handover_days" value="5">
+                        </div>
                     </div>
                 </div>
 
@@ -218,9 +218,6 @@
                 <div class="text-center mt-4">
                     <button type="submit" class="btn btn-process px-5" id="btnSubmit">
                         <i class="fas fa-magic me-2"></i>Elabora File
-                    </button>
-                    <button type="button" class="btn btn-outline-primary px-4 ms-2" id="btnOptimize">
-                        <i class="fas fa-cogs me-2"></i>Ottimizza Parametri
                     </button>
                 </div>
             </form>
@@ -280,7 +277,6 @@
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const fileNameDisplay = document.getElementById('fileName');
-    const optimizationSpinner = document.getElementById('optimizationSpinner');
 
     dropZone.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', handleFileSelect);
@@ -302,18 +298,8 @@
         if (fileInput.files.length > 0) {
             fileNameDisplay.textContent = fileInput.files[0].name;
             dropZone.style.borderColor = "#198754";
-            // NOT auto-start optimization anymore - user must click the button
         }
     }
-
-    // Optimizzazione button handler
-    document.getElementById('btnOptimize').addEventListener('click', function() {
-        if (!fileInput.files.length) {
-            alert("Per favore, seleziona un file prima di ottimizzare.");
-            return;
-        }
-        runOptimization();
-    });
 
     function toggleSettings() {
         const section = document.getElementById('advancedSettings');
@@ -424,6 +410,7 @@
         currentConfig.common.max_combinations = parseInt(formEl.elements['max_combinations']?.value) || currentConfig.common.max_combinations;
         currentConfig.common.residual_threshold = parseFloat(formEl.elements['residual_threshold']?.value) || currentConfig.common.residual_threshold;
         currentConfig.common.residual_days_window = parseInt(formEl.elements['residual_days_window']?.value) || currentConfig.common.residual_days_window;
+        currentConfig.common.handover_days = parseInt(formEl.elements['handover_days']?.value) || currentConfig.common.handover_days;
 
         fetch('/api/config', {
             method: 'POST',
@@ -453,7 +440,7 @@
     function initializeForm() {
         // Populate algorithm dropdown
         const algoSelect = document.getElementById('algorithm_select');
-        const algorithms = Object.keys(CONFIG).filter(k => k !== 'common' && k !== 'optimizer');
+        const algorithms = Object.keys(CONFIG).filter(k => k !== 'common');
         algorithms.forEach(algo => {
             if (algo !== 'auto') { // "auto" is already there
                 const option = document.createElement('option');
@@ -468,36 +455,6 @@
         loadProfiles();
     }
     
-    function runOptimization() {
-        if (!fileInput.files.length) return;
-
-        const formData = new FormData();
-        formData.append('file_input', fileInput.files[0]);
-
-        optimizationSpinner.classList.remove('d-none');
-
-        fetch('/optimize', { method: 'POST', body: formData })
-            .then(response => response.json())
-            .then(data => {
-                optimizationSpinner.classList.add('d-none');
-                if (data.error) {
-                    alert("Optimization Error: " + data.error);
-                    return;
-                }
-                // Populate form with optimized parameters
-                populateForm(data);
-                // Open the advanced settings to show the user the new parameters
-                const section = document.getElementById('advancedSettings');
-                if (section.style.display === 'none' || section.style.display === '') {
-                    toggleSettings();
-                }
-            })
-            .catch(error => {
-                optimizationSpinner.classList.add('d-none');
-                alert("Server communication error during optimization: " + error);
-            });
-    }
-
     // --- Main Form Submission ---
     document.getElementById('uploadForm').addEventListener('submit', function(e) {
         e.preventDefault();
@@ -717,7 +674,6 @@
 <li>Usa la <strong>Data Valuta</strong> se il gestionale la gestisce: i versamenti hanno spesso valuta diversa dalla data di registrazione.</li>
 <li>Se un versamento <em>del mese precedente</em> non viene abbinato, può essere normale: i versamenti di fine anno restano scoperti perché gli incassi di dicembre sono stati registrati a gennaio.</li>
 <li>Con <em>Solo passato</em> un incasso successivo al versamento non viene mai usato per coprirlo: se ti serve quella flessibilità, prova <em>Entrambi</em>.</li>
-<li>Se trovi molte differenze, usa il pulsante <strong>Ottimizza Parametri</strong>: l'applicazione calcola da sola i valori migliori per i tuoi dati.</li>
 </ol>
 <h2>Glossario minimo</h2>
 <ul>

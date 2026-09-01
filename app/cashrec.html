@@ -119,10 +119,6 @@
                     <p class="text-muted small">o clicca per selezionare</p>
                     <input type="file" name="file_input" id="fileInput" class="d-none" accept=".xlsx, .xls">
                     <div id="fileName" class="mt-2 fw-bold text-success"></div>
-                    <div id="optimizationSpinner" class="mt-3 d-none">
-                        <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
-                        <span class="ms-2 text-muted">Ricerca parametri ottimali...</span>
-                    </div>
                 </div>
 
                 <!-- Advanced Settings Toggle -->
@@ -234,7 +230,7 @@
                         </div>
                         <div class="col-md-6">
                             <label class="form-label small fw-bold">Giorni Finestra Lasca (handover)</label>
-                            <input type="number" class="form-control form-select-sm" name="handover_days">
+                            <input type="number" class="form-control form-select-sm" name="handover_days" value="5">
                         </div>
                     </div>
                 </div>
@@ -243,9 +239,6 @@
                 <div class="text-center mt-4">
                     <button type="submit" class="btn btn-process px-5" id="btnSubmit">
                         <i class="fas fa-magic me-2"></i>Elabora File
-                    </button>
-                    <button type="button" class="btn btn-outline-primary px-4 ms-2" id="btnOptimize">
-                        <i class="fas fa-cogs me-2"></i>Ottimizza Parametri
                     </button>
                 </div>
             </form>
@@ -290,11 +283,9 @@
             residual_days_window: 5,
             handover_days: 5,
             column_mapping: {
-                "Data": "Date",
+                "Data Reg.": "Date",
                 "Dare": "Debit",
-                "Avere": "Credit",
-                "INCASSI": "Debit",
-                "VERSAMENTI": "Credit"
+                "Avere": "Credit"
             }
         }
     };
@@ -307,7 +298,8 @@
             search_direction: "past_only",
             max_combinations: 10,
             residual_threshold: 50.0,
-            residual_days_window: 5
+            residual_days_window: 5,
+            handover_days: 5
         },
         "Riconciliazione Mensile Fine Anno": {
             algorithm: "subset_sum",
@@ -358,7 +350,6 @@
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const fileNameDisplay = document.getElementById('fileName');
-    const optimizationSpinner = document.getElementById('optimizationSpinner');
 
     dropZone.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', handleFileSelect);
@@ -1641,54 +1632,6 @@
         }
     }
 
-    // --- Optimization Process ---
-    function runOptimizationProcess(rows) {
-        // Quick optimizer simulation returning standard recommended options
-        return {
-            algorithm: "progressive_balance",
-            days_window: 5,
-            tolerance: 50.0,
-            search_direction: "past_only",
-            max_combinations: 10,
-            residual_threshold: 50.0,
-            residual_days_window: 5
-        };
-    }
-
-    // --- Optimization Button Click ---
-    document.getElementById('btnOptimize')?.addEventListener('click', async function() {
-        if (!fileInput.files.length) {
-            alert("Per favore, seleziona un file prima di ottimizzare.");
-            return;
-        }
-        try {
-            optimizationSpinner.classList.remove('d-none');
-            const formEl = document.getElementById('uploadForm');
-            const formData = new FormData(formEl);
-
-            const rows = await readExcelFile(fileInput.files[0], {
-                col_date: formData.get("col_date"),
-                col_debit: formData.get("col_debit"),
-                col_credit: formData.get("col_credit"),
-                col_store_id: formData.get("col_store_id"),
-                col_valuta_date: formData.get("col_valuta_date")
-            });
-
-            const bestParams = runOptimizationProcess(rows);
-            optimizationSpinner.classList.add('d-none');
-
-            populateForm(bestParams);
-            const section = document.getElementById('advancedSettings');
-            if (section.style.display === 'none' || section.style.display === '') {
-                toggleSettings();
-            }
-            alert("Parametri ottimali identificati ed applicati con successo!");
-        } catch (err) {
-            optimizationSpinner.classList.add('d-none');
-            alert("Errore durante l'ottimizzazione: " + err.message);
-        }
-    });
-
     // --- Form Submission & Processing ---
     document.getElementById('uploadForm').addEventListener('submit', async function(e) {
         e.preventDefault();
@@ -1940,7 +1883,6 @@
 <li>Usa la <strong>Data Valuta</strong> se il gestionale la gestisce: i versamenti hanno spesso valuta diversa dalla data di registrazione.</li>
 <li>Se un versamento <em>del mese precedente</em> non viene abbinato, può essere normale: i versamenti di fine anno restano scoperti perché gli incassi di dicembre sono stati registrati a gennaio.</li>
 <li>Con <em>Solo passato</em> un incasso successivo al versamento non viene mai usato per coprirlo: se ti serve quella flessibilità, prova <em>Entrambi</em>.</li>
-<li>Se trovi molte differenze, usa il pulsante <strong>Ottimizza Parametri</strong>: l'applicazione calcola da sola i valori migliori per i tuoi dati.</li>
 </ol>
 <h2>Glossario minimo</h2>
 <ul>

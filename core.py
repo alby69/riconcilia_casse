@@ -270,7 +270,7 @@ class ReconciliationEngine:
 
         # After reading, ensure 'Date' is datetime and 'Debit'/'Credit' are numeric.
         # This is a fallback in case the reading parameters were not sufficient
-        # or if the DataFrame comes from an already pre-loaded source (e.g., from the optimizer).
+        # or if the DataFrame comes from an already pre-loaded source.
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
         df.dropna(subset=["Date"], inplace=True)  # Removes rows with invalid dates
 

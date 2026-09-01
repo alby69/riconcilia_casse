@@ -14,7 +14,6 @@ from flask import (
 )
 import uuid
 from core import ReconciliationEngine
-from optimizer import find_best_parameters
 
 
 # --- Helper Functions for Form Parsing ---
@@ -203,43 +202,12 @@ def index():
     return render_template("index.html", config=config)
 
 
-@app.route("/optimize", methods=["POST"])
-def optimize_parameters():
-    """Analyzes the uploaded file and returns optimal parameters."""
-    if "file_input" not in request.files:
-        return jsonify({"error": "Nessun file selezionato."}), 400
-    file = request.files["file_input"]
-    if file.filename == "":
-        return jsonify({"error": "Nessun file selezionato."}), 400
-
-    try:
-        file.stream.seek(0)
-        df = prepare_dataframe(file.stream)
-        config = load_config()
-        # Usa 'common' come fallback se 'reconciliation_defaults' non esiste
-        base_config = config.get("reconciliation_defaults", config.get("common", {}))
-        optimizer_config = config.get("optimizer", {})
-
-        # Run optimization
-        # Pass both base parameters and optimizer-specific configurations
-        # sequential=False abilita il multiprocessing (configurato in modo sicuro in optimizer.py)
-        best_params = find_best_parameters(
-            df, base_config, optimizer_config, sequential=False
-        )
-
-        return jsonify(best_params)
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        return jsonify(
-            {"error": f"Errore critico durante l'ottimizzazione: {str(e)}"}
-        ), 500
+@app.route("/download/<path:filename>", methods=["GET"])
 
 
 @app.route("/processa", methods=["POST"])
 def processa_file():
-    """Handles the main file processing with user-provided or optimized parameters."""
+    """Handles the main file processing with user-provided parameters."""
     if "file_input" not in request.files:
         return jsonify({"error": "Nessun file selezionato."}), 400
     file = request.files["file_input"]

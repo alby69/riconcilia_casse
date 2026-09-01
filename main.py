@@ -5,7 +5,7 @@ designed to process a single input file as specified in a dedicated
 configuration file.
 
 It is intended to be used as a worker process that can be called from other
-scripts (e.g., a batch orchestrator or an optimizer).
+scripts (e.g., a batch orchestrator).
 
 The script's workflow is:
 1.  Parse command-line arguments: `--config` (required) and `--silent`.

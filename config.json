@@ -40,21 +40,5 @@
     "tolerance": 0.5,
     "days_window": 15,
     "search_direction": "both"
-  },
-  "optimizer": {
-    "comment": "Impostazioni per il processo di ottimizzazione dei parametri.",
-    "range_percentage": 0.3,
-    "n_trials_first_run": 100,
-    "n_trials_refinement": 50,
-    "parameter_space": {
-        "algorithm": {"type": "categorical", "values": ["subset_sum", "progressive_balance", "greedy_amount_first"]},
-        "days_window": {"type": "numeric", "min": 1, "max": 20},
-        "tolerance": {"type": "numeric", "min": 0.01, "max": 100.0, "step": 0.5, "value_type": "float"},
-        "max_combinations": {"type": "numeric", "min": 2, "max": 15},
-        "search_direction": {"type": "categorical", "values": ["past_only", "future_only", "both"]},
-        "sorting_strategy": {"type": "categorical", "values": ["date", "amount"]},
-        "residual_threshold": {"type": "numeric", "min": 0.01, "max": 100.0, "step": 0.5, "value_type": "float"},
-        "residual_days_window": {"type": "numeric", "min": 1, "max": 30}
-    }
   }
 }
