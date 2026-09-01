@@ -77,7 +77,8 @@ def main():
                 column_mapping=engine_params.get('column_mapping'),
                 algorithm=algorithm_name,
                 store_id_column=engine_params.get('store_id_column'),
-                valuta_date_column=engine_params.get('valuta_date_column')
+                valuta_date_column=engine_params.get('valuta_date_column'),
+                handover_days=engine_params.get('handover_days', 5)
             )
 
             output_file = output_folder / f"result_{file_path.stem}.xlsx"

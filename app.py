@@ -286,6 +286,7 @@ def processa_file():
             if col_store_id and col_store_id.strip()
             else common_cfg.get("store_id_column"),
             "valuta_date_column": valuta_date_col or common_cfg.get("valuta_date_column"),
+            "handover_days": common_cfg.get("handover_days", 5),
             "column_mapping": column_mapping,
         }
 

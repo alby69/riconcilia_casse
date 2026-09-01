@@ -232,6 +232,10 @@
                             <label class="form-label small fw-bold">Finestra Residui (giorni)</label>
                             <input type="number" class="form-control form-select-sm" name="residual_days_window">
                         </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Giorni Finestra Lasca (handover)</label>
+                            <input type="number" class="form-control form-select-sm" name="handover_days">
+                        </div>
                     </div>
                 </div>
 
@@ -284,6 +288,7 @@
             max_combinations: 10,
             residual_threshold: 50.0,
             residual_days_window: 5,
+            handover_days: 5,
             column_mapping: {
                 "Data": "Date",
                 "Dare": "Debit",
@@ -455,6 +460,7 @@
         CONFIG.common.max_combinations = parseInt(formEl.elements['max_combinations']?.value) || CONFIG.common.max_combinations;
         CONFIG.common.residual_threshold = parseFloat(formEl.elements['residual_threshold']?.value) || CONFIG.common.residual_threshold;
         CONFIG.common.residual_days_window = parseInt(formEl.elements['residual_days_window']?.value) || CONFIG.common.residual_days_window;
+            CONFIG.common.handover_days = parseInt(formEl.elements['handover_days']?.value) || CONFIG.common.handover_days;
 
         localStorage.setItem('cashrec_config', JSON.stringify(CONFIG));
         alert("Configurazione predefinita salvata con successo nel browser!");
@@ -603,6 +609,7 @@
             this.sorting_strategy = params.sorting_strategy || "date";
             this.ignore_tolerance = params.ignore_tolerance || false;
             this.enable_best_fit = params.enable_best_fit !== undefined ? params.enable_best_fit : true;
+            this.handover_days = params.handover_days || 5;
 
             this.used_debit_indices = new Set();
             this.used_credit_indices = new Set();
@@ -651,6 +658,95 @@
 
             this.debit_df.sort((a, b) => a.Date - b.Date);
             this.credit_df.sort((a, b) => a.analysis_date - b.analysis_date);
+        }
+
+        static monthKey(date) {
+            return `${date.getFullYear()}-${date.getMonth()}`;
+        }
+
+        static monthKeyPrev(key) {
+            const [y, m] = key.split("-").map(Number);
+            const d = new Date(y, m - 1, 1);
+            return JSReconciliationEngine.monthKey(d);
+        }
+
+        static periodCompare(a, b) {
+            const [ay, am] = a.split("-").map(Number);
+            const [by, bm] = b.split("-").map(Number);
+            if (ay !== by) return ay - by;
+            return am - bm;
+        }
+
+        creditMatchesPreviousMonth(creditOrigIdx, prevKey) {
+            /* True if the credit (orig_index) is reconciled and all the receipts
+               covering it belong to `prevKey` (loose-window carry-back). */
+            if (!this.matches.length) return false;
+            for (const row of this.matches) {
+                if (!(row.credit_indices || []).includes(creditOrigIdx)) continue;
+                const debitDates = row.debit_dates || [];
+                if (!debitDates.length) return false;
+                const debitMonths = new Set(debitDates.map(d => JSReconciliationEngine.monthKey(d)));
+                return debitMonths.size === 1 && debitMonths.has(prevKey);
+            }
+            return false;
+        }
+
+        economicMonthOfCredit(creditRow, minKey, maxKey) {
+            /* Loose monthly attribution for a deposit (Avere): economic month is
+               the valuta month if present (else registration), clamped to the data
+               range. A deposit registered in the first `handover_days` of its month
+               that is reconciled to previous-month receipts is carried back (unless
+               its valuta is already in the current month). */
+            const regKey = JSReconciliationEngine.monthKey(creditRow.Date);
+            const prevKey = JSReconciliationEngine.monthKeyPrev(regKey);
+
+            let carryBack = this.handover_days > 0
+                && creditRow.Date.getDate() <= this.handover_days
+                && this.creditMatchesPreviousMonth(creditRow.orig_index, prevKey);
+            if (carryBack && creditRow.valuta_date) {
+                if (JSReconciliationEngine.monthKey(creditRow.valuta_date) === regKey) {
+                    carryBack = false;
+                }
+            }
+
+            let period;
+            if (carryBack) {
+                period = prevKey;
+            } else {
+                period = JSReconciliationEngine.monthKey(creditRow.valuta_date || creditRow.Date);
+            }
+
+            if (JSReconciliationEngine.periodCompare(period, minKey) < 0) period = minKey;
+            if (JSReconciliationEngine.periodCompare(period, maxKey) > 0) period = maxKey;
+            return period;
+        }
+
+        computeMonthlyTotals() {
+            /* Per-month quadratura totals with the loose economic window:
+               { "YYYY-M0": { Debit, Credit } }. Debit (incassi) by registration
+               month; Credit (versamenti) by economic attribution. */
+            const totals = {};
+            if (!this.debit_df.length && !this.credit_df.length) return totals;
+
+            const all = this.debit_df.concat(this.credit_df);
+            let minKey = null, maxKey = null;
+            all.forEach(r => {
+                const k = JSReconciliationEngine.monthKey(r.Date);
+                if (minKey === null || JSReconciliationEngine.periodCompare(k, minKey) < 0) minKey = k;
+                if (maxKey === null || JSReconciliationEngine.periodCompare(k, maxKey) > 0) maxKey = k;
+            });
+
+            this.debit_df.forEach(r => {
+                const k = JSReconciliationEngine.monthKey(r.Date);
+                if (!totals[k]) totals[k] = { Debit: 0, Credit: 0 };
+                totals[k].Debit += r.Debit;
+            });
+            this.credit_df.forEach(r => {
+                const k = this.economicMonthOfCredit(r, minKey, maxKey);
+                if (!totals[k]) totals[k] = { Debit: 0, Credit: 0 };
+                totals[k].Credit += r.Credit;
+            });
+            return totals;
         }
 
         registerMatch(match) {
@@ -1113,6 +1209,13 @@
             let monthDeb = 0, monthCre = 0;
             let monthDates = [];
 
+            // Monthly quadratura with the loose economic window: Avere (versamenti)
+            // is attributed by economic/valuta date with the `handover_days` carry-back,
+            // so a month is squared also with the deposits of the first days of the
+            // following month that relate to the previous month. Dare stays by
+            // registration date (receipts are point events).
+            const monthlyEco = this.engine.computeMonthlyTotals();
+
             const monthNamesIt = ["Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno", "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"];
 
             const flushMonthTotal = () => {
@@ -1121,10 +1224,16 @@
                     const totalDate = new Date(Date.UTC(end.getFullYear(), end.getMonth() + 1, 0));
                     const label = `TOTALE MESE ${monthNamesIt[end.getMonth()]} ${end.getFullYear()}`;
 
-                    expanded.push({ Date: totalDate, Debit: monthDeb, Credit: monthCre });
+                    // Use the economically attributed totals for this month when
+                    // available; otherwise fall back to the calendar accumulation.
+                    const m = monthKey !== null ? monthlyEco[monthKey] : undefined;
+                    const totDeb = m ? m.Debit : monthDeb;
+                    const totCre = m ? m.Credit : monthCre;
+
+                    expanded.push({ Date: totalDate, Debit: totDeb, Credit: totCre });
                     excelRow++;
                     meta.push({
-                        month_total: true, group_label: label, color_idx: null, side: null, difference: monthDeb - monthCre, inserted: false
+                        month_total: true, group_label: label, color_idx: null, side: null, difference: totDeb - totCre, inserted: false
                     });
                 }
                 monthDeb = 0; monthCre = 0; monthDates = [];
@@ -1402,7 +1511,7 @@
             const ws = workbook.addWorksheet("Original");
             const { expanded, meta } = this.buildOriginalLayout();
 
-            const headers = ["Date", "Debit", "Credit", "Gruppo", "Difference"];
+            const headers = ["Data", "Dare", "Avere", "Gruppo", "Delta"];
             if (this.originalRows.some(r => r["Saldo Prog."] !== undefined)) {
                 headers.splice(3, 0, "Saldo Prog.");
             }
@@ -1454,7 +1563,7 @@
             const groupFills = ["DDEBF7", "C6EFCE", "FFD966"];
             let row = nRows + 3;
 
-            ws.getCell(`A${row}`).value = "Legenda: le celle Debit/Credit con lo stesso colore appartengono allo stesso gruppo di abbinamento (vedi foglio 'Matches'). Il colore si ripete ogni 3 gruppi.";
+            ws.getCell(`A${row}`).value = "Legenda: le celle Dare/Avere con lo stesso colore appartengono allo stesso gruppo di abbinamento (vedi foglio 'Matches'). Il colore si ripete ogni 3 gruppi.";
             ws.getCell(`A${row}`).font = { bold: true, color: { argb: "1F4E78" } };
             row += 1;
 
@@ -1465,9 +1574,9 @@
             });
             row += 2;
 
-            ws.getCell(`A${row}`).value = "Colonna 'Difference': Δ in € del gruppo (0 = gruppo quadrato; > 0 = differenza/residuo da verificare).";
+            ws.getCell(`A${row}`).value = "Colonna 'Delta': Δ in € del gruppo (0 = gruppo quadrato; > 0 = differenza/residuo da verificare). Le righe 'TOTALE MESE' usano una finestra economica 'lasca': i versamenti dei primi giorni del mese successivo relativi al mese precedente (data valuta / aggancio) vengono riportati al mese di competenza, per quadrare il mese pochi giorni dopo l'inizio del successivo.";
             row += 1;
-            ws.getCell(`A${row}`).value = "Righe inserite: se un incasso (Debit) è ripartito su più versamenti, la riga originale mostra la quota consumata dal PRIMO versamento (in ordine del foglio 'Matches'); sotto di essa viene inserita una nuova riga (stessa data) per ogni quota residua, ciascuna con il colore del proprio gruppo.";
+            ws.getCell(`A${row}`).value = "Righe inserite: se un incasso (Dare) è ripartito su più versamenti, la riga originale mostra la quota consumata dal PRIMO versamento (in ordine del foglio 'Matches'); sotto di essa viene inserita una nuova riga (stessa data) per ogni quota residua, ciascuna con il colore del proprio gruppo.";
         }
 
         createMonthlyBalanceSheet(workbook) {
@@ -1480,25 +1589,40 @@
                 cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
             });
 
+            // Economic monthly totals (loose window): Versamenti (Avere) attributed
+            // by economic/valuta date with the `handover_days` carry-back, so the
+            // month squares with the deposits of the first days of the following
+            // month that relate to the previous month.
+            const monthlyEco = this.engine.computeMonthlyTotals();
+            const displayKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+            const displayKeyFromEco = k => {
+                const [y, m] = k.split("-").map(Number);
+                return `${y}-${String(m + 1).padStart(2, '0')}`;
+            };
+
             const months = {};
+            for (const k in monthlyEco) {
+                const dk = displayKeyFromEco(k);
+                if (!months[dk]) months[dk] = { totD: 0, usedD: 0, totC: 0, usedC: 0 };
+                months[dk].totD = monthlyEco[k].Debit;
+                months[dk].totC = monthlyEco[k].Credit;
+            }
             this.engine.debit_df.forEach(r => {
-                const mKey = `${r.Date.getFullYear()}-${String(r.Date.getMonth() + 1).padStart(2, '0')}`;
-                if (!months[mKey]) months[mKey] = { totD: 0, usedD: 0, totC: 0, usedC: 0 };
-                months[mKey].totD += r.Debit;
-                if (r.used) months[mKey].usedD += r.Debit;
+                const dk = displayKey(r.Date);
+                if (!months[dk]) months[dk] = { totD: 0, usedD: 0, totC: 0, usedC: 0 };
+                if (r.used) months[dk].usedD += r.Debit;
             });
             this.engine.credit_df.forEach(r => {
-                const mKey = `${r.Date.getFullYear()}-${String(r.Date.getMonth() + 1).padStart(2, '0')}`;
-                if (!months[mKey]) months[mKey] = { totD: 0, usedD: 0, totC: 0, usedC: 0 };
-                months[mKey].totC += r.Credit;
-                if (r.used) months[mKey].usedC += r.Credit;
+                const dk = displayKey(r.Date);
+                if (!months[dk]) months[dk] = { totD: 0, usedD: 0, totC: 0, usedC: 0 };
+                if (r.used) months[dk].usedC += r.Credit;
             });
 
             let cumulato = 0;
             const sortedKeys = Object.keys(months).sort();
             sortedKeys.forEach(mKey => {
                 const m = months[mKey];
-                const diff = m.usedD - m.usedC;
+                const diff = m.totD - m.totC;
                 cumulato += diff;
                 const nonAgg = m.totC - m.usedC;
                 const row = ws.addRow([
@@ -1621,6 +1745,7 @@
                 max_combinations: parseInt(formData.get("max_combinations")) || CONFIG.common.max_combinations,
                 residual_threshold: parseFloat(formData.get("residual_threshold")) || CONFIG.common.residual_threshold,
                 residual_days_window: parseInt(formData.get("residual_days_window")) || CONFIG.common.residual_days_window,
+                handover_days: parseInt(formData.get("handover_days")) || CONFIG.common.handover_days,
                 search_direction: formData.get("search_direction") || CONFIG.common.search_direction,
                 algorithm: formData.get("algorithm") || CONFIG.common.algorithm
             };
@@ -1783,7 +1908,7 @@
 <p>Tutti i movimenti del file originale, uno per riga, con due colonne aggiuntive:</p>
 <ul>
 <li><strong>Gruppo</strong>: l'identificativo dell'abbinamento (stesso codice = stesso gruppo);</li>
-<li><strong>Difference</strong>: la differenza del gruppo.</li>
+<li><strong>Delta</strong>: la differenza del gruppo.</li>
 </ul>
 <p>I colori aiutano a capire la situazione al volo:</p>
 <ul>
@@ -1793,13 +1918,13 @@
 <li><strong>Blu</strong> = versamento non abbinato;</li>
 <li><strong>Grigio</strong> = riga di riepilogo del mese.</li>
 </ul>
-<p>In fondo a ogni mese c'è una riga <strong>TOTALE MESE</strong>: la somma degli incassi, dei versamenti e la differenza (Dare − Avere) di quel mese.</p>
+<p>In fondo a ogni mese c'è una riga <strong>TOTALE MESE</strong>: la somma degli incassi, dei versamenti e la differenza (Dare − Avere) di quel mese. Usa una finestra economica "lasca": i versamenti dei primi giorni del mese successivo relativi al mese precedente (data valuta/aggancio) vengono riportati al mese di competenza, così il mese si quadra pochi giorni dopo il suo inizio.</p>
 <h3>Monthly Balance (Quadratura mensile)</h3>
 <p>Schema sintetico per verificare mese per mese se incassi e versamenti sono in ordine:</p>
 <ul>
 <li><strong>Incassi Totali / Riconc.</strong>: totale incassi del mese e quanti sono stati abbinati a versamenti.</li>
 <li><strong>Versamenti Totali / Riconc.</strong>: totale versamenti del mese e quanti sono stati abbinati a incassi.</li>
-<li><strong>Differenza Mensile</strong>: Incassi Riconc. − Versamenti Riconc. Se positivo, la cassa ha incassato di piu' di quanto versato.</li>
+<li><strong>Differenza Mensile</strong>: Incassi Totali − Versamenti Totali (versamenti attribuiti per competenza economica con la finestra lasca). Se positivo, la cassa ha incassato più di quanto versato.</li>
 <li><strong>Cumulato</strong>: somma progressiva delle differenze dall'inizio dell'anno. Verde = positivo, rosso = negativo.</li>
 <li><strong>Vers. Non Agganciati</strong>: versamenti che non hanno trovato un incasso. Se > 0, vanno investigate le cause (sfondo rosso).</li>
 </ul>

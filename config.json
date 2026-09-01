@@ -16,7 +16,8 @@
     "days_window": 5,
     "search_direction": "past_only",
     "residual_threshold": 50.0,
-    "residual_days_window": 5
+    "residual_days_window": 5,
+    "handover_days": 5
   },
   "subset_sum": {
     "comment": "Parametri specifici per l'algoritmo subset_sum",
@@ -32,7 +33,8 @@
     "search_direction": "past_only",
     "ignore_tolerance": false,
     "residual_threshold": 50.0,
-    "residual_days_window": 5
+    "residual_days_window": 5,
+    "handover_days": 5
   },
   "greedy_amount_first": {
     "comment": "Parametri per l'algoritmo greedy",

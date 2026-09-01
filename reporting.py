@@ -169,7 +169,7 @@ class ExcelReporter:
         ws.cell(
             row=row,
             column=1,
-            value="Legenda: le celle Debit/Credit con lo stesso colore appartengono allo stesso gruppo di "
+            value="Legenda: le celle Dare/Avere con lo stesso colore appartengono allo stesso gruppo di "
             "abbinamento (vedi foglio 'Matches'). Il colore si ripete ogni 3 gruppi.",
         ).font = Font(bold=True, color="1F4E78")
         row += 1
@@ -185,13 +185,16 @@ class ExcelReporter:
         ws.cell(
             row=row,
             column=1,
-            value="Colonna 'Difference': Δ in € del gruppo (0 = gruppo quadrato; > 0 = differenza/residuo da verificare).",
+            value="Colonna 'Delta': Δ in € del gruppo (0 = gruppo quadrato; > 0 = differenza/residuo da verificare). "
+            "Le righe 'TOTALE MESE' usano una finestra economica 'lasca': i versamenti dei primi giorni del mese "
+            "successivo relativi al mese precedente (data valuta / aggancio) vengono riportati al mese di competenza, "
+            "per quadrare il mese pochi giorni dopo l'inizio del successivo.",
         )
         row += 1
         ws.cell(
             row=row,
             column=1,
-            value="Righe inserite: se un incasso (Debit) è ripartito su più versamenti, la riga originale mostra la quota "
+            value="Righe inserite: se un incasso (Dare) è ripartito su più versamenti, la riga originale mostra la quota "
             "consumata dal PRIMO versamento (in ordine del foglio 'Matches'); sotto di essa viene inserita una nuova riga "
             "(stessa data) per ogni quota residua, ciascuna con il colore del proprio gruppo.",
         )
@@ -696,8 +699,21 @@ class ExcelReporter:
         month_deb = month_cre = 0
         month_dates = []
 
+        # Monthly quadratura with the loose economic window: Avere (versamenti) is
+        # attributed by economic/valuta date with the `handover_days` carry-back,
+        # so a month is squared also with the deposits of the first days of the
+        # following month that relate to the previous month. Dare stays by
+        # registration date (receipts are point events).
+        engine = getattr(self, "engine", None)
+        monthly_eco = (
+            engine._compute_monthly_totals()
+            if engine is not None
+            and hasattr(engine, "_compute_monthly_totals")
+            else {}
+        )
+
         def flush_month_total():
-            nonlocal excel_row, month_deb, month_cre, month_dates
+            nonlocal excel_row, month_deb, month_cre, month_dates, month_key
             if month_dates:
                 end = max(month_dates)
                 total_date = end.replace(
@@ -707,10 +723,19 @@ class ExcelReporter:
                     "TOTALE MESE "
                     f"{MONTH_NAMES_IT[end.month - 1]} {end.year}"
                 )
+                # Use the economically attributed totals for this month when
+                # available; otherwise fall back to the calendar accumulation.
+                m = (
+                    monthly_eco.get(pd.Period(year=month_key[0], month=month_key[1], freq="M"))
+                    if month_key is not None
+                    else None
+                )
+                tot_deb = m["Debit"] if m else month_deb
+                tot_cre = m["Credit"] if m else month_cre
                 total_row = pd.Series([None] * len(cols), index=cols)
                 total_row["Date"] = total_date
-                total_row["Debit"] = month_deb
-                total_row["Credit"] = month_cre
+                total_row["Debit"] = tot_deb
+                total_row["Credit"] = tot_cre
                 expanded.append(total_row)
                 excel_row += 1
                 meta.append(
@@ -719,7 +744,7 @@ class ExcelReporter:
                         "group_label": label,
                         "color_idx": None,
                         "side": None,
-                        "difference": month_deb - month_cre,
+                        "difference": tot_deb - tot_cre,
                         "check": "",
                         "inserted": False,
                     }
@@ -872,10 +897,21 @@ class ExcelReporter:
         keep_cols += ["Gruppo", "Difference"]
         df_out = df_out[[c for c in keep_cols if c in df_out.columns]]
 
-        if "Debit" in df_out.columns:
-            df_out["Debit"] = df_out["Debit"] / 100
-        if "Credit" in df_out.columns:
-            df_out["Credit"] = df_out["Credit"] / 100
+        # Italian column names, as the operator reads them
+        df_out.rename(
+            columns={
+                "Date": "Data",
+                "Debit": "Dare",
+                "Credit": "Avere",
+                "Difference": "Delta",
+            },
+            inplace=True,
+        )
+
+        if "Dare" in df_out.columns:
+            df_out["Dare"] = df_out["Dare"] / 100
+        if "Avere" in df_out.columns:
+            df_out["Avere"] = df_out["Avere"] / 100
         # Format the Date column as GG/MM/AAAA
         for col in df_out.select_dtypes(include=["datetime64"]).columns:
             df_out[col] = pd.to_datetime(df_out[col], errors="coerce").dt.strftime(
@@ -889,9 +925,9 @@ class ExcelReporter:
 
         # --- Color the Debit/Credit/Difference cells by match group ---
         col_map = {name: idx + 1 for idx, name in enumerate(df_out.columns)}
-        debit_col = col_map.get("Debit")
-        credit_col = col_map.get("Credit")
-        diff_col = col_map.get("Difference")
+        debit_col = col_map.get("Dare")
+        credit_col = col_map.get("Avere")
+        diff_col = col_map.get("Delta")
         group_col = col_map.get("Gruppo")
 
         for excel_row, m in enumerate(meta, start=2):
@@ -947,9 +983,9 @@ class ExcelReporter:
             cell = ws.cell(row=excel_row, column=col_map[name])
             cell.fill = fill
             cell.font = font
-            if name in ("Debit", "Credit", "Difference"):
+            if name in ("Dare", "Avere", "Delta"):
                 cell.number_format = "#,##0.00 €"
-        diff_cell = ws.cell(row=excel_row, column=col_map.get("Difference", 1))
+        diff_cell = ws.cell(row=excel_row, column=col_map.get("Delta", 1))
         diff_cell.font = Font(bold=True, color="C00000" if m["difference"] != 0 else "000000")
 
     @staticmethod

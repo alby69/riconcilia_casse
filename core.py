@@ -77,6 +77,7 @@ class ReconciliationEngine:
         enable_best_fit=True,
         store_id_column=None,
         valuta_date_column=None,
+        handover_days=5,
     ):
         """Initializes the ReconciliationEngine with its configuration.
 
@@ -131,6 +132,13 @@ class ReconciliationEngine:
                 use this date instead of the registration date for CREDIT movements.
                 This is crucial for year-end reconciliations where deposits in early
                 January may have valuta date in December. Default is None.
+            handover_days (int): The width (in days) of the loose monthly-quadrature
+                window. A deposit registered in the first `handover_days` days of a
+                month, though physically attributed to the subsequent calendar month,
+                can be carried back to the previous month if it clearly relates to it
+                (economic/valuta date or reconciled receipts in the previous month).
+                This lets a month be closed a few days after the start of the next
+                one, as an operator would. Default is 5.
         """
         # FIX: Converts values from euros (float) to cents (int) for internal consistency
         self.tolerance = int(tolerance * 100)
@@ -164,6 +172,11 @@ class ReconciliationEngine:
         # Valuta date column - for CREDIT transactions, this is the "value date"
         # that indicates the period the deposit refers to (not the registration date)
         self.valuta_date_column = valuta_date_column
+
+        # Handover window (days) for the loose monthly quadrature: deposits in the
+        # first `handover_days` days of a month can be carried back to the previous
+        # one when they relate to it (economic date or matched receipts).
+        self.handover_days = max(0, int(handover_days or 0))
 
         # Internal state that will be populated during execution
         self.debit_df = self.credit_df = self.matches_df = None
@@ -1483,6 +1496,121 @@ class ReconciliationEngine:
 
         return matches
 
+    def _economic_month_of_credit(self, credit_row, min_period, max_period):
+        """Returns the monthly Period a single deposit (Avere) belongs to, using a
+        loose window that lets a month be closed a few days into the next one.
+
+        Human-operator reasoning:
+        - The natural "business month" of a deposit is the period of the cash it
+          transfers. A deposit registered on e.g. 02/06 but with valuta 31/05 is
+          really a May item: it must count toward May's Avere even though its
+          calendar date is in June.
+        - The most direct, operator-style rule: a deposit registered in the first
+          `handover_days` days of a month that the reconciliation has matched
+          against receipts of the *previous* month is carried back to that
+          previous month (the classic "versamento dei primi giorni del mese
+          successivo riferito al mese precedente"). This also covers deposits
+          whose valuta already points to the previous month.
+        - Year-opening courtesy: a deposit whose valuta falls *before* the data
+          range (e.g. valuta 30/12/2025 opening the 2026 asset accounts) is
+          clamped to the first month of the data, so it backs the opening balance
+          instead of vanishing outside the report ("apertura conti patrimoniali").
+        """
+        reg = pd.Timestamp(credit_row["Date"])
+        reg_period = reg.to_period("M")
+        prev_period = reg_period - 1
+
+        # Operator carry-back: a deposit registered in the first `handover_days`
+        # days of the month that the reconciliation matched against receipts of the
+        # previous month is carried back there. This covers the classic
+        # "versamento dei primi giorni del mese successivo riferito al mese
+        # precedente". To stay safe at the end of the data (when the following
+        # month has no receipts yet and a deposit may be spuriouosly matched to the
+        # previous month), we only carry back when the valuta date (if present) is
+        # NOT already in the current month.
+        valuta = credit_row.get("valuta_date")
+        carry_back = (
+            self.handover_days > 0
+            and reg.day <= self.handover_days
+            and self._credit_matches_previous_month(
+                credit_row.get("orig_index"), prev_period
+            )
+        )
+        if valuta is not None and pd.notna(valuta):
+            valuta_period = pd.Timestamp(valuta).to_period("M")
+            if valuta_period == reg_period:
+                carry_back = False
+
+        if carry_back:
+            period = prev_period
+        else:
+            econ_date = (
+                credit_row.get("valuta_date")
+                if credit_row.get("valuta_date") is not None
+                else credit_row.get("Date")
+            )
+            if pd.notna(econ_date):
+                period = pd.Timestamp(econ_date).to_period("M")
+            else:
+                period = reg_period
+
+        period = max(period, min_period)
+        period = min(period, max_period)
+
+        return period
+
+    def _credit_matches_previous_month(self, credit_orig_index, prev_period):
+        """True if the given credit (orig_index) is reconciled, and all the receipts
+        covering it belong to `prev_period` (used for the loose-window carry-back)."""
+        if self.matches_df is None or self.matches_df.empty:
+            return False
+        for _, row in self.matches_df.iterrows():
+            credit_indices = row.get("credit_indices", []) or []
+            if int(credit_orig_index) not in [int(c) for c in credit_indices]:
+                continue
+            debit_dates = row.get("debit_dates", []) or []
+            debit_months = {
+                pd.Timestamp(d).to_period("M")
+                for d in debit_dates
+                if pd.notna(d)
+            }
+            return bool(debit_months) and debit_months <= {prev_period}
+        return False
+
+    def _compute_monthly_totals(self):
+        """Computes per-month quadratura totals using the loose economic window.
+
+        Returns a dict {Period: {"Debit": int_cents, "Credit": int_cents}} where:
+        - Debit  (incassi)  is summed by registration date (receipts are point events).
+        - Credit (versamenti) is summed by economic attribution
+          (valuta date first, loose `handover_days` carry-back, year-opening clamp).
+        """
+        if self.debit_df is None or self.credit_df is None:
+            return {}
+
+        all_dates = pd.concat(
+            [self.debit_df["Date"], self.credit_df["Date"]], ignore_index=True
+        )
+        all_dates = all_dates.dropna()
+        if all_dates.empty:
+            return {}
+        min_period = all_dates.min().to_period("M")
+        max_period = all_dates.max().to_period("M")
+
+        totals = {}
+
+        for _, r in self.debit_df.iterrows():
+            p = pd.Timestamp(r["Date"]).to_period("M")
+            entry = totals.setdefault(p, {"Debit": 0, "Credit": 0})
+            entry["Debit"] += int(r["Debit"] or 0)
+
+        for _, r in self.credit_df.iterrows():
+            p = self._economic_month_of_credit(r, min_period, max_period)
+            entry = totals.setdefault(p, {"Debit": 0, "Credit": 0})
+            entry["Credit"] += int(r["Credit"] or 0)
+
+        return totals
+
     def _calculate_monthly_balance(self):
         """Calcola la quadratura mensile: incassi vs versamenti con progressivo cumulato.
 
@@ -1491,8 +1619,18 @@ class ReconciliationEngine:
         - Differenza mensile (solo riconciliati)
         - Cumulato progressivo
         - Versamenti non agganciati (da investigare)
+
+        I totali mensili dei Versamenti (Avere) usano la finestra economica "lasca"
+        (data valuta se presente, altrimenti riporto indietro dei primi
+        `handover_days` giorni del mese successivo), così il mese si quadra
+        considerando i versamenti dell'inizio del mese successivo relativi al
+        mese precedente.
         """
         if self.debit_df is None or self.credit_df is None:
+            return pd.DataFrame()
+
+        monthly = self._compute_monthly_totals()
+        if not monthly:
             return pd.DataFrame()
 
         def aggregate(df, value_col):
@@ -1500,9 +1638,8 @@ class ReconciliationEngine:
                 return pd.DataFrame()
             temp = df.copy()
             temp["Month"] = pd.to_datetime(temp["Date"]).dt.to_period("M")
-            total = temp.groupby("Month")[value_col].sum()
             used = temp[temp["used"]].groupby("Month")[value_col].sum()
-            res = pd.DataFrame({f"Total {value_col}": total, f"Used {value_col}": used})
+            res = pd.DataFrame({f"Used {value_col}": used})
             return res.fillna(0)
 
         stats_debit = aggregate(self.debit_df, "Debit")
@@ -1511,7 +1648,18 @@ class ReconciliationEngine:
             stats_debit, stats_credit, left_index=True, right_index=True, how="outer"
         ).fillna(0)
 
-        stats["Differenza Mensile"] = stats["Used Debit"] - stats["Used Credit"]
+        totals_df = pd.DataFrame(
+            [
+                {"Month": k, "Total Debit": v["Debit"], "Total Credit": v["Credit"]}
+                for k, v in monthly.items()
+            ]
+        ).set_index("Month")
+
+        stats = stats.join(totals_df, how="outer").fillna(0)
+        stats = stats.sort_index()
+
+        # Differenza mensile con attribuzione economica (finestra lasca)
+        stats["Differenza Mensile"] = stats["Total Debit"] - stats["Total Credit"]
         stats["Cumulato"] = stats["Differenza Mensile"].cumsum()
         stats["Versamenti Non Agganciati"] = stats["Total Credit"] - stats["Used Credit"]
 
@@ -1526,7 +1674,6 @@ class ReconciliationEngine:
                 "Versamenti Non Agganciati",
             ]
         ]
-        stats = stats.sort_index()
         stats.index = stats.index.astype(str)
         stats.index.name = "Month"
         return stats.reset_index()

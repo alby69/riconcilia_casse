@@ -59,7 +59,8 @@ if __name__ == "__main__":
         use_numba=config.get('use_numba', True),
         ignore_tolerance=config.get('ignore_tolerance', False),
         store_id_column=config.get('store_id_column', None),
-        valuta_date_column=config.get('valuta_date_column', None)
+        valuta_date_column=config.get('valuta_date_column', None),
+        handover_days=config.get('handover_days', 5)
     )
 
     # Run the entire process
