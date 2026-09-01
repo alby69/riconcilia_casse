@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: cashrec
+    runtime: docker
+    plan: free
+    branch: main
+    dockerfilePath: ./docker/Dockerfile
+    envVars:
+      - key: PORT
+        value: 80
+    healthCheckPath: /

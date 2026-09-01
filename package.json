@@ -1,26 +1,35 @@
 {
-  "name": "app",
-  "version": "1.0.0",
-  "description": "CashRec confronta gli **incassi di cassa** di un punto vendita con i **versamenti in banca**, li abbina tra loro e genera un report Excel che evidenzia le differenze da verificare. Funziona al 100% nel tuo browser, in modalità completamente offline e standalone.",
+  "name": "cashrec",
+  "version": "6.0.0",
+  "description": "CashRec confronta gli **incassi di cassa** di un punto vendita con i **versamenti in banca**, li abbina tra loro e genera un report Excel che evidenzia le differenze da verificare. Dual mode: Standalone HTML e Web App su Render.",
   "main": "test_worker.spec.js",
   "directories": {
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npx playwright test",
+    "test:e2e": "npx playwright test"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/alby69/riconcilia_casse.git"
+    "url": "git+https://github.com/alby69/cashrec.git"
   },
-  "keywords": [],
+  "keywords": [
+    "cashrec",
+    "reconciliation",
+    "cash",
+    "bank",
+    "excel",
+    "standalone",
+    "pwa"
+  ],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/alby69/riconcilia_casse/issues"
+    "url": "https://github.com/alby69/cashrec/issues"
   },
-  "homepage": "https://github.com/alby69/riconcilia_casse#readme",
+  "homepage": "https://github.com/alby69/cashrec#readme",
   "devDependencies": {
     "@playwright/test": "^1.62.1"
   }
